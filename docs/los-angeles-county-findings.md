@@ -1,7 +1,8 @@
 # Los Angeles County, CA: findings (increment 1, local parcel pilot)
 
-Status: discovery and readiness preflight are done. The slice download has not
-started because it is waiting for approval stop (a).
+Status: the increment-1 pilot ran on 2026-11-11 (run `2026-11-11T16-17-38-928Z`).
+The preflight passes with the approved permit exception, the scope guard passes, and
+22,313 rows were downloaded and built. Nothing has been published.
 Snapshot: 2026-11-11T15:52Z. Machine-readable catalog: `docs/los-angeles-sources.yaml`.
 
 ## Scope of increment 1
@@ -114,12 +115,11 @@ distinct `TaxRateArea_CITY` values in roll 2026.
 
 Under the kit's rules the seed stays blocked until every jurisdiction is classified, or
 until an approved permit-gate exception is recorded in `approved_exceptions`. The user
-chose Option A, a scoped exception. The draft below is **not active** until the user
-approves it. Evidence of the blocked gate: `docs/evidence/la-preflight-blocked.json`.
+chose Option A, a scoped exception, and approved it on 2026-11-11 (section 6a). Evidence of the blocked gate: `docs/evidence/la-preflight-blocked.json`.
 
-### 6a. DRAFT permit-gate exception (pending user approval, not yet in the YAML)
+### 6a. Approved permit-gate exception (approved by Mario Ferraro, 2026-11-11)
 
-Proposed entry for `approved_exceptions` in `docs/los-angeles-sources.yaml`:
+Active entry in `approved_exceptions` of `docs/los-angeles-sources.yaml`:
 
 ```yaml
 approved_exceptions:
@@ -129,8 +129,9 @@ approved_exceptions:
       91411, LA County Assessor roll 2026. No permits are harvested in this increment.
       The 88 jurisdictions without a classified permit source are not yet covered and
       are listed by name in docs/los-angeles-county-findings.md (section 6b) and in
-      run_manifest.json limitations. This exception expires when permits are added
-      (piece 4); the readiness check is then re-run without it.
+      run_manifest.json limitations. Expires when permits are added; the readiness
+      check is then re-run without it. Full-county parcels are outside this scope and
+      need their own approved exception.
     scope:
       {
         increment: 1,
@@ -141,8 +142,8 @@ approved_exceptions:
       }
     permits_harvested: false
     not_yet_covered_count: 88
-    expires: piece 4 (permit ingestion) - remove this entry and re-run the preflight
-    approved_by: <user, date - filled on approval>
+    expires: "Expires when permits are added; the readiness check is then re-run without it."
+    approved_by: "Mario Ferraro, 2026-11-11"
 ```
 
 How the validator reads it: `_approved()` in the kit's `validate-county-readiness.py`
@@ -151,7 +152,7 @@ permit gate then reports `APPROVED_EXCEPTION`, and overall becomes PASS (exit 0)
 the other gates are PASS or NOT_APPLICABLE. The validator **ignores** `scope`, `expires`
 and the other extra keys. It does not enforce scope or expiry, and it would also pass a
 full-county preflight while the entry is present. Enforcement is therefore procedural:
-the entry is removed at piece 4. Enforcing it automatically would need a kit validator
+the entry is removed when permits are added. Enforcing it automatically would need a kit validator
 change (for example, checking `expires`/`scope` against a run-scope argument). That
 change has not been made.
 
@@ -190,3 +191,148 @@ and its permits are not harvested in increment 1 either.
   roughly 81 min at 1 request per 2 s); S3 for raw data in eu-north-1 (AWS mode); a
   transform validated against the lexicon; elephant-cli `validate`/`hash` for local CARs
   only; a permit adapter per jurisdiction; CSLB and CA SOS adapters.
+
+## 10. Scope guard (pipeline repo; the kit checker is unchanged)
+
+- What it is: `src/scope-guard.ts`. It runs before any seed or download, and
+  `fetch-slice.ts` and `build-outputs.ts` call it first.
+- What it checks: it compares the run config (`config/la-pilot-run.json`) with the
+  approved permit exception in `docs/los-angeles-sources.yaml`. It fails with exit 1
+  and a list of every mismatch when any of these differ: jurisdiction (Los Angeles), ZIP
+  set (91405/91406/91411), roll year (2026), or `permits_harvested` (false).
+  - It also fails when no permit exception is present or its scope is incomplete.
+  - A full-county run (no jurisdiction or ZIPs), a different ZIP, a different roll year
+    or permits turned on all fail.
+- How to run it: `node src/scope-guard.ts [run-config.json] [sources.yaml]`.
+  Tests: `pnpm test`, which runs one pass case and one failing case (full county,
+  different ZIP, different roll year, permits on).
+- The guard does **not** modify the kit's `validate-county-readiness.py`. That checker
+  still ignores `scope` and `expires`. Expiry stays manual: the exception expires when
+  permits are added; the readiness check is then re-run without it. Full-county parcels
+  are outside this scope and need their own approved exception; the guard rejects a
+  full-county run under this one.
+
+## 11. Pilot run results (run 2026-11-11T16-17-38-928Z)
+
+| Measure                                             | Value                                                                             |
+| --------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Source count for the scope (`returnCountOnly`)      | 22,313                                                                            |
+| Rows downloaded / staged / in Parquet / in seed CSV | 22,313 / 22,313 / 22,313 / 22,313                                                 |
+| Raw pages                                           | 23 (1000 rows each, last page 313), about 49 s at 1 request every 2 s, no retries |
+| Distinct AINs                                       | 22,313 (no duplicates; all 10 digits)                                             |
+| With coordinates                                    | 22,224 (99.60%)                                                                   |
+| With year built                                     | 22,142 (99.23%); 171 source values of `0` set to null                             |
+| With effective year built                           | 22,157 (99.30%); 156 values of `0` set to null                                    |
+| With last recording date                            | 22,270; 9,764 flagged `owner_unchanged_10y_proxy` (reference date 2026-11-11)     |
+| Use types                                           | SFR 15,006; CND 3,513; R-I 1,942; C/I 1,656; OTH 111; VAC 85                      |
+
+DuckDB proof (`node src/query-radius.ts`):
+
+- Point: 34.1990, -118.4870 (Van Nuys, 91406). The nearest parcel is 0.02 mi away.
+- Radius 5 miles, age threshold 15 years (a parameter) as of 2026, so the rule is
+  `property_structure_built_year <= 2010`.
+- Result: **21,388 parcels**, built 1885-2010, farthest 4.14 mi. Each row carries
+  `source_http_request`, `source_retrieved_at` and `source_page_sha256`.
+- With `--age 30` the result is 20,548 (built 1995 or earlier).
+- Full output: `data/out/<run_id>/radius-query-result.json` (gitignored).
+
+Radius comparison (2026-11-11). Same point (34.1990, -118.4870), threshold 15 years
+(built 2010 or earlier), `--radius` parameter in miles (default 5):
+
+| Radius  | Matches | Farthest match | Year built range |
+| ------- | ------- | -------------- | ---------------- |
+| 1 mile  | 5,110   | 1.00 mi        | 1895-2010        |
+| 5 miles | 21,388  | 4.14 mi        | 1885-2010        |
+
+At 5 miles the radius extends beyond the 3-ZIP slice, so the count covers the slice only.
+
+Small data notes:
+
+- `city_name` is the situs city exactly as the source gives it: mostly `LOS ANGELES`,
+  but also neighbourhood names (VAN NUYS, SHERMAN OAKS, LAKE BALBOA, NORTH HOLLYWOOD)
+  and one `VAN NUYS,` artifact.
+- Jurisdiction is decided by `tax_rate_area_city`, which is `LOS ANGELES` for every row.
+
+## 12. Publishable table and lexicon names
+
+File: `data/out/<run_id>/los-angeles_property_roll2026_slice.parquet`, one row per AIN.
+Names come from the bundled kit catalog (`use-neutral-lexicon` model-c), not from the
+live Elephant lexicon or MCP, which were not available.
+
+| Class (lexicon) | Columns                                                                                                                                                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| property        | `parcel_identifier` (AIN), `property_structure_built_year`, `property_effective_built_year`                                                                                                                         |
+| address         | `unnormalized_address`, `street_number`, `street_pre_directional_text`, `street_name`, `unit_identifier`, `city_name`, `postal_code`, `plus_four_postal_code`, `county_name`, `state_code`, `latitude`, `longitude` |
+
+**Not verified as lexicon fields:**
+
+- `request_identifier` and `source_http_request`. They are used by the Oracle runtime
+  but are absent from the bundled catalog. `source_http_request` is stored as a plain
+  GET URL string, not as the Elephant request object.
+
+**Not lexicon fields** (named here, documented):
+
+- `assessor_id_formatted`
+- `roof_age_basis` (labels year built as a PROXY)
+- `source_use_type`, `source_use_code`, `source_use_code_description`
+- `coordinate_basis`, `tax_rate_area_city`, `roll_year`
+- `last_recording_date`, `owner_unchanged_10y_proxy`, `out_of_area_owner` (always null)
+- `source_http_method`, `source_retrieved_at`, `source_page_sha256`, `source_page_file`,
+  `source_name`
+
+**Deliberately not used:**
+
+- `sales_history.ownership_transfer_date`, because the recording date is not proven to
+  be a transfer.
+- The `property_type` and `property_usage_type` enums, because no mapping from the LA
+  use codes has been made yet.
+
+**Personal data:** the build fails if any owner, mail, contact, phone or email column
+appears. The source has none, so there are no person entities and no private owner file.
+
+## 13. Files and rebuild steps (data is gitignored and never committed)
+
+Code and config (committable):
+
+- `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml` (pnpm settings), `tsconfig.json`
+- `config/la-pilot-run.json`
+- `src/run-config.ts`, `src/scope-guard.ts`, `src/fetch-slice.ts`, `src/stage-raw.ts`,
+  `src/build-outputs.ts`, `src/query-radius.ts`
+- `test/scope-guard.test.ts`
+
+Run metadata (no rows, no addresses):
+
+- `runs/<run_id>/run_manifest.json`: file names, sizes, sha256, row counts, sources, roll
+  year 2026, limitations including the 88 jurisdictions and the publication blocker.
+- `runs/run_history.jsonl`: appended once per run, with the delta against the previous run.
+
+Data (gitignored under `data/`):
+
+- `data/raw/los-angeles/roll-2026/<run_id>/`: raw pages `page-NNNN.json`,
+  `receipts.jsonl`, `fetch-summary.json`
+- `data/work/<run_id>/rows.ndjson`: staging file
+- `data/out/<run_id>/`: the Parquet, a seed copy and the query result
+- `data/seeds/los-angeles.csv`: the runtime seed
+
+Rebuild (Node >= 22.18, which runs TypeScript directly; pnpm 12.16.1 from the
+`packageManager` field, enabled with `corepack enable pnpm`):
+
+```
+pnpm install --frozen-lockfile
+pnpm test
+node src/scope-guard.ts
+node src/fetch-slice.ts                       # guard, count, paged download, receipts
+node src/build-outputs.ts data/raw/los-angeles/roll-2026/<run_id>
+node src/query-radius.ts --parquet data/out/<run_id>/los-angeles_property_roll2026_slice.parquet [--lat=34.1990 --lon=-118.4870 --radius 5 --age 15]
+```
+
+A later run writes a new run directory and appends to the history. Previous outputs are
+never overwritten, except `data/seeds/los-angeles.csv`, which always holds the latest
+seed.
+
+Package manager: pnpm 12.16.1 (kit: pnpm workspaces), with one lockfile
+(`pnpm-lock.yaml`), exact versions, a 14-day minimum release age and no allowed
+install scripts (`pnpm-workspace.yaml`). The manifest of run 2026-11-11T16-17-38-928Z is a tool record left as written; it lists `npm ci --ignore-scripts` as its install step. Install with `pnpm install --frozen-lockfile`.
+
+Tests run on Vitest (kit testing guideline), with `vitest.config.ts` at the repo root. The only runtime dependencies are
+`@duckdb/node-api` and `yaml`.

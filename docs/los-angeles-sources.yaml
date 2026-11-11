@@ -674,4 +674,25 @@ later_sources:
   - { name: BBB, role: enrichment only, status: not-started }
 destination:
   writes_in_scope: false # pilot writes local files only; no Query DB, no AWS, no IPFS
-approved_exceptions: []
+approved_exceptions:
+  - gate: permit
+    reason: >-
+      Increment 1 only: parcels only, City of Los Angeles, ZIP codes 91405, 91406 and
+      91411, LA County Assessor roll 2026. No permits are harvested in this increment.
+      The 88 jurisdictions without a classified permit source are not yet covered and
+      are listed by name in docs/los-angeles-county-findings.md (section 6b) and in
+      run_manifest.json limitations. Expires when permits are added; the readiness
+      check is then re-run without it. Full-county parcels are outside this scope and
+      need their own approved exception.
+    scope:
+      {
+        increment: 1,
+        data: parcels-only,
+        jurisdiction: Los Angeles,
+        zips: ["91405", "91406", "91411"],
+        roll_year: "2026",
+      }
+    permits_harvested: false
+    not_yet_covered_count: 88
+    expires: "Expires when permits are added; the readiness check is then re-run without it."
+    approved_by: "Mario Ferraro, 2026-11-11"
