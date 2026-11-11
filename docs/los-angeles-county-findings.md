@@ -229,10 +229,15 @@ and its permits are not harvested in increment 1 either.
 DuckDB proof (`node src/query-radius.ts`):
 
 - Point: 34.1990, -118.4870 (Van Nuys, 91406). The nearest parcel is 0.02 mi away.
-- Radius 5 miles, age threshold 15 years (a parameter) as of 2026, so the rule is
-  `property_structure_built_year <= 2010`.
+- Radius 5 miles, age threshold 15 years (a parameter) on roll year 2026, so the rule is
+  year built < 2026 - 15, i.e. `year_built <= 2010`.
 - Result: **21,388 parcels**, built 1885-2010, farthest 4.14 mi. Each row carries
-  `source_http_request`, `source_retrieved_at` and `source_page_sha256`.
+  `source_request_url`, `source_retrieved_at` and `source_page_sha256`.
+- Since increment 2 the CLI queries the shared view contract (`packages/views`): the
+  `oracle.roof_age_candidates` macro and the `oracle.v_*` views, never raw Parquet
+  columns. The as-of year is the roll year in the data (it was the current year before;
+  both are 2026 for this run), and the counts are unchanged (21,388; 5,110 at 1 mile;
+  20,548 at 30 years).
 - With `--age 30` the result is 20,548 (built 1995 or earlier).
 - Full output: `data/out/<run_id>/radius-query-result.json` (gitignored).
 

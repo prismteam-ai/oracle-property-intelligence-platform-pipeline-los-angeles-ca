@@ -1,8 +1,8 @@
 # pnpm settings for this repository. pnpm 12 reads its settings from this file
-# (https://pnpm.io/settings). There is no "packages" field yet: until apps/ and
-# packages/ exist, the root package is the only project. Add "packages" with the
-# Turborepo layout.
-
+# (https://pnpm.io/settings). The root package (the increment-1 pipeline) is a
+# project too; packages/* hold shared code (packages/views: the SQL view contract).
+packages:
+  - packages/*
 # Supply chain: install only versions published at least 14 days ago
 # (minutes; https://pnpm.io/settings/dependency-resolution#minimumreleaseage).
 # Strict: fail instead of falling back to a newer version.
