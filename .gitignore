@@ -1,0 +1,10 @@
+# Pipeline data is never committed. Rebuild steps: docs/los-angeles-county-findings.md
+data/
+*.parquet
+*.duckdb
+*.duckdb.wal
+*.car
+*.csv
+node_modules/
+.env
+.env.*
