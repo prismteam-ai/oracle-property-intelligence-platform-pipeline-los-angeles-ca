@@ -21,6 +21,7 @@ import { parse } from "yaml";
 import { guardOrThrow } from "./scope-guard.ts";
 import { loadRunConfig, whereClause } from "./run-config.ts";
 import { stageRaw } from "./stage-raw.ts";
+import { fileEntry, seedFileEntries } from "./manifest-files.ts";
 
 const rawDir = process.argv[2];
 if (!rawDir)
@@ -156,7 +157,7 @@ const parquetRows = Number(
 );
 const seedRows = Number(
   (
-    await q(`select count(*) n from read_csv(${lit(seedPath)}, header=true)`)
+    await q(`select count(*) n from read_csv(${lit(seedRunPath)}, header=true)`)
   )[0]!.n,
 );
 const byUse = await q(
@@ -190,24 +191,6 @@ if (prev?.parquet_path && existsSync(prev.parquet_path)) {
     removed: Number(d.removed),
   };
 }
-
-const fileEntry = (
-  path: string,
-  rowCount: number | null,
-  role: string,
-  publishable: boolean,
-) => {
-  const bytes = readFileSync(path);
-  return {
-    name: basename(path),
-    path,
-    role,
-    publishable_after_approval: publishable,
-    size_bytes: bytes.length,
-    sha256: createHash("sha256").update(bytes).digest("hex"),
-    row_count: rowCount,
-  };
-};
 
 const catalog = parse(readFileSync(cfg.sources_catalog, "utf8")) as {
   permits: { jurisdictions: Array<{ jurisdiction: string; status: string }> };
@@ -293,12 +276,7 @@ const manifest = {
       "publishable property table (publish only after user approval and rights check)",
       true,
     ),
-    fileEntry(
-      seedPath,
-      seedRows,
-      "runtime seed CSV (parcel_id, source_identifier, situs_address + extras)",
-      false,
-    ),
+    ...seedFileEntries(seedRunPath, seedPath, seedRows),
     fileEntry(
       join(rawDir, "receipts.jsonl"),
       receipts.length,

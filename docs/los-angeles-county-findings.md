@@ -326,6 +326,19 @@ node src/build-outputs.ts data/raw/los-angeles/roll-2026/<run_id>
 node src/query-radius.ts --parquet data/out/<run_id>/los-angeles_property_roll2026_slice.parquet [--lat=34.1990 --lon=-118.4870 --radius 5 --age 15]
 ```
 
+Seed recording in the manifest:
+
+- **Later manifests:** they list the per-run seed `data/out/<run_id>/los-angeles-seed.csv`
+  as the run's artifact, with its sha256. The shared runtime path
+  `data/seeds/los-angeles.csv` is recorded separately with `copy_of` (the per-run path),
+  the same digest, and a note that the next run overwrites it. The build fails if the
+  two digests differ (`src/manifest-files.ts`, tested in `test/manifest-files.test.ts`).
+- **Run 2026-11-11T16-17-38-928Z:** its manifest predates this layout and lists only the
+  shared path `data/seeds/los-angeles.csv`, with sha256
+  `3f22ec65deba994ca34c0f5350da8b2692e2314049e19fab9761342f703ba895`. Hashing the per-run
+  copy `data/out/2026-11-11T16-17-38-928Z/los-angeles-seed.csv` on 2026-11-11 gives the
+  same digest, so the recorded digest matches. That manifest is left unchanged.
+
 A later run writes a new run directory and appends to the history. Previous outputs are
 never overwritten, except `data/seeds/los-angeles.csv`, which always holds the latest
 seed.
