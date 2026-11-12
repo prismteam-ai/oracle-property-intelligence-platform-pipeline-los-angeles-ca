@@ -1,7 +1,8 @@
 /**
  * Download the approved parcel slice from the LA County Assessor roll query API.
- * Sequential, at most one request per min_request_interval_ms. Raw page bytes are kept
- * unchanged next to a receipt (request URL, retrieval time, HTTP status, bytes, sha256).
+ * Sequential, at most one request per min_request_interval_ms. Only the fields in RAW_FIELDS
+ * are requested. Raw page bytes are kept unchanged next to a receipt (request URL, retrieval
+ * time, HTTP status, bytes, sha256).
  *
  * Usage: node src/fetch-slice.ts [run-config.json]
  */
@@ -10,6 +11,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { guardOrThrow } from "./scope-guard.ts";
 import { loadRunConfig, whereClause } from "./run-config.ts";
+import { RAW_FIELDS } from "./raw-fields.ts";
 
 const configPath = process.argv[2] ?? "config/la-pilot-run.json";
 const cfg = loadRunConfig(configPath);
@@ -74,7 +76,7 @@ let total = 0;
 while (true) {
   const res = await get({
     where,
-    outFields: "*",
+    outFields: RAW_FIELDS.join(","),
     returnGeometry: "false",
     orderByFields: "OBJECTID ASC",
     resultOffset: String(offset),
