@@ -22,7 +22,8 @@ import {
 const VAN_NUYS = { lat: 34.199, lon: -118.487 };
 const SOURCE = "LA County Assessor - Assessor Parcel Data Roll 2026";
 // Measured on the county run 2026-11-12T01-44-04-047Z (sha256 44dab72e...) with plain SQL on the Parquet
-// columns, without the views or the macro (~/prism/notes/proofs/inc4/p8/prefilter-proof.txt).
+// columns, without the views or the macro. That check also showed the bounding-box prefilter gives rows
+// identical to a plain haversine scan at 1, 5 and 10 mi and in every other case checked.
 const ROWS = 2_428_433;
 const PAGES = 2_429;
 

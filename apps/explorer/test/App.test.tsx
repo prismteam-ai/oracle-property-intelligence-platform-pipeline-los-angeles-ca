@@ -3,7 +3,7 @@
  * Component test of the Explorer (React Testing Library on jsdom, fake timers).
  * Mocks: ../src/config.ts (fixed config, no network) and @oracle-la/api-client, whose createApiClient returns a
  * CALLABLE object like the real tRPC v11 proxy (typeof client === "function"), with vi.fn() procedures.
- * No map in the Explorer (D11), so nothing else is stubbed.
+ * No map in the Explorer (the CRM owns the map), so nothing else is stubbed.
  */
 import {
   act,

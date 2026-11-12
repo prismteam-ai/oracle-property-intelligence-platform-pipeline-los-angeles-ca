@@ -1,5 +1,5 @@
 /**
- * Pack @oracle-la/api-client as a self-contained tarball for the CRM repo (D4: vendored tarball + UPSTREAM.json).
+ * Pack @oracle-la/api-client as a self-contained tarball for the CRM repo (the client reaches the CRM as a vendored tarball with UPSTREAM.json).
  * - dist/index.js: the client (esbuild, ESM)
  * - dist/index.d.ts + dist/types/**: declarations of the API router and contract (tsc), so the CRM gets the
  *   same AppRouter type without the server code.

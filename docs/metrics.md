@@ -4,7 +4,7 @@ This file is the local stand-in for the kit's metric registry (non-negotiable 6:
 in Spring Oaks' Lexicon `cloudwatch-metrics.json` and shown on the Main Dashboard). Those repositories
 are not reachable from a candidate account; this list is the registry until they are. No dashboard.
 
-Budget: CloudWatch always-free allowance, which Free plan accounts keep
+Budget: CloudWatch always-free allowance, which applies on both AWS plans
 (https://aws.amazon.com/cloudwatch/pricing/, Free tier): "10 Metrics (of Custom Metrics and Detailed
 Monitoring Metrics)" and "Alarms 10 Alarm metrics (only applicable to Standard resolution alarms that
 list metrics directly and don't use a Metrics Insights query)". Limits for these stacks: fewer than 10
@@ -108,6 +108,6 @@ under one cent a month. Egress is the item that grows with use: the full points 
 - Custom metrics stay at 7 of 10 and alarms at 6 of 10 (tables above). The county run adds no metric and
   no alarm; `PointsResponseBytes` and `DataLoadMs` now report the county sizes.
 - Known gap: the budget custom resource's log group keeps 14 days (`RetentionDays.TWO_WEEKS`,
-  `apps/api/cdk/lib/guards-stack.ts:119`), against the kit's 90 days on all log groups
-  (`apply-engineering-guidelines/rules/observability-logging-tracing.md:27` at kit commit 71b8341). It is
+  `apps/api/cdk/lib/guards-stack.ts` (`GuardsStack`, log group `BudgetCustomResourceLogs`)), against the kit's 90 days on all log groups
+  (`apply-engineering-guidelines/rules/observability-logging-tracing.md`, "Logging Standards", at kit commit 71b8341). It is
   documented, not changed: changing it would modify the OracleLaGuards stack.

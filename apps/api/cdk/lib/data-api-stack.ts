@@ -47,7 +47,7 @@ export class DataApiStack extends cdk.Stack {
     };
     const logGroup = (name: string) =>
       new logs.LogGroup(this, `${name}Logs`, {
-        retention: logs.RetentionDays.THREE_MONTHS, // 90 days (kit: observability-logging-tracing.md:27)
+        retention: logs.RetentionDays.THREE_MONTHS, // 90 days (kit: apply-engineering-guidelines/rules/observability-logging-tracing.md, "Logging Standards")
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       });
 

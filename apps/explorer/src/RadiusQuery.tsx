@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { ApiClient, SearchResult } from "@oracle-la/api-client";
 
-/** Radius + roof-age query as form and table (D11: no map in the explorer; the CRM owns the map). */
+/** Radius + roof-age query as form and table (no map in the Explorer; the CRM owns the map). */
 export function RadiusQuery({ api }: { api: ApiClient }) {
   const [form, setForm] = useState({
     lat: 34.199,
