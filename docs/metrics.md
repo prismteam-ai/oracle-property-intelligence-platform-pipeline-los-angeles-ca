@@ -10,7 +10,7 @@ Monitoring Metrics)" and "Alarms 10 Alarm metrics (only applicable to Standard r
 list metrics directly and don't use a Metrics Insights query)". Limits for these stacks: fewer than 10
 custom metrics and fewer than 10 alarm metrics in total, across both repos.
 
-## Custom metrics (Powertools Metrics, EMF, namespace `OracleLa`) — 5 of 10
+## Custom metrics (Powertools Metrics, EMF, namespaces `OracleLa` and `RoofingCrm`) — 7 of 10
 
 | #   | Metric                | Unit         | Dimensions                   | Emitted by        | Meaning                                                                                        |
 | --- | --------------------- | ------------ | ---------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
@@ -19,11 +19,13 @@ custom metrics and fewer than 10 alarm metrics in total, across both repos.
 | 3   | `PointsResponseBytes` | Bytes        | service=oracle-la-api        | API Lambda        | Size of each `parcels.points` response (guard: 3 MB; Lambda limit 6 MB).                       |
 | 4   | `ColdStart`           | Count        | service=oracle-la-authorizer | Authorizer Lambda | A cold start.                                                                                  |
 | 5   | `AuthDenied`          | Count        | service=oracle-la-authorizer | Authorizer Lambda | A request with a wrong or missing-Bearer token reached the authorizer and was denied (403).    |
+| 6   | `LeadWritten`         | Count        | service=roofing-crm-leads    | Leads Lambda      | A lead was created, updated or deleted (namespace `RoofingCrm`, stack RoofingCrmLeads, crm).   |
+| 7   | `LeadWriteFailed`     | Count        | service=roofing-crm-leads    | Leads Lambda      | A lead write failed for a reason other than validation or a conflict (namespace `RoofingCrm`). |
 
 AWS-vended metrics used by alarms (AWS/Lambda, AWS/ApiGateway, AWS/Location) are basic monitoring
 metrics and are not custom metrics.
 
-## Alarms (standard resolution, one metric each) — 5 of 10
+## Alarms (standard resolution, one metric each) — 6 of 10
 
 All alarms notify the SNS topic `oracle-la-alerts` (stack OracleLaGuards; email subscription after
 the user confirms the address). Replacement for non-negotiable 7 (PagerDuty), which a candidate
@@ -37,8 +39,12 @@ and log through Powertools.
 | 3   | `oracle-la-authorizer-errors`    | AWS/Lambda Errors (authorizer), Sum, 5 min                                             | >= 1                                                                 | OracleLaDataApi (pipeline) |
 | 4   | `oracle-la-http-api-5xx`         | AWS/ApiGateway 5xx (ApiId, Stage=$default), Sum, 5 min                                 | >= 1                                                                 | OracleLaDataApi (pipeline) |
 | 5   | `roofing-crm-map-tiles-per-day`  | AWS/Location CallCount (ApiKeyName=roofing-crm-map, OperationName=GetTile), Sum, 1 day | > 5,000 tiles/day (= $0.20/day at $0.04 per 1,000 tiles, eu-north-1) | RoofingCrmMapKey (crm)     |
+| 6   | `roofing-crm-leads-http-api-5xx` | AWS/ApiGateway 5xx (leads ApiId, Stage=$default), Sum, 5 min                           | >= 1                                                                 | RoofingCrmLeads (crm)      |
 
 Missing data is treated as not breaching (idle stacks stay OK).
 
-Verified after deploy (2026-11-11): `aws cloudwatch list-metrics --namespace OracleLa` lists exactly these
-5 metric/dimension sets.
+The leads Lambda emits no ColdStart metric and has no Lambda Errors alarm (increment 3, to stay within the
+allowance); its failures surface as `LeadWriteFailed` and the leads HTTP API 5xx alarm.
+
+Verified after deploy (2026-11-11): `aws cloudwatch list-metrics --namespace OracleLa` lists exactly the
+5 `OracleLa` metric/dimension sets (rows 1-5); rows 6-7 are verified after the RoofingCrmLeads deploy.
