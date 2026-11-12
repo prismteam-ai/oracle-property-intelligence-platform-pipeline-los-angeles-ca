@@ -17,6 +17,7 @@ import * as sns from "aws-cdk-lib/aws-sns";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import type { Construct } from "constructs";
 import { ALERT_TOPIC_PARAM } from "./guards-stack.ts";
+import { LAYER_EXCLUDE } from "./layer.ts";
 
 export const TOKEN_HASH_PATH = "/oracle-la/api/clients/";
 export const METRICS_NAMESPACE = "OracleLa";
@@ -63,7 +64,9 @@ export class DataApiStack extends cdk.Stack {
       stdio: "inherit",
     });
     const duckdbLayer = new lambda.LayerVersion(this, "DuckDbLayer", {
-      code: lambda.Code.fromAsset(`${apiDir}build/duckdb-layer`),
+      code: lambda.Code.fromAsset(`${apiDir}build/duckdb-layer`, {
+        exclude: LAYER_EXCLUDE, // pnpm metadata with timestamps and paths (see layer.ts)
+      }),
       compatibleRuntimes: [lambda.Runtime.NODEJS_22_X],
       compatibleArchitectures: [lambda.Architecture.X86_64],
       removalPolicy: cdk.RemovalPolicy.DESTROY,
