@@ -20,6 +20,8 @@ import { ALERT_TOPIC_PARAM } from "./guards-stack.ts";
 
 export const TOKEN_HASH_PATH = "/oracle-la/api/clients/";
 export const METRICS_NAMESPACE = "OracleLa";
+/** SSM parameter holding the token authorizer's ARN (read by the CRM leads stack). */
+export const AUTHORIZER_ARN_PARAM = "/oracle-la/api/authorizer-arn";
 
 export interface DataApiStackProps extends cdk.StackProps {
   repoRoot: string;
@@ -42,7 +44,7 @@ export class DataApiStack extends cdk.Stack {
     };
     const logGroup = (name: string) =>
       new logs.LogGroup(this, `${name}Logs`, {
-        retention: logs.RetentionDays.TWO_WEEKS,
+        retention: logs.RetentionDays.THREE_MONTHS, // 90 days (kit: observability-logging-tracing.md:27)
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       });
 
@@ -134,6 +136,13 @@ export class DataApiStack extends cdk.Stack {
         description: `SHA-256 of the ${c.name} API token`,
       });
     }
+    // The CRM leads API (RoofingCrmLeads, crm repo) imports this authorizer by ARN; it creates its own
+    // invoke permission, scoped to its own authorizer ARN.
+    new ssm.StringParameter(this, "AuthorizerArn", {
+      parameterName: AUTHORIZER_ARN_PARAM,
+      stringValue: authFn.functionArn,
+      description: "Shared token authorizer, used by the CRM leads API",
+    });
     const authorizer = new HttpLambdaAuthorizer("TokenAuthorizer", authFn, {
       responseTypes: [HttpLambdaResponseType.SIMPLE],
       identitySource: ["$request.header.Authorization"],
