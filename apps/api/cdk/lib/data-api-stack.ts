@@ -16,6 +16,7 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import type { Construct } from "constructs";
+import { type ClientEntry, clientOrigin } from "./clients.ts";
 import { ALERT_TOPIC_PARAM } from "./guards-stack.ts";
 import { LAYER_EXCLUDE } from "./layer.ts";
 
@@ -31,7 +32,9 @@ export interface DataApiStackProps extends cdk.StackProps {
   /** The run's Parquet file name under DATA_PREFIX (from the latest runs/run_history.jsonl row). */
   parquetFile: string;
   /** One entry per frontend: drives CORS origins and the token-hash SSM parameter the authorizer reads. */
-  clients: Array<{ name: string; origin: string; tokenSha256: string }>;
+  clients: Array<ClientEntry & { tokenSha256: string }>;
+  /** SSM parameter with the Amplify app ID for clients given as `amplifyBranch` (read at deploy time). */
+  amplifyAppIdParameter?: string;
 }
 
 /** Private data bucket, DuckDB API Lambda (layer built with a frozen pnpm deploy), token authorizer, HTTP API, alarms. */
@@ -154,11 +157,18 @@ export class DataApiStack extends cdk.Stack {
       identitySource: ["$request.header.Authorization"],
       resultsCacheTtl: cdk.Duration.minutes(5),
     });
+    // Branch clients: the Amplify app ID comes from SSM at deploy time (published by the CRM's RoofingCrmWeb).
+    const hostAppId = props.amplifyAppIdParameter
+      ? ssm.StringParameter.valueForStringParameter(
+          this,
+          props.amplifyAppIdParameter,
+        )
+      : undefined;
     const api = new apigwv2.HttpApi(this, "HttpApi", {
       apiName: "oracle-la-data-api",
       createDefaultStage: false,
       corsPreflight: {
-        allowOrigins: props.clients.map((c) => c.origin),
+        allowOrigins: props.clients.map((c) => clientOrigin(c, hostAppId)),
         allowHeaders: ["authorization", "content-type"],
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,

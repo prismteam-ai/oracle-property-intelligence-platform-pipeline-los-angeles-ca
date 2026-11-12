@@ -2,6 +2,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import * as cdk from "aws-cdk-lib";
+import { type ClientsFile, parseClients } from "../lib/clients.ts";
 import { DataApiStack } from "../lib/data-api-stack.ts";
 import { GuardsStack } from "../lib/guards-stack.ts";
 
@@ -13,11 +14,12 @@ if (!account)
     "CDK_DEFAULT_ACCOUNT is not set: run this app through the CDK CLI with credentials for the target account",
   );
 const env = { account, region: "eu-north-1" };
-const clients = (
+const clientsFile = parseClients(
   JSON.parse(
     readFileSync(new URL("../clients.json", import.meta.url), "utf8"),
-  ) as { clients: Array<{ name: string; origin: string }> }
-).clients;
+  ) as ClientsFile,
+);
+const clients = clientsFile.clients;
 // Token hashes per client: gitignored, never in tracked files or outputs.
 const hashes = JSON.parse(
   readFileSync(`${repoRoot}.secrets/api-clients.json`, "utf8"),
@@ -28,8 +30,6 @@ const apiClients = clients.map((c) => {
     throw new Error(
       `missing token hash for API client "${c.name}" in .secrets/api-clients.json`,
     );
-  if (!/^https:\/\/[a-z0-9.-]+$/.test(c.origin))
-    throw new Error(`bad origin for API client "${c.name}"`);
   return { ...c, tokenSha256: h };
 });
 const history = readFileSync(`${repoRoot}runs/run_history.jsonl`, "utf8")
@@ -61,6 +61,7 @@ new DataApiStack(app, "OracleLaDataApi", {
   // The run's Parquet keeps its file name under runs/<run_id>/ in the bucket.
   parquetFile: basename(latest.parquet_path),
   clients: apiClients,
+  amplifyAppIdParameter: clientsFile.amplifyAppIdParameter,
 });
 for (const s of app.node.children)
   if (s instanceof cdk.Stack)
