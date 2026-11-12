@@ -3,6 +3,7 @@
 # project too; packages/* hold shared code (packages/views: the SQL view contract).
 packages:
   - packages/*
+  - apps/*
 # Supply chain: install only versions published at least 14 days ago
 # (minutes; https://pnpm.io/settings/dependency-resolution#minimumreleaseage).
 # Strict: fail instead of falling back to a newer version.
@@ -25,3 +26,7 @@ allowBuilds:
   # is `node-gyp rebuild`; the package ships a prebuilt fsevents.node, so the
   # rebuild is not needed. Never installed on Linux.
   fsevents: false
+  # Bundler for Lambda code (CDK NodejsFunction). Its postinstall (node install.js)
+  # only checks and swaps in the native binary; the JS API and bin shim find
+  # @esbuild/linux-x64 without it (verified in the increment-2 smoke test).
+  esbuild: false

@@ -1,0 +1,9 @@
+{
+  "name": "@oracle-la/duckdb-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DuckDB native module for the API Lambda layer. Built with `pnpm --filter @oracle-la/duckdb-runtime --prod deploy --frozen-lockfile` (never CDK nodeModules).",
+  "dependencies": {
+    "@duckdb/node-api": "2.0.0-r.1"
+  }
+}

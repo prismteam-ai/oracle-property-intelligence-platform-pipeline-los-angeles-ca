@@ -1,0 +1,15 @@
+{
+  "name": "@oracle-la/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@trpc/client": "11.19.0"
+  },
+  "devDependencies": {
+    "@oracle-la/api": "workspace:*"
+  }
+}

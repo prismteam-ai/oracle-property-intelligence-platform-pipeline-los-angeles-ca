@@ -16,6 +16,11 @@
     "test",
     "packages/*/src",
     "packages/*/test",
-    "vitest.config.ts"
+    "apps/api/src",
+    "apps/api/test",
+    "apps/api/cdk",
+    "packages/api-client/src",
+    "vitest.config.ts",
+    "eslint.config.ts"
   ]
 }
