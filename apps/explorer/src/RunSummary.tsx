@@ -26,7 +26,8 @@ interface RunView {
   };
   delta?: { added?: number; removed?: number };
   scope?: { where?: string; permits_harvested?: boolean };
-  readiness?: { preflight?: string; scope_guard?: string };
+  /** County runs record the validator's `overall` result; the pilot run recorded `preflight`. */
+  readiness?: { overall?: string; preflight?: string; scope_guard?: string };
   limitations?: string[];
 }
 /** One run_history.jsonl entry (v_run_history). */
@@ -90,9 +91,9 @@ export function RunSummary({ api }: { api: ApiClient }) {
       </div>
       <h3>Scope</h3>
       <p className="mono">{r.scope?.where}</p>
-      <p>
-        Readiness: {r.readiness?.preflight}; scope guard{" "}
-        {r.readiness?.scope_guard}. Permits harvested:{" "}
+      <p data-testid="readiness">
+        Readiness: {r.readiness?.overall ?? r.readiness?.preflight ?? "—"};
+        scope guard {r.readiness?.scope_guard}. Permits harvested:{" "}
         {String(r.scope?.permits_harvested)}.
       </p>
       <h3>Source limitations</h3>

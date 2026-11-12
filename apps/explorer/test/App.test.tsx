@@ -114,3 +114,42 @@ describe("Explorer radius query", () => {
     expect(h.runSummary).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Explorer run summary", () => {
+  const summary = (readiness: Record<string, string>) => ({
+    run: {
+      run_id: "r1",
+      row_counts: { parquet: 3 },
+      coverage: {},
+      delta: {},
+      scope: {},
+      readiness,
+      limitations: [],
+    },
+    history: [],
+  });
+  afterEach(() => cleanup());
+
+  test("shows the county run's readiness result (overall) and no pilot-slice wording", async () => {
+    h.runSummary
+      .mockReset()
+      .mockResolvedValue(summary({ overall: "PASS", scope_guard: "PASS" }));
+    render(<App />);
+    expect((await screen.findByTestId("readiness")).textContent).toContain(
+      "Readiness: PASS; scope guard PASS",
+    );
+    expect(document.querySelector("header")!.textContent).not.toMatch(
+      /Pilot slice|91405/,
+    );
+  });
+
+  test("falls back to the pilot run's preflight result", async () => {
+    h.runSummary
+      .mockReset()
+      .mockResolvedValue(summary({ preflight: "PASS", scope_guard: "PASS" }));
+    render(<App />);
+    expect((await screen.findByTestId("readiness")).textContent).toContain(
+      "Readiness: PASS; scope guard PASS",
+    );
+  });
+});

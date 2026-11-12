@@ -36,8 +36,9 @@ export function App() {
           Oracle Property Intelligence — Los Angeles County pipeline explorer
         </h1>
         <p>
-          DuckDB over the private run output, through SQL views. Pilot slice:
-          City of LA, ZIP 91405/91406/91411, roll 2026. Not public.
+          DuckDB over the private run output, through SQL views. Los Angeles
+          County assessor roll 2026; the run&apos;s scope is on the Run summary
+          tab. Not public.
         </p>
       </header>
       <nav role="tablist">
