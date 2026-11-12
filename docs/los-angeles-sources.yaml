@@ -21,7 +21,7 @@ parcel:
   discrepancy_explanation: GIS polygon layer is 4955 features (0.20%) above the 2026 roll table; roll table is canonical. Each roll row carries its own CENTER_LAT/CENTER_LON, so geometry-less units are measured in the pilot by null-coordinate share.
   separately_assessed_without_geometry: acknowledged
   identifier: AIN (10 digits, string, leading zeros kept); AssessorID formatted 9999-999-999
-  identifier_proven: false # proven during the pilot download (non-empty rows per AIN)
+  identifier_proven: true # proven during the pilot download: all 22313 rows have a unique 10-digit AIN
   pilot_slice:
     filter: "SitusZIP5 IN ('91405','91406','91411') AND TaxRateArea_CITY = 'LOS ANGELES'"
     count_2026: 22313
@@ -673,7 +673,13 @@ later_sources:
     }
   - { name: BBB, role: enrichment only, status: not-started }
 destination:
-  writes_in_scope: false # pilot writes local files only; no Query DB, no AWS, no IPFS
+  # The run files are written to the data API's private bucket. The bucket is resolved from the
+  # OracleLaDataApi stack output at upload time; no bucket name, ARN or ID is kept here.
+  writes_in_scope: true
+  proven: true
+  project: OracleLaDataApi
+  environment: non-production
+  independent_identity_sources: [cloudformation_stack_output, s3_bucket_tags]
 approved_exceptions:
   - gate: permit
     reason: >-
