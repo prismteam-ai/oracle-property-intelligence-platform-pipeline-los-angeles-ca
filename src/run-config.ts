@@ -27,9 +27,26 @@ export function loadRunConfig(path: string): RunConfig {
   return JSON.parse(readFileSync(path, "utf8")) as RunConfig;
 }
 
-/** ArcGIS where clause for the run scope. Jurisdiction uses the tax-rate-area city (space-padded in the source). */
+/** The jurisdiction value of a county-wide run: every jurisdiction, no ZIP filter. */
+export const ALL_JURISDICTIONS = "all";
+
+export function isCountyWide(scope: RunScope): boolean {
+  return scope.jurisdiction.trim().toLowerCase() === ALL_JURISDICTIONS;
+}
+
+/**
+ * ArcGIS where clause for the run scope. A county-wide run filters on the roll year only (the
+ * roll cache's own filter). Otherwise jurisdiction uses the tax-rate-area city (space-padded in
+ * the source) and the ZIP set.
+ */
 export function whereClause(scope: RunScope): string {
+  const rollYear = `RollYear = '${scope.roll_year.replace(/'/g, "")}'`;
+  if (isCountyWide(scope)) {
+    if (scope.zips.length > 0)
+      throw new Error("a county-wide run has no ZIP filter");
+    return rollYear;
+  }
   const zips = scope.zips.map((z) => `'${z.replace(/'/g, "")}'`).join(",");
   const city = scope.jurisdiction.toUpperCase().replace(/'/g, "");
-  return `SitusZIP5 IN (${zips}) AND TaxRateArea_CITY = '${city}' AND RollYear = '${scope.roll_year.replace(/'/g, "")}'`;
+  return `SitusZIP5 IN (${zips}) AND TaxRateArea_CITY = '${city}' AND ${rollYear}`;
 }

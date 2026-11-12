@@ -1,0 +1,53 @@
+{
+  "overall": "PASS",
+  "catalog": {
+    "county": "Los Angeles",
+    "slug": "los-angeles",
+    "state": "CA",
+    "fips": "06037"
+  },
+  "gates": [
+    {
+      "gate": "catalog_metadata",
+      "status": "PASS",
+      "evidence": "Los Angeles CA slug=los-angeles fips=06037",
+      "required_action": null
+    },
+    {
+      "gate": "parcel",
+      "status": "PASS",
+      "evidence": "canonical=tax_roll assessed=2428433.0 gis=2433388.0 discrepancy=0.20%",
+      "required_action": null
+    },
+    {
+      "gate": "permit",
+      "status": "APPROVED_EXCEPTION",
+      "evidence": "Increment 4: parcels only, all of Los Angeles County (the 89 jurisdictions: 88 incorporated cities and the unincorporated areas), no ZIP filter, LA County Assessor roll 2026. No permits are harvested in this increment. The 88 jurisdictions without a classified permit source are not yet covered and are listed by name in docs/los-angeles-county-findings.md (section 6b) and in run_manifest.json limitations. Expires when permits are added; the readiness check is then re-run without it.",
+      "required_action": null
+    },
+    {
+      "gate": "destination",
+      "status": "PASS",
+      "evidence": "destination independently proven",
+      "required_action": null
+    },
+    {
+      "gate": "enrichment",
+      "status": "PASS",
+      "evidence": "no BBB advertised-count claim",
+      "required_action": null
+    }
+  ],
+  "preparation_allowed": true,
+  "execution_allowed": true,
+  "auto_advance_required": true,
+  "required_blocker_actions": [],
+  "next_automated_actions": [
+    "Start the next dependency-ready stage from the durable run manifest without operator confirmation"
+  ],
+  "next_automated_action": "Start the next dependency-ready stage from the durable run manifest without operator confirmation",
+  "next_permissible_automated_action": "Start the next dependency-ready stage from the durable run manifest without operator confirmation",
+  "seed_allowed": true,
+  "ingest_allowed": true,
+  "catalog_path": "docs/los-angeles-sources.yaml"
+}

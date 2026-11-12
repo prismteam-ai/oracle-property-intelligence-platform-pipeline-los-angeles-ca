@@ -6,7 +6,7 @@ slug: los-angeles
 fips: "06037"
 snapshot_time: "2026-11-11T15:52:13Z"
 verified_time: "2026-11-11T15:52:13Z"
-scope: increment-1 pilot (parcel slice only; no permits, no Query DB writes, no publication)
+scope: parcels only (increment 1 pilot slice, then increment 4 county-wide); no permits, no Query DB writes, no publication
 parcel:
   canonical_source: tax_roll
   canonical_source_name: LA County Assessor - Assessor Parcel Data Roll 2026
@@ -681,6 +681,29 @@ destination:
   environment: non-production
   independent_identity_sources: [cloudformation_stack_output, s3_bucket_tags]
 approved_exceptions:
+  # The validator reports the first permit exception, so the current county-wide entry comes first.
+  # The scope guard (src/scope-guard.ts) accepts a run only inside one entry's scope.
+  - gate: permit
+    reason: >-
+      Increment 4: parcels only, all of Los Angeles County (the 89 jurisdictions: 88
+      incorporated cities and the unincorporated areas), no ZIP filter, LA County
+      Assessor roll 2026. No permits are harvested in this increment. The 88
+      jurisdictions without a classified permit source are not yet covered and are
+      listed by name in docs/los-angeles-county-findings.md (section 6b) and in
+      run_manifest.json limitations. Expires when permits are added; the readiness
+      check is then re-run without it.
+    scope:
+      {
+        increment: 4,
+        data: parcels-only,
+        jurisdiction: all,
+        zips: [],
+        roll_year: "2026",
+      }
+    permits_harvested: false
+    not_yet_covered_count: 88
+    expires: "Expires when permits are added; the readiness check is then re-run without it."
+    approved_by: "Mario Ferraro, 2026-11-12"
   - gate: permit
     reason: >-
       Increment 1 only: parcels only, City of Los Angeles, ZIP codes 91405, 91406 and

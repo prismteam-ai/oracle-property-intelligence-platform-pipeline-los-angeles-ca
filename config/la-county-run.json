@@ -1,0 +1,19 @@
+{
+  "run_name": "los-angeles-county-parcels-increment-4",
+  "county": "Los Angeles",
+  "state": "CA",
+  "increment": 4,
+  "data": "parcels-only",
+  "jurisdiction": "all",
+  "zips": [],
+  "roll_year": "2026",
+  "permits_harvested": false,
+  "source": {
+    "name": "LA County Assessor - Assessor Parcel Data Roll 2026",
+    "hub_item_id": "0d3ac33a76e1495bb7fc522a8085729c",
+    "query_url": "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Assessor%20Parcel%20Data%20Roll%202026/FeatureServer/0/query",
+    "page_size": 1000,
+    "min_request_interval_ms": 2000
+  },
+  "sources_catalog": "docs/los-angeles-sources.yaml"
+}

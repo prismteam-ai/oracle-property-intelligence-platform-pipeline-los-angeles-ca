@@ -1,6 +1,7 @@
 /**
- * Scope guard: run before any seed or download. Fails (exit 1) when the run's scope
- * differs from the approved permit-gate exception in the sources catalog.
+ * Scope guard: run before any seed or download. Fails (exit 1) unless the run's scope
+ * matches one of the approved permit-gate exceptions in the sources catalog (jurisdiction,
+ * ZIP set, roll year and permits flag).
  * It does not change or replace the kit's readiness validator.
  *
  * Usage: node src/scope-guard.ts [run-config.json] [sources.yaml]
@@ -17,15 +18,7 @@ export interface ExceptionScope {
   permits_harvested: boolean;
 }
 
-export function exceptionScopeFromCatalog(catalogYaml: string): ExceptionScope {
-  const catalog = parse(catalogYaml) as {
-    approved_exceptions?: Array<Record<string, unknown>>;
-  };
-  const entry = (catalog.approved_exceptions ?? []).find(
-    (e) => e.gate === "permit",
-  );
-  if (!entry)
-    throw new Error("no approved permit-gate exception in the sources catalog");
+function scopeOf(entry: Record<string, unknown>, n: number): ExceptionScope {
   const scope = entry.scope as Record<string, unknown> | undefined;
   if (
     !scope ||
@@ -34,11 +27,11 @@ export function exceptionScopeFromCatalog(catalogYaml: string): ExceptionScope {
     scope.roll_year === undefined
   ) {
     throw new Error(
-      "permit exception has no complete scope (jurisdiction, zips, roll_year)",
+      `permit exception ${n} has no complete scope (jurisdiction, zips, roll_year)`,
     );
   }
   if (typeof entry.permits_harvested !== "boolean") {
-    throw new Error("permit exception has no boolean permits_harvested");
+    throw new Error(`permit exception ${n} has no boolean permits_harvested`);
   }
   return {
     jurisdiction: scope.jurisdiction,
@@ -48,6 +41,21 @@ export function exceptionScopeFromCatalog(catalogYaml: string): ExceptionScope {
   };
 }
 
+/** Every permit-gate exception's scope, in catalog order. */
+export function exceptionScopesFromCatalog(
+  catalogYaml: string,
+): ExceptionScope[] {
+  const catalog = parse(catalogYaml) as {
+    approved_exceptions?: Array<Record<string, unknown>>;
+  };
+  const entries = (catalog.approved_exceptions ?? []).filter(
+    (e) => e.gate === "permit",
+  );
+  if (entries.length === 0)
+    throw new Error("no approved permit-gate exception in the sources catalog");
+  return entries.map((e, i) => scopeOf(e, i + 1));
+}
+
 const norm = (s: string) => s.trim().toUpperCase();
 const sameSet = (a: string[], b: string[]) => {
   const x = [...new Set(a.map(norm))].sort();
@@ -55,7 +63,7 @@ const sameSet = (a: string[], b: string[]) => {
   return x.length === y.length && x.every((v, i) => v === y[i]);
 };
 
-/** Returns the list of mismatches; empty means the run is inside the approved scope. */
+/** Returns the list of mismatches; empty means the run is inside this exception's scope. */
 export function checkScope(run: RunScope, allowed: ExceptionScope): string[] {
   const errors: string[] = [];
   if (
@@ -66,11 +74,8 @@ export function checkScope(run: RunScope, allowed: ExceptionScope): string[] {
       `jurisdiction "${run.jurisdiction ?? ""}" is not the approved "${allowed.jurisdiction}"`,
     );
   }
-  if (
-    !Array.isArray(run.zips) ||
-    run.zips.length === 0 ||
-    !sameSet(run.zips, allowed.zips)
-  ) {
+  // An exception without ZIP codes allows only a run without a ZIP filter, and the reverse.
+  if (!Array.isArray(run.zips) || !sameSet(run.zips, allowed.zips)) {
     errors.push(
       `zips [${(run.zips ?? []).join(", ")}] are not the approved [${allowed.zips.join(", ")}]`,
     );
@@ -88,24 +93,43 @@ export function checkScope(run: RunScope, allowed: ExceptionScope): string[] {
   return errors;
 }
 
-export function guardOrThrow(runConfigPath: string, catalogPath: string): void {
-  const run = loadRunConfig(runConfigPath);
-  const allowed = exceptionScopeFromCatalog(readFileSync(catalogPath, "utf8"));
-  const errors = checkScope(run, allowed);
-  if (errors.length > 0) {
-    throw new Error(
-      `SCOPE GUARD FAILED: run is outside the approved permit-gate exception:\n - ${errors.join("\n - ")}`,
-    );
-  }
+/**
+ * The run passes when it is inside the scope of one permit-gate exception. Returns the
+ * matching exception's number (1-based, catalog order among permit exceptions); throws
+ * with every exception's mismatches otherwise.
+ */
+export function matchException(
+  run: RunScope,
+  allowed: ExceptionScope[],
+): number {
+  const mismatches = allowed.map((a) => checkScope(run, a));
+  const i = mismatches.findIndex((m) => m.length === 0);
+  if (i >= 0) return i + 1;
+  throw new Error(
+    "SCOPE GUARD FAILED: run is outside every approved permit-gate exception:\n" +
+      mismatches
+        .map((m, n) => ` exception ${n + 1}:\n - ${m.join("\n - ")}`)
+        .join("\n"),
+  );
+}
+
+export function guardOrThrow(
+  runConfigPath: string,
+  catalogPath: string,
+): number {
+  return matchException(
+    loadRunConfig(runConfigPath),
+    exceptionScopesFromCatalog(readFileSync(catalogPath, "utf8")),
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const runPath = process.argv[2] ?? "config/la-pilot-run.json";
   const catalogPath = process.argv[3] ?? "docs/los-angeles-sources.yaml";
   try {
-    guardOrThrow(runPath, catalogPath);
+    const n = guardOrThrow(runPath, catalogPath);
     console.log(
-      `SCOPE GUARD PASS: ${runPath} is inside the approved exception in ${catalogPath}`,
+      `SCOPE GUARD PASS: ${runPath} is inside approved permit exception ${n} in ${catalogPath}`,
     );
   } catch (err) {
     console.error((err as Error).message);
