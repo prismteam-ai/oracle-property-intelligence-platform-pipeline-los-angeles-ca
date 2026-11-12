@@ -212,3 +212,83 @@ describe("roofAgeRule", () => {
     expect(() => roofAgeRule(2026, -1)).toThrow();
   });
 });
+
+describe("roof_age_candidates bounding-box prefilter", () => {
+  // Points just inside (0.9999 r) and just outside (1.0001 r) each circle, every 15 degrees of bearing and
+  // at the two bearings of the circle's widest longitude (acos(tan(r/R) * tan(lat)), east and west), placed
+  // with the spherical direct formula. The box must keep every inside point: the result is exactly the
+  // inside set, and a box narrower than the circle in latitude or longitude loses a point. The 89.99 degree
+  // centre has the pole inside its 10-mile circle, so its box spans every longitude.
+  const R = 3958.8;
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const deg = (r: number) => (r * 180) / Math.PI;
+  const dest = (lat: number, lon: number, bearing: number, miles: number) => {
+    const d = miles / R;
+    const p1 = rad(lat);
+    const t = rad(bearing);
+    const p2 = Math.asin(
+      Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(t),
+    );
+    const l2 =
+      rad(lon) +
+      Math.atan2(
+        Math.sin(t) * Math.sin(d) * Math.cos(p1),
+        Math.cos(d) - Math.sin(p1) * Math.sin(p2),
+      );
+    return [deg(p2), ((deg(l2) + 540) % 360) - 180] as const;
+  };
+  const centres = [
+    [34.2, -118.4],
+    [33.5, -117.9],
+    [89.99, 0],
+  ] as const;
+  const radii = [0.1, 1, 5, 10];
+  const pts: Array<{ id: string; c: number; miles: number }> = [];
+  let box: DuckDBConnection;
+  beforeAll(async () => {
+    const rows: string[] = [];
+    centres.forEach(([lat, lon], c) =>
+      radii.forEach((r) =>
+        [0.9999, 1.0001].forEach((f) => {
+          const t = deg(
+            Math.acos(Math.min(1, Math.tan(r / R) * Math.tan(rad(lat)))),
+          );
+          for (const b of [
+            ...Array.from({ length: 24 }, (_, i) => i * 15),
+            t,
+            360 - t,
+          ]) {
+            const id = String(pts.length + 1).padStart(10, "0");
+            const [plat, plon] = dest(lat, lon, b, r * f);
+            pts.push({ id, c, miles: r * f });
+            rows.push(row(id, 1950, plat, plon, "page-0000.json"));
+          }
+        }),
+      ),
+    );
+    const file = join(dir, "box.parquet");
+    box = await (await DuckDBInstance.create(":memory:")).connect();
+    await box.run(
+      `copy (${rows.join(" union all ")}) to ${lit(file)} (format parquet)`,
+    );
+    await box.run(propertyViewsSql({ propertyParquet: file }));
+  });
+
+  test("keeps every point inside the circle and nothing outside, for each centre and radius", async () => {
+    for (const [c, [lat, lon]] of centres.entries())
+      for (const r of radii) {
+        const got = (
+          await (
+            await box.runAndReadAll(
+              "select parcel_id from oracle.roof_age_candidates(0, $1, $2, $3) order by 1",
+              [lat, lon, r],
+            )
+          ).getRowObjectsJson()
+        ).map((x) => x.parcel_id);
+        const want = pts
+          .filter((p) => p.c === c && p.miles <= r)
+          .map((p) => p.id);
+        expect(got, `centre ${lat},${lon} radius ${r}`).toEqual(want);
+      }
+  });
+});

@@ -3,8 +3,10 @@ import { z } from "zod";
 import { roofAgeRule } from "@oracle-la/views";
 import {
   LA_BOUNDS,
+  MAX_MATCH_IDS,
   MAX_POINTS,
   MAX_RESPONSE_BYTES,
+  type MatchResult,
   type ParcelDetail,
   type PointsResult,
   type SearchResult,
@@ -17,6 +19,7 @@ const filter = z.object({
   radius_miles: z.number().min(0.1).max(10).default(1),
   threshold_years: z.number().int().min(1).max(120).default(15),
 });
+const parcelId = z.string().regex(/^\d{10}$/);
 const args = (f: z.infer<typeof filter>) => [
   f.threshold_years,
   f.lat,
@@ -87,8 +90,25 @@ export const parcelsRouter = router({
         });
       return out;
     }),
+  /** Read-only: which of the given parcels the search matches (for "Leads in this search" when points are capped). */
+  match: procedure
+    .input(
+      filter.extend({
+        parcel_ids: z.array(parcelId).min(1).max(MAX_MATCH_IDS),
+      }),
+    )
+    .query(async ({ ctx, input }): Promise<MatchResult> => {
+      const db = await ctx.db();
+      // The IDs go in as one parameter (10-digit strings joined by commas), never spliced into the SQL.
+      const rows = await db.rows(
+        `select distinct parcel_id from oracle.roof_age_candidates($1, $2, $3, $4)
+         where parcel_id in (select unnest(string_split($5, ','))) order by parcel_id`,
+        [...args(input), input.parcel_ids.join(",")],
+      );
+      return { parcel_ids: rows.map((r) => String(r.parcel_id)) };
+    }),
   detail: procedure
-    .input(z.object({ parcel_id: z.string().regex(/^\d{10}$/) }))
+    .input(z.object({ parcel_id: parcelId }))
     .query(async ({ ctx, input }): Promise<ParcelDetail> => {
       const db = await ctx.db();
       const [property] = await db.rows(

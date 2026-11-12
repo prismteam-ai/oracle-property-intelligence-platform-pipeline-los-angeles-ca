@@ -1,10 +1,12 @@
 /**
- * Data access: copy the run files from S3 to /tmp at cold start (sha256-verified), open DuckDB,
- * create the shared views, then lock DuckDB down to exactly those files.
+ * Data access: stream the run files from S3 to /tmp at cold start (the Parquet's sha256 is computed on the
+ * stream and verified), open DuckDB, create the shared views, then lock DuckDB down to exactly those files.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createReadStream, createWriteStream, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import { CONTRACT, propertyViewsSql, runViewsSql } from "@oracle-la/views";
@@ -13,6 +15,8 @@ import type { Db } from "./db-types.ts";
 export interface DataConfig {
   runId: string;
   parquetSha256: string;
+  /** The run's Parquet file name (the base name of parquet_path in runs/run_history.jsonl). */
+  parquetFile: string;
   /** S3 source; omitted when localDir is set (tests, local runs). */
   bucket?: string;
   prefix?: string;
@@ -22,11 +26,15 @@ export interface DataConfig {
 
 export type { Db };
 
-const FILES = {
-  parquet: "los-angeles_property_roll2026_slice.parquet",
-  manifest: "run_manifest.json",
-  history: "run_history.jsonl",
-} as const;
+/** A plain Parquet file name: no directory part, so it names one object under the run prefix. */
+const PARQUET_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.parquet$/;
+const runFiles = (parquetFile: string) =>
+  ({
+    parquet: parquetFile,
+    manifest: "run_manifest.json",
+    history: "run_history.jsonl",
+  }) as const;
+type FileKey = keyof ReturnType<typeof runFiles>;
 
 /** JSON-safe values: BIGINT -> number (all counts are far below 2^53), dates -> ISO 8601 UTC, other DuckDB values -> string. */
 export function toPlain(v: unknown): unknown {
@@ -44,38 +52,60 @@ export function toPlain(v: unknown): unknown {
   return v;
 }
 
-export const sha256 = (b: Buffer): string =>
-  createHash("sha256").update(b).digest("hex");
+/** Pipe a stream to a file, computing its sha256 on the way: one pass, never the whole object in memory. */
+async function copyHashed(src: Readable, path: string): Promise<string> {
+  const hash = createHash("sha256");
+  await pipeline(
+    src,
+    async function* (chunks: AsyncIterable<Buffer>) {
+      for await (const chunk of chunks) {
+        hash.update(chunk);
+        yield chunk;
+      }
+    },
+    createWriteStream(path),
+  );
+  return hash.digest("hex");
+}
 
+/** The local paths of the run files and the Parquet's sha256 (computed while copying, or read once locally). */
 async function fetchFiles(
   cfg: DataConfig,
   s3: S3Client,
-): Promise<Record<keyof typeof FILES, string>> {
+): Promise<{ paths: Record<FileKey, string>; parquetSha256: string }> {
+  if (!PARQUET_FILE.test(cfg.parquetFile))
+    throw new Error(
+      `bad Parquet file name: ${JSON.stringify(cfg.parquetFile)}`,
+    );
+  const files = runFiles(cfg.parquetFile);
   const dir =
     cfg.localDir ?? join(cfg.tmpDir ?? "/tmp", "oracle-data", cfg.runId);
-  if (cfg.localDir)
-    return {
-      parquet: join(dir, FILES.parquet),
-      manifest: join(dir, FILES.manifest),
-      history: join(dir, FILES.history),
-    };
+  const paths = Object.fromEntries(
+    Object.entries(files).map(([k, f]) => [k, join(dir, f)]),
+  ) as Record<FileKey, string>;
+  if (cfg.localDir) {
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(paths.parquet))
+      hash.update(chunk as Buffer);
+    return { paths, parquetSha256: hash.digest("hex") };
+  }
   mkdirSync(dir, { recursive: true });
-  const out = {} as Record<keyof typeof FILES, string>;
-  await Promise.all(
-    (Object.keys(FILES) as Array<keyof typeof FILES>).map(async (k) => {
+  const digests = await Promise.all(
+    (Object.keys(files) as FileKey[]).map(async (k) => {
       const res = await s3.send(
         new GetObjectCommand({
           Bucket: cfg.bucket,
-          Key: `${cfg.prefix ?? ""}${FILES[k]}`,
+          Key: `${cfg.prefix ?? ""}${files[k]}`,
         }),
       );
-      const bytes = Buffer.from(await res.Body!.transformToByteArray());
-      const path = join(dir, FILES[k]);
-      writeFileSync(path, bytes);
-      out[k] = path;
+      if (!res.Body) throw new Error(`S3 object ${files[k]} has no body`);
+      return [k, await copyHashed(res.Body as Readable, paths[k])] as const;
     }),
   );
-  return out;
+  return {
+    paths,
+    parquetSha256: Object.fromEntries(digests).parquet!,
+  };
 }
 
 export async function openDb(
@@ -83,8 +113,7 @@ export async function openDb(
   s3: S3Client = new S3Client({}),
 ): Promise<Db> {
   const t0 = Date.now();
-  const files = await fetchFiles(cfg, s3);
-  const got = sha256(readFileSync(files.parquet));
+  const { paths: files, parquetSha256: got } = await fetchFiles(cfg, s3);
   if (got !== cfg.parquetSha256)
     throw new Error(
       `parquet sha256 mismatch: expected ${cfg.parquetSha256}, got ${got}`,

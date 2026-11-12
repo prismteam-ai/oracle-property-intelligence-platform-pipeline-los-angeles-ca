@@ -5,6 +5,12 @@
 export const API_VERSION = "1";
 /** Most map points returned by parcels.points before it truncates. */
 export const MAX_POINTS = 25_000;
+/**
+ * Most parcel IDs per parcels.match call. A GET with this many IDs and the longest filter values stays under
+ * the shared client's maxURLLength (2,000 characters, packages/api-client), which is far below the HTTP API
+ * limit of 10,240 bytes for the request line and headers together (test: apps/api/test/match-url.test.ts).
+ */
+export const MAX_MATCH_IDS = 80;
 /** Serialized-size guard for any response (Lambda sync limit is 6 MB). */
 export const MAX_RESPONSE_BYTES = 3_000_000;
 /** Bounding box accepted for search centres (LA County with a margin). */
@@ -102,6 +108,11 @@ export interface PointsResult {
   lon: number[];
   truncated: boolean;
   max_points: number;
+}
+
+/** parcels.match: the given parcel IDs that the search filter matches, sorted, without duplicates. */
+export interface MatchResult {
+  parcel_ids: string[];
 }
 
 export interface ParcelDetail {

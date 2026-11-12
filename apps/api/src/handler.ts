@@ -29,6 +29,7 @@ const getDb = (): Promise<Db> => {
     {
       runId: process.env.RUN_ID!,
       parquetSha256: process.env.PARQUET_SHA256!,
+      parquetFile: process.env.PARQUET_FILE!,
       bucket: process.env.DATA_BUCKET!,
       prefix: process.env.DATA_PREFIX!,
     },

@@ -1,5 +1,6 @@
 /** Pipeline data API CDK app: account guards (alerts, budget) and the private DuckDB data API. */
 import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 import * as cdk from "aws-cdk-lib";
 import { DataApiStack } from "../lib/data-api-stack.ts";
 import { GuardsStack } from "../lib/guards-stack.ts";
@@ -34,7 +35,14 @@ const apiClients = clients.map((c) => {
 const history = readFileSync(`${repoRoot}runs/run_history.jsonl`, "utf8")
   .trim()
   .split("\n")
-  .map((l) => JSON.parse(l) as { run_id: string; parquet_sha256: string });
+  .map(
+    (l) =>
+      JSON.parse(l) as {
+        run_id: string;
+        parquet_sha256: string;
+        parquet_path: string;
+      },
+  );
 const latest = history.at(-1)!;
 
 const app = new cdk.App();
@@ -50,6 +58,8 @@ new DataApiStack(app, "OracleLaDataApi", {
   repoRoot,
   runId: latest.run_id,
   parquetSha256: latest.parquet_sha256,
+  // The run's Parquet keeps its file name under runs/<run_id>/ in the bucket.
+  parquetFile: basename(latest.parquet_path),
   clients: apiClients,
 });
 for (const s of app.node.children)

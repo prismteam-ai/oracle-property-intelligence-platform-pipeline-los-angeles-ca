@@ -28,6 +28,8 @@ export interface DataApiStackProps extends cdk.StackProps {
   repoRoot: string;
   runId: string;
   parquetSha256: string;
+  /** The run's Parquet file name under DATA_PREFIX (from the latest runs/run_history.jsonl row). */
+  parquetFile: string;
   /** One entry per frontend: drives CORS origins and the token-hash SSM parameter the authorizer reads. */
   clients: Array<{ name: string; origin: string; tokenSha256: string }>;
 }
@@ -88,6 +90,7 @@ export class DataApiStack extends cdk.Stack {
         DATA_PREFIX: `runs/${props.runId}/`,
         RUN_ID: props.runId,
         PARQUET_SHA256: props.parquetSha256,
+        PARQUET_FILE: props.parquetFile,
         POWERTOOLS_SERVICE_NAME: "oracle-la-api",
         POWERTOOLS_METRICS_NAMESPACE: METRICS_NAMESPACE,
         NODE_OPTIONS: "--enable-source-maps",

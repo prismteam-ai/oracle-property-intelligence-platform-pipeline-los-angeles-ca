@@ -79,13 +79,29 @@ create or replace macro oracle.haversine_miles(lat1, lon1, lat2, lon2) as
       pow(sin(radians(lat2 - lat1) / 2), 2)
     + cos(radians(lat1)) * cos(radians(lat2)) * pow(sin(radians(lon2 - lon1) / 2), 2)));
 
+-- Half-sizes in degrees of the bounding box around a circle (see roof_age_candidates). Internal helpers,
+-- not part of CONTRACT.
+create or replace macro oracle.box_dlat(radius_miles) as
+  1.001 * degrees(radius_miles / ${EARTH_RADIUS_MILES});
+create or replace macro oracle.box_dlon(center_lat, radius_miles) as
+  case when sin(radius_miles / ${EARTH_RADIUS_MILES}) >= cos(radians(center_lat)) then 360
+       else 1.001 * degrees(asin(sin(radius_miles / ${EARTH_RADIUS_MILES}) / cos(radians(center_lat)))) end;
+
 -- Roof-age rule (shared by the CLI and the API): older than N years means
 -- year_built < roll_year - N. Parcels without coordinates or year built are excluded.
+-- Bounding-box prefilter: only parcels inside the box around the circle get a haversine distance. The box
+-- is never smaller than the circle: latitude +/- radius/R; longitude +/- asin(sin(radius/R) / cos(lat)),
+-- the circle's widest longitude (any longitude once the circle reaches a pole); both widened by 0.1%
+-- against rounding. The exact haversine filter below still decides. The box does not wrap at
+-- +/-180 degrees longitude (the API and CLI only take LA County centres).
 create or replace macro oracle.roof_age_candidates(threshold_years, center_lat, center_lon, radius_miles) as table
 select * from (
   select p.*, oracle.haversine_miles(center_lat, center_lon, p.latitude, p.longitude) as distance_miles
   from oracle.v_property p
   where p.latitude is not null and p.longitude is not null
+    and p.latitude between center_lat - oracle.box_dlat(radius_miles) and center_lat + oracle.box_dlat(radius_miles)
+    and p.longitude between center_lon - oracle.box_dlon(center_lat, radius_miles)
+                        and center_lon + oracle.box_dlon(center_lat, radius_miles)
 )
 where distance_miles <= radius_miles
   and year_built < roll_year - threshold_years;
