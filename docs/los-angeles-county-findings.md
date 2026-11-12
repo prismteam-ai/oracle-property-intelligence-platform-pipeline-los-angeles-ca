@@ -250,8 +250,16 @@ Radius comparison (2026-11-11). Same point (34.1990, -118.4870), threshold 15 ye
 | 5 miles | 21,388  | 4.14 mi        | 1885-2010        |
 
 At 5 miles the radius extends beyond the 3-ZIP slice, so the count covers the slice only.
+The 5-mile circle does not cover the whole slice either: 6 parcels lie 5.4-7.2 mi from
+the reference point (34.1990, -118.4870). They are the 6 out-of-ZIP parcels listed
+below.
 
 Small data notes:
+
+- Data-quality limitation: the roll's ZIP disagrees with the coordinates for 6 of
+  22,313 parcels, and the pilot slice is defined by that ZIP. AINs: 2317016013,
+  2319005018, 2336001020, 2533019032, 2466029020, 2822012019. They stay in the slice;
+  no outside check was made.
 
 - `city_name` is the situs city exactly as the source gives it: mostly `LOS ANGELES`,
   but also neighbourhood names (VAN NUYS, SHERMAN OAKS, LAKE BALBOA, NORTH HOLLYWOOD)
