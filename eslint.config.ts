@@ -27,4 +27,19 @@ export default defineConfig(
     files: ["apps/*/src/**/*.tsx", "apps/*/src/**/*.ts"],
     extends: [reactHooks.configs.flat.recommended],
   },
+  {
+    // Plain Node scripts: the Node globals they use (TypeScript files get these from @types/node).
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        AbortSignal: "readonly",
+        Buffer: "readonly",
+        URLSearchParams: "readonly",
+        console: "readonly",
+        fetch: "readonly",
+        process: "readonly",
+        setTimeout: "readonly",
+      },
+    },
+  },
 );
