@@ -129,7 +129,7 @@ test.describe("with credentials", () => {
     for (const s of Object.values(results)) expect([401, 403]).toContain(s);
   });
 
-  test("5. CORS allows the Explorer origin only", async () => {
+  test("5. CORS allows the Explorer origin and no unlisted origin", async () => {
     const cfg = await config();
     const anon = await request.newContext();
     const pre = (origin: string) =>
@@ -172,8 +172,14 @@ test.describe("with credentials", () => {
     }
     const rows = page.getByTestId("pages").locator("tbody tr");
     await expect(rows).toHaveCount(sources.pages.length);
-    for (const r of await rows.all()) {
-      const c = await r.locator("td").allInnerTexts();
+    // Every row's cells in one browser call: the county run has 2,429 pages, too many for a round trip each.
+    const cells = await rows.evaluateAll((trs) =>
+      trs.map((tr) =>
+        [...tr.querySelectorAll("td")].map((td) => td.textContent ?? ""),
+      ),
+    );
+    expect(cells).toHaveLength(sources.pages.length);
+    for (const c of cells) {
       expect(c[2]).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
       expect(c[3]).toMatch(/^https:\/\/services\.arcgis\.com\/.+\/query\?/);
       expect(c[4]).toMatch(/^[0-9a-f]{64}$/);

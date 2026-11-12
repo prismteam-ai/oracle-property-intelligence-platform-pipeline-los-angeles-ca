@@ -15,5 +15,6 @@ export default defineConfig({
   timeout: 60_000,
   workers: 1,
   reporter: [["list"]],
-  use: { baseURL },
+  // Kept on failure for the report; throwaway runs must use a separate --output directory.
+  use: { baseURL, trace: "retain-on-failure", screenshot: "only-on-failure" },
 });
