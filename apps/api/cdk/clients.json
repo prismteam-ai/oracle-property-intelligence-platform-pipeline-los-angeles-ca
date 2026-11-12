@@ -1,0 +1,6 @@
+{
+  "_comment": "API clients (not secret). Drives the HTTP API CORS allowed origins and the per-client token-hash SSM parameters. Each client's token SHA-256 is read from the gitignored .secrets/api-clients.json at synth time. Adding a client is a change to this list plus its hash.",
+  "clients": [
+    { "name": "crm", "origin": "https://main.d29rxqhpqvqiz7.amplifyapp.com" }
+  ]
+}
