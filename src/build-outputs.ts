@@ -1,12 +1,14 @@
 /**
- * Build the pilot outputs from a verified raw download:
+ * Build the run outputs from a verified download: the pilot's raw pages (receipts.jsonl) or,
+ * when the run config says "input": "roll-cache", the whole-roll cache written by
+ * scripts/fetch-roll.mjs (src/stage-cache.ts). Outputs:
  *  - seed CSV (data/seeds/los-angeles.csv) for the runtime CountyIngest feeder
  *  - publishable Parquet (no owner, mailing or contact fields)
  *  - runs/<run_id>/run_manifest.json and an appended runs/run_history.jsonl
  * It first runs the scope guard and the kit's readiness validator (src/readiness.ts) and stops
  * unless both pass.
  *
- * Usage: KIT_DIR=<team kit checkout> node src/build-outputs.ts <raw-run-dir> [run-config.json]
+ * Usage: KIT_DIR=<team kit checkout> node src/build-outputs.ts <raw-run-dir | roll-cache-dir> [run-config.json]
  */
 import { createHash } from "node:crypto";
 import {
@@ -22,8 +24,15 @@ import { basename, join } from "node:path";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { parse } from "yaml";
 import { guardOrThrow } from "./scope-guard.ts";
-import { loadRunConfig, whereClause } from "./run-config.ts";
+import { isCountyWide, loadRunConfig, whereClause } from "./run-config.ts";
 import { stageRaw } from "./stage-raw.ts";
+import {
+  cacheRunId,
+  PAGES_DIR,
+  readCacheSummary,
+  stageCache,
+  type CachePage,
+} from "./stage-cache.ts";
 import { fileEntry, seedFileEntries } from "./manifest-files.ts";
 import { runReadiness } from "./readiness.ts";
 import {
@@ -36,7 +45,7 @@ import { appendRunHistory, planHistory, readHistory } from "./run-history.ts";
 const rawDir = process.argv[2];
 if (!rawDir)
   throw new Error(
-    "usage: node src/build-outputs.ts <raw-run-dir> [run-config.json]",
+    "usage: node src/build-outputs.ts <raw-run-dir | roll-cache-dir> [run-config.json]",
   );
 const configPath = process.argv[3] ?? "config/la-pilot-run.json";
 const cfg = loadRunConfig(configPath);
@@ -44,13 +53,20 @@ guardOrThrow(configPath, cfg.sources_catalog);
 // Fails closed unless the kit validator passes on the catalog (KIT_DIR names the kit checkout).
 const readiness = runReadiness(cfg.sources_catalog);
 
-const runId = basename(rawDir);
-const fetchSummary = JSON.parse(
-  readFileSync(join(rawDir, "fetch-summary.json"), "utf8"),
-) as Record<string, unknown> & {
-  expected_count: number;
-  downloaded_rows: number;
-};
+const fromCache = cfg.input === "roll-cache";
+const countyWide = isCountyWide(cfg);
+// Pilot: the raw run directory's name. Roll cache: the cache summary's generated_at.
+const cacheSummary = fromCache ? readCacheSummary(rawDir) : undefined;
+const runId = cacheSummary ? cacheRunId(cacheSummary) : basename(rawDir);
+const fetchSummary = fromCache
+  ? undefined
+  : (JSON.parse(
+      readFileSync(join(rawDir, "fetch-summary.json"), "utf8"),
+    ) as Record<string, unknown> & {
+      expected_count: number;
+      downloaded_rows: number;
+      count_request_url: string;
+    });
 const workDir = join("data", "work", runId);
 const outDir = join("data", "out", runId);
 const seedDir = join("data", "seeds");
@@ -59,17 +75,37 @@ for (const d of [workDir, outDir, seedDir, runsDir])
   mkdirSync(d, { recursive: true });
 
 const ndjson = join(workDir, "rows.ndjson");
-const { receipts, rows: stagedRows } = await stageRaw(rawDir, ndjson);
-const referenceDate = receipts[0]!.retrieved_at.slice(0, 10);
+let receipts: Awaited<ReturnType<typeof stageRaw>>["receipts"] = [];
+let cachePages: CachePage[] = [];
+let stagedRows: number;
+let referenceDate: string;
+if (fromCache) {
+  const staged = await stageCache(rawDir, ndjson, {
+    queryUrl: cfg.source.query_url,
+    where: whereClause(cfg),
+  });
+  cachePages = staged.pages;
+  stagedRows = staged.rows;
+  referenceDate = cachePages[0]!.fetched_at.slice(0, 10);
+} else {
+  const staged = await stageRaw(rawDir, ndjson);
+  receipts = staged.receipts;
+  stagedRows = staged.rows;
+  referenceDate = receipts[0]!.retrieved_at.slice(0, 10);
+}
 
-const parquetName = `los-angeles_property_roll${cfg.roll_year}_slice.parquet`;
+const parquetName = `los-angeles_property_roll${cfg.roll_year}${countyWide ? "" : "_slice"}.parquet`;
 const parquetPath = join(outDir, parquetName);
 const seedRunPath = join(outDir, "los-angeles-seed.csv");
 const seedPath = join(seedDir, "los-angeles.csv");
 
-const db = await DuckDBInstance.create(":memory:", {
+// File-backed under data/work, so a county-size build can spill to disk instead of failing.
+const dbPath = join(workDir, "build.duckdb");
+for (const f of [dbPath, `${dbPath}.wal`]) rmSync(f, { force: true });
+const db = await DuckDBInstance.create(dbPath, {
   threads: "2",
   memory_limit: "2GB",
+  temp_directory: join(workDir, "duckdb-tmp"),
 });
 const c = await db.connect();
 const q = async (sql: string) =>
@@ -77,8 +113,9 @@ const q = async (sql: string) =>
     Record<string, unknown>
   >;
 
+// Column types come from every row of a county-size file, not only the first sample.
 await c.run(
-  `create table raw as select * from read_json(${lit(ndjson)}, format='newline_delimited')`,
+  `create table raw as select * from read_json(${lit(ndjson)}, format='newline_delimited'${fromCache ? ", sample_size=-1" : ""})`,
 );
 
 await c.run(propertyTableSql(referenceDate, cfg.source.name));
@@ -201,6 +238,58 @@ if (notCovered.length !== 88)
 
 const n = Number(stats.n);
 const share = (k: string) => Math.round((Number(stats[k]) / n) * 10000) / 100;
+const sha256File = (path: string) =>
+  createHash("sha256").update(readFileSync(path)).digest("hex");
+// Roll cache files are recorded by their path inside the cache directory, never an absolute path.
+const cacheFileEntry = (rel: string, rows: number | null, role: string) => ({
+  ...fileEntry(join(rawDir, rel), rows, role, false),
+  path: rel,
+});
+const FETCH_ROLL_SCRIPT = "scripts/fetch-roll.mjs";
+const cache = cacheSummary && {
+  name: basename(rawDir),
+  note: "Paths are relative to the roll cache directory. The raw pages stay there and are not copied; the build stages only the fields it reads (src/raw-fields.ts).",
+  where: whereClause(cfg),
+  summary: {
+    path: "summary.json",
+    sha256: sha256File(join(rawDir, "summary.json")),
+    generated_at: cacheSummary.generated_at,
+    total_rows: cacheSummary.total_rows,
+    source_count_at_start: cacheSummary.source_count_at_start,
+    year_built_rule: "download summary: any year above 0",
+    rows_with_year_built: cacheSummary.rows_with_year_built,
+    rows_with_year_built_pct: cacheSummary.rows_with_year_built_pct,
+    rows_with_coordinates_pct: cacheSummary.rows_with_coordinates_pct,
+  },
+  manifest: {
+    path: "manifest.jsonl",
+    sha256: sha256File(join(rawDir, "manifest.jsonl")),
+    pages: cachePages.length,
+  },
+  download_script: {
+    committed: {
+      path: FETCH_ROLL_SCRIPT,
+      sha256: sha256File(FETCH_ROLL_SCRIPT),
+    },
+    copy_that_ran: {
+      path: "fetch-roll.mjs",
+      sha256: sha256File(join(rawDir, "fetch-roll.mjs")),
+      note: "the copy in the roll cache directory that downloaded these pages",
+    },
+  },
+  pages: cachePages.map((p) => ({
+    page: p.page,
+    path: `${PAGES_DIR}/${p.file}`,
+    request_url: p.request_url,
+    fetched_at: p.fetched_at,
+    http_status: p.http_status,
+    rows: p.rows,
+    oid_min: p.oid_min,
+    oid_max: p.oid_max,
+    body_bytes: p.bytes,
+    body_sha256: p.sha256,
+  })),
+};
 const manifest = {
   run_id: runId,
   run_name: cfg.run_name,
@@ -222,29 +311,39 @@ const manifest = {
     evidence: [
       "docs/evidence/la-preflight-blocked.json",
       "docs/evidence/la-preflight-pass.json",
+      ...(countyWide ? ["docs/evidence/la-preflight-pass-county.json"] : []),
     ],
     scope_guard: "PASS",
   },
   sources: [
     {
       name: cfg.source.name,
-      role: "canonical assessed parcel roll (slice)",
+      role: `canonical assessed parcel roll (${countyWide ? "county-wide" : "slice"})`,
       hub_page:
         "https://data.lacounty.gov/datasets/assessor-parcel-data-rolls-2021-present-1",
       hub_item_id: cfg.source.hub_item_id,
       query_url: cfg.source.query_url,
-      count_request_url: fetchSummary.count_request_url,
+      count_request_url: fetchSummary?.count_request_url ?? null,
       terms_of_use: "https://egis-lacounty.hub.arcgis.com/pages/terms-of-use",
       access: "anonymous REST, sequential, >= 2 s between requests",
+      ...(cache && {
+        request_urls:
+          "one per page in cache.pages; the source count is in cache.summary (the cache does not record the count request URL)",
+      }),
     },
   ],
+  ...(cache && { cache }),
   row_counts: {
-    expected_from_source_count: fetchSummary.expected_count,
-    downloaded: fetchSummary.downloaded_rows,
+    expected_from_source_count: cacheSummary
+      ? cacheSummary.source_count_at_start
+      : fetchSummary!.expected_count,
+    downloaded: cacheSummary
+      ? cacheSummary.total_rows
+      : fetchSummary!.downloaded_rows,
     staged: stagedRows,
     parquet: parquetRows,
     seed_csv: seedRows,
-    raw_pages: receipts.length,
+    raw_pages: fromCache ? cachePages.length : receipts.length,
   },
   coverage: {
     with_coordinates: Number(stats.coords),
@@ -269,23 +368,36 @@ const manifest = {
       true,
     ),
     ...seedFileEntries(seedRunPath, seedPath, seedRows),
-    fileEntry(
-      join(rawDir, "receipts.jsonl"),
-      receipts.length,
-      "raw page receipts",
-      false,
-    ),
-    ...receipts.map((r) =>
-      fileEntry(
-        join(rawDir, r.file),
-        r.rows,
-        "raw source page (byte-preserved)",
-        false,
-      ),
-    ),
+    ...(fromCache
+      ? [
+          cacheFileEntry("summary.json", null, "roll cache summary"),
+          cacheFileEntry(
+            "manifest.jsonl",
+            cachePages.length,
+            "roll cache page manifest (request URL, HTTP status, body sha256 per page)",
+          ),
+        ]
+      : [
+          fileEntry(
+            join(rawDir, "receipts.jsonl"),
+            receipts.length,
+            "raw page receipts",
+            false,
+          ),
+          ...receipts.map((r) =>
+            fileEntry(
+              join(rawDir, r.file),
+              r.rows,
+              "raw source page (byte-preserved)",
+              false,
+            ),
+          ),
+        ]),
   ],
   limitations: [
-    `Pilot slice only: City of Los Angeles, ZIP ${cfg.zips.join("/")}, roll ${cfg.roll_year}. Not county coverage.`,
+    countyWide
+      ? `County-wide: all of Los Angeles County (89 jurisdictions), no ZIP filter, roll ${cfg.roll_year}, built from the whole-roll cache (${cachePages.length} pages). The cache was downloaded with every field; the build keeps only the fields it reads.`
+      : `Pilot slice only: City of Los Angeles, ZIP ${cfg.zips.join("/")}, roll ${cfg.roll_year}. Not county coverage.`,
     "No permits harvested in this increment. Permit sources not yet covered (88 jurisdictions without a classified permit source): " +
       notCovered.join(", ") +
       ".",
@@ -297,15 +409,25 @@ const manifest = {
     "No owner names, mailing addresses or contact fields exist in the source; no person entities and no private owner file were produced.",
     "Coordinates are assessor parcel center points, not rooftop or address-point geocodes; rows without them are left null (not geocoded).",
     "Lexicon names are taken from the bundled kit catalog (use-neutral-lexicon model-c) without the live Elephant lexicon/MCP; source_* columns, roof_age_basis, coordinate_basis, *_proxy, last_recording_date, tax_rate_area_city, roll_year and assessor_id_formatted are not lexicon fields; property_usage_type/property_type enums are not mapped (raw use code kept).",
-    "Radius queries over this file only see the 3-ZIP slice; parcels outside the slice inside the radius are absent.",
+    countyWide
+      ? `Radius queries see every parcel with assessor coordinates; the ${n - Number(stats.coords)} parcels without them never appear in radius results.`
+      : "Radius queries over this file only see the 3-ZIP slice; parcels outside the slice inside the radius are absent.",
   ],
-  rebuild: [
-    "pnpm install --frozen-lockfile",
-    "node src/scope-guard.ts",
-    "node src/fetch-slice.ts",
-    "KIT_DIR=<team kit checkout> node src/build-outputs.ts data/raw/los-angeles/roll-2026/<run_id>",
-    "node src/query-radius.ts --parquet data/out/<run_id>/" + parquetName,
-  ],
+  rebuild: fromCache
+    ? [
+        "pnpm install --frozen-lockfile",
+        `node src/scope-guard.ts ${configPath}`,
+        `node ${FETCH_ROLL_SCRIPT} <roll-cache-dir>   (downloads the whole roll; network)`,
+        `KIT_DIR=<team kit checkout> node src/build-outputs.ts <roll-cache-dir> ${configPath}`,
+        "node src/query-radius.ts --parquet data/out/<run_id>/" + parquetName,
+      ]
+    : [
+        "pnpm install --frozen-lockfile",
+        "node src/scope-guard.ts",
+        "node src/fetch-slice.ts",
+        "KIT_DIR=<team kit checkout> node src/build-outputs.ts data/raw/los-angeles/roll-2026/<run_id>",
+        "node src/query-radius.ts --parquet data/out/<run_id>/" + parquetName,
+      ],
 };
 const manifestPath = join(runsDir, "run_manifest.json");
 writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");

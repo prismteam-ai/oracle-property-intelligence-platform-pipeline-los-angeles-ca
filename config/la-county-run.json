@@ -8,6 +8,7 @@
   "zips": [],
   "roll_year": "2026",
   "permits_harvested": false,
+  "input": "roll-cache",
   "source": {
     "name": "LA County Assessor - Assessor Parcel Data Roll 2026",
     "hub_item_id": "0d3ac33a76e1495bb7fc522a8085729c",

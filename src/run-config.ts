@@ -8,6 +8,8 @@ export interface RunScope {
 }
 
 export interface RunConfig extends RunScope {
+  /** "roll-cache": build from the whole-roll cache (src/stage-cache.ts); default: the pilot's raw pages. */
+  input?: "raw-pages" | "roll-cache";
   run_name: string;
   county: string;
   state: string;
