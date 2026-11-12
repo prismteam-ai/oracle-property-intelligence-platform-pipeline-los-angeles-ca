@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test as vitestTest } from "vitest";
 import {
   MAX_MATCH_IDS,
   MAX_POINTS,
@@ -13,6 +13,7 @@ import type { Ctx } from "../src/trpc.ts";
 import {
   hasRealData,
   PARQUET_FILE,
+  PARQUET_PATH,
   PARQUET_SHA256,
   RUN_ID,
   stageRealData,
@@ -24,6 +25,16 @@ const SOURCE = "LA County Assessor - Assessor Parcel Data Roll 2026";
 // columns, without the views or the macro (~/prism/notes/proofs/inc4/p8/prefilter-proof.txt).
 const ROWS = 2_428_433;
 const PAGES = 2_429;
+
+/** REQUIRE_REAL_DATA=1: a missing data/ is a failure, not a skip (for runs that must check the real data). */
+const REQUIRE_REAL_DATA = process.env.REQUIRE_REAL_DATA === "1";
+/** The real-data checks, counted as they are declared, so a run without data/ can say how many it skipped. */
+let realChecks = 0;
+/** Vitest's test, counting each real-data check (every test in this file except the REQUIRE_REAL_DATA one). */
+const test = (name: string, fn: () => Promise<void>) => {
+  realChecks++;
+  vitestTest(name, fn);
+};
 
 describe.skipIf(!hasRealData)("routers on the real latest run", () => {
   let caller: ReturnType<typeof appRouter.createCaller>;
@@ -233,4 +244,30 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       caller.parcels.search({ ...VAN_NUYS, threshold_years: 121 }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
+
+  // Vitest runs this callback (also when the block is skipped) after the file's top level, so the count
+  // is complete only here.
+  if (!hasRealData) {
+    const rule = "=".repeat(78);
+    console.warn(
+      [
+        rule,
+        `REAL-DATA CHECKS SKIPPED: ${realChecks} checks in apps/api/test/routers.test.ts did not run.`,
+        `Reason: ${PARQUET_PATH} (run ${RUN_ID}, the latest row of runs/run_history.jsonl) is not in data/,`,
+        "which is gitignored and holds the build output. The synthetic tests still ran.",
+        REQUIRE_REAL_DATA
+          ? "REQUIRE_REAL_DATA=1 is set, so this run fails."
+          : "Set REQUIRE_REAL_DATA=1 to make a missing data/ fail the run.",
+        rule,
+      ].join("\n"),
+    );
+  }
 });
+
+// A missing data/ fails the run when REQUIRE_REAL_DATA=1 (the count is read when the test runs).
+if (!hasRealData && REQUIRE_REAL_DATA)
+  vitestTest("real data is present (REQUIRE_REAL_DATA=1)", () => {
+    expect.fail(
+      `${realChecks} real-data checks cannot run: ${PARQUET_PATH} is missing`,
+    );
+  });
