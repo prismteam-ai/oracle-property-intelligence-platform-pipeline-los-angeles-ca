@@ -48,3 +48,66 @@ allowance); its failures surface as `LeadWriteFailed` and the leads HTTP API 5xx
 
 Verified after deploy (2026-11-11): `aws cloudwatch list-metrics --namespace OracleLa` lists exactly the
 5 `OracleLa` metric/dimension sets (rows 1-5); rows 6-7 are verified after the RoofingCrmLeads deploy.
+
+## County run: sizes, cold start and cost (increment 4)
+
+Run `2026-11-12T01-44-04-047Z`, all of Los Angeles County (2,428,433 parcels, roll 2026). Measured on
+2026-11-12; the build and the local figures are in `docs/los-angeles-county-findings.md` §11b-§11c.
+
+### Sizes
+
+| File in the bucket (`runs/<run_id>/`)   | Size                          |
+| --------------------------------------- | ----------------------------- |
+| `los-angeles_property_roll2026.parquet` | 69,021,603 B (69 MB)          |
+| `run_manifest.json`                     | 1,604,126 B (1.6 MB)          |
+| `run_history.jsonl`                     | about 2 KB (one line per run) |
+
+The pilot run's files stay in the bucket next to them (Parquet 601,850 B, manifest 15,678 B). Everything
+in the bucket is about 71 MB (0.066 GB).
+
+### Cold start and warm latency (hosted data API, Lambda 1,024 MB, x86_64)
+
+| Measure                                            | Value                      |
+| -------------------------------------------------- | -------------------------- |
+| Init (runtime and handler)                         | 0.6 s                      |
+| Data load (`DataLoadMs`): S3 stream, sha256, views | 6.4 s (6,356 ms)           |
+| First request, in the function                     | 6,446 ms (billed 7,045 ms) |
+| First request, at the client                       | about 8.8 s                |
+| Warm requests, in the function                     | 3-6 ms                     |
+| Peak memory                                        | 298 MB of 1,024 MB         |
+| Full `parcels.points` response (25,000 points)     | 819,810 B (about 0.82 MB)  |
+
+The cold start streams each run file from S3 to `/tmp` and computes the Parquet's sha256 on the stream
+(`apps/api/src/db.ts`); the 69 MB file is never held in memory as a whole. Memory, timeout (15 s) and
+ephemeral storage (512 MB) are unchanged.
+
+### Monthly cost (eu-north-1, on-demand list prices)
+
+Prices from the AWS price list files for eu-north-1 (S3 published 2026-11-09, data transfer 2026-11-11,
+Lambda 2026-11-11, API Gateway 2026-10-13):
+
+| Item                              | Price                                 | County run                                                                             |
+| --------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------- |
+| S3 storage                        | $0.023 per GB-month (first 50 TB)     | 0.066 GB: about $0.0015 a month                                                        |
+| S3 GET                            | $0.004 per 10,000                     | 3 GETs per cold start: $0.0000012                                                      |
+| S3 PUT                            | $0.005 per 1,000                      | 3 PUTs per uploaded run: $0.000015                                                     |
+| Data transfer out to the internet | $0.09 per GB (first 10 TB)            | $0.0000687 per full points response (0.82 MB); **about 14,550 full responses cost $1** |
+| Lambda duration (x86)             | $0.0000166667 per GB-second           | one cold start: 7.045 GB-s = $0.000117; a warm request: about $0.0000001               |
+| Lambda requests                   | $0.20 per million                     | $0.0000002 per request                                                                 |
+| HTTP API requests                 | $1.06 per million (first 300 million) | $0.00000106 per request                                                                |
+
+The Lambda price list also lists a compute free tier of 400,000 GB-seconds and 1,000,000 requests a
+month, which covers about 56,000 cold starts. With no traffic the standing cost is the S3 storage, well
+under one cent a month. Egress is the item that grows with use: the full points response dominates it.
+
+### Against the guards
+
+- The $5 monthly cost budget (OracleLaGuards, credits excluded) and its three notifications to the alert
+  topic are unchanged: actual spend above 20% ($1), forecast above 100%, actual above 100% ($5)
+  (`apps/api/cdk/lib/guards-stack.ts`).
+- Custom metrics stay at 7 of 10 and alarms at 6 of 10 (tables above). The county run adds no metric and
+  no alarm; `PointsResponseBytes` and `DataLoadMs` now report the county sizes.
+- Known gap: the budget custom resource's log group keeps 14 days (`RetentionDays.TWO_WEEKS`,
+  `apps/api/cdk/lib/guards-stack.ts:119`), against the kit's 90 days on all log groups
+  (`apply-engineering-guidelines/rules/observability-logging-tracing.md:27` at kit commit 71b8341). It is
+  documented, not changed: changing it would modify the OracleLaGuards stack.
