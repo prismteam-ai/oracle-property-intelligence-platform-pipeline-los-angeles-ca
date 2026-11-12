@@ -3,8 +3,10 @@
  *  - seed CSV (data/seeds/los-angeles.csv) for the runtime CountyIngest feeder
  *  - publishable Parquet (no owner, mailing or contact fields)
  *  - runs/<run_id>/run_manifest.json and an appended runs/run_history.jsonl
+ * It first runs the scope guard and the kit's readiness validator (src/readiness.ts) and stops
+ * unless both pass.
  *
- * Usage: node src/build-outputs.ts <raw-run-dir> [run-config.json]
+ * Usage: KIT_DIR=<team kit checkout> node src/build-outputs.ts <raw-run-dir> [run-config.json]
  */
 import { createHash } from "node:crypto";
 import {
@@ -22,6 +24,7 @@ import { guardOrThrow } from "./scope-guard.ts";
 import { loadRunConfig, whereClause } from "./run-config.ts";
 import { stageRaw } from "./stage-raw.ts";
 import { fileEntry, seedFileEntries } from "./manifest-files.ts";
+import { runReadiness } from "./readiness.ts";
 
 const rawDir = process.argv[2];
 if (!rawDir)
@@ -31,6 +34,8 @@ if (!rawDir)
 const configPath = process.argv[3] ?? "config/la-pilot-run.json";
 const cfg = loadRunConfig(configPath);
 guardOrThrow(configPath, cfg.sources_catalog);
+// Fails closed unless the kit validator passes on the catalog (KIT_DIR names the kit checkout).
+const readiness = runReadiness(cfg.sources_catalog);
 
 const runId = basename(rawDir);
 const fetchSummary = JSON.parse(
@@ -226,7 +231,7 @@ const manifest = {
     where: whereClause(cfg),
   },
   readiness: {
-    preflight: "PASS with APPROVED_EXCEPTION on permit gate",
+    ...readiness,
     evidence: [
       "docs/evidence/la-preflight-blocked.json",
       "docs/evidence/la-preflight-pass.json",
@@ -311,7 +316,7 @@ const manifest = {
     "pnpm install --frozen-lockfile",
     "node src/scope-guard.ts",
     "node src/fetch-slice.ts",
-    "node src/build-outputs.ts data/raw/los-angeles/roll-2026/<run_id>",
+    "KIT_DIR=<team kit checkout> node src/build-outputs.ts data/raw/los-angeles/roll-2026/<run_id>",
     "node src/query-radius.ts --parquet data/out/<run_id>/" + parquetName,
   ],
 };
