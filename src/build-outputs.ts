@@ -10,11 +10,12 @@
  */
 import { createHash } from "node:crypto";
 import {
-  appendFileSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
@@ -25,6 +26,7 @@ import { loadRunConfig, whereClause } from "./run-config.ts";
 import { stageRaw } from "./stage-raw.ts";
 import { fileEntry, seedFileEntries } from "./manifest-files.ts";
 import { runReadiness } from "./readiness.ts";
+import { appendRunHistory, planHistory, readHistory } from "./run-history.ts";
 
 const rawDir = process.argv[2];
 if (!rawDir)
@@ -139,9 +141,44 @@ const dupes = await q(
 );
 if (Number(dupes[0]!.d) !== 0) throw new Error("duplicate parcel_identifier");
 
+// The Parquet is written next to its final path first, so a recorded run's file is never replaced.
+// A run already in the history with the same Parquet is not recorded again: its Parquet, seed,
+// manifest and history row stay as they are. The same run ID with a different Parquet fails.
+const parquetPartial = `${parquetPath}.partial`;
 await c.run(
-  `copy property to ${lit(parquetPath)} (format parquet, compression zstd)`,
+  `copy property to ${lit(parquetPartial)} (format parquet, compression zstd)`,
 );
+const historyPath = join("runs", "run_history.jsonl");
+const parquetSha256 = createHash("sha256")
+  .update(readFileSync(parquetPartial))
+  .digest("hex");
+let historyPlan: ReturnType<typeof planHistory>;
+try {
+  historyPlan = planHistory(readHistory(historyPath), runId, parquetSha256);
+} catch (err) {
+  rmSync(parquetPartial);
+  throw err;
+}
+if (historyPlan.kind === "recorded") {
+  rmSync(parquetPartial);
+  console.log(
+    JSON.stringify(
+      {
+        run_id: runId,
+        already_recorded: true,
+        parquet: parquetPath,
+        parquet_sha256: parquetSha256,
+        manifest: historyPlan.row.manifest_path,
+        note: "same run ID and same Parquet sha256: no history row added; Parquet, seed and manifest left as recorded",
+      },
+      null,
+      2,
+    ),
+  );
+  process.exit(0);
+}
+renameSync(parquetPartial, parquetPath);
+
 await c.run(`copy (select parcel_identifier as parcel_id, request_identifier as source_identifier, unnormalized_address as situs_address,
   assessor_id_formatted, roll_year, latitude, longitude from property order by parcel_id) to ${lit(seedRunPath)} (header, delimiter ',')`);
 if (existsSync(seedPath)) console.log(`replacing existing ${seedPath}`);
@@ -170,14 +207,7 @@ const byUse = await q(
 );
 
 // Delta against the previous run in run history (by parcel identifier and file digest).
-const historyPath = join("runs", "run_history.jsonl");
-const history = existsSync(historyPath)
-  ? readFileSync(historyPath, "utf8")
-      .split("\n")
-      .filter(Boolean)
-      .map((l) => JSON.parse(l) as { run_id: string; parquet_path?: string })
-  : [];
-const prev = history.at(-1);
+const prev = historyPlan.previous;
 let delta: Record<string, unknown> = {
   previous_run_id: null,
   note: "first run; every row is new",
@@ -325,24 +355,24 @@ writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
 const manifestSha = createHash("sha256")
   .update(readFileSync(manifestPath))
   .digest("hex");
-appendFileSync(
-  historyPath,
-  JSON.stringify({
-    run_id: runId,
-    finished_at: manifest.generated_at,
-    county: cfg.county,
-    roll_year: cfg.roll_year,
-    scope: manifest.scope,
-    sources: manifest.sources.map((s) => s.query_url),
-    row_counts: manifest.row_counts,
-    delta,
-    parquet_path: parquetPath,
-    parquet_sha256: manifest.files[0]!.sha256,
-    manifest_path: manifestPath,
-    manifest_sha256: manifestSha,
-    published: false,
-  }) + "\n",
-);
+const parquetEntry = manifest.files[0]!;
+if (parquetEntry.sha256 !== parquetSha256)
+  throw new Error(`${parquetPath} changed during the build`);
+appendRunHistory(historyPath, {
+  run_id: runId,
+  finished_at: manifest.generated_at,
+  county: cfg.county,
+  roll_year: cfg.roll_year,
+  scope: manifest.scope,
+  sources: manifest.sources.map((s) => s.query_url),
+  row_counts: manifest.row_counts,
+  delta,
+  parquet_path: parquetPath,
+  parquet_sha256: parquetSha256,
+  manifest_path: manifestPath,
+  manifest_sha256: manifestSha,
+  published: false,
+});
 
 console.log(
   JSON.stringify(
