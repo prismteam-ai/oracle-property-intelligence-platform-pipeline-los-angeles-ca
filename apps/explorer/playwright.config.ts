@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 /**
  * Runs against the hosted Amplify URL only. Inputs are ONLY environment variables:
- *   EXPLORER_URL  base URL of the hosted Explorer (https://main.<appId>.amplifyapp.com)
+ *   EXPLORER_URL  base URL of the hosted Explorer (the OracleLaExplorerWeb `Origin` output)
  *   EXPLORER_USER basic-auth username
  *   EXPLORER_PASS basic-auth password
  * No credentials in the global `use`: tests that need them set them with test.use / context options,
