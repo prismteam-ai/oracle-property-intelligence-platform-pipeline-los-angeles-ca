@@ -1,34 +1,41 @@
 import { useEffect, useState } from "react";
 import { createApiClient, type ApiClient } from "@oracle-la/api-client";
 import { loadConfig } from "./config.ts";
+import { LongOpen } from "./LongOpen.tsx";
 import { Placeholders } from "./Placeholders.tsx";
 import { RadiusQuery } from "./RadiusQuery.tsx";
 import { Records } from "./Records.tsx";
 import { RunSummary } from "./RunSummary.tsx";
 import { Sources } from "./Sources.tsx";
+import { sourcesLoader, type LoadSources } from "./sources.ts";
 
 const TABS = [
   "Run summary",
   "Sources & pages",
   "Records",
   "Radius query",
+  "Long-open permits",
   "Coming next",
 ] as const;
 type Tab = (typeof TABS)[number];
 
 export function App() {
-  const [api, setApi] = useState<ApiClient>();
+  // The tRPC client is a callable proxy, so it is held inside an object (never passed to a state setter alone).
+  const [conn, setConn] = useState<{
+    api: ApiClient;
+    loadSources: LoadSources;
+  }>();
   const [error, setError] = useState<string>();
   const [tab, setTab] = useState<Tab>("Run summary");
   useEffect(() => {
-    // Updater form: the tRPC client is a callable proxy, so setApi(client) would be treated as an updater.
     loadConfig()
       .then((c) => {
-        const client = createApiClient(c);
-        setApi(() => client);
+        const api = createApiClient(c);
+        setConn({ api, loadSources: sourcesLoader(api) });
       })
       .catch((e: Error) => setError(e.message));
   }, []);
+  const api = conn?.api;
   return (
     <>
       <header>
@@ -37,8 +44,9 @@ export function App() {
         </h1>
         <p>
           DuckDB over the private run output, through SQL views. Los Angeles
-          County assessor roll 2026; the run&apos;s scope is on the Run summary
-          tab. Not public.
+          County assessor roll 2026, City of Los Angeles building permits and
+          the contractor view (LADBS); the run&apos;s scope is on the Run
+          summary tab. Not public.
         </p>
       </header>
       <nav role="tablist">
@@ -61,9 +69,16 @@ export function App() {
         )}
         {!api && !error && <p>Loading…</p>}
         {api && tab === "Run summary" && <RunSummary api={api} />}
-        {api && tab === "Sources & pages" && <Sources api={api} />}
-        {api && tab === "Records" && <Records api={api} />}
+        {conn && tab === "Sources & pages" && (
+          <Sources loadSources={conn.loadSources} />
+        )}
+        {conn && tab === "Records" && (
+          <Records api={conn.api} loadSources={conn.loadSources} />
+        )}
         {api && tab === "Radius query" && <RadiusQuery api={api} />}
+        {conn && tab === "Long-open permits" && (
+          <LongOpen api={conn.api} loadSources={conn.loadSources} />
+        )}
         {tab === "Coming next" && <Placeholders />}
       </main>
     </>

@@ -11,12 +11,12 @@ const FUTURE = [
   ["Agent query (natural language)", "Not in this increment (no Bedrock)."],
   ["MCP interface", "Planned over the same SQL views."],
   [
-    "Permits and long-open roofing permits",
-    "Permits are not harvested yet (88 jurisdictions unclassified; LADBS later).",
+    "Permits outside the City of Los Angeles",
+    "LADBS permits cover the City of Los Angeles only; the other 88 jurisdictions have no classified permit source yet.",
   ],
   [
-    "Contractors and BBB ratings",
-    "Depends on permits (CSLB, BBB enrichment later).",
+    "BBB ratings and CSLB license status",
+    "No BBB or CSLB source is ingested (contractor rows come from the LADBS contractor view; BBB shows as not available).",
   ],
   ["Business records", "California Secretary of State adapter later."],
   [

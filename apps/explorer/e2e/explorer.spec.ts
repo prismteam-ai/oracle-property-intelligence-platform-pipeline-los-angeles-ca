@@ -1,4 +1,5 @@
 import { expect, request, test } from "@playwright/test";
+import type { SourceKind, Sources } from "@oracle-la/api-client";
 import { BASE_URL, CREDS, ORIGIN } from "./env.ts";
 
 const VN = { lat: 34.199, lon: -118.487 };
@@ -154,8 +155,13 @@ test.describe("with credentials", () => {
   test("6. run summary, records by source, pages with provenance, record paging (counts from the API)", async ({
     page,
   }) => {
+    // Three sources, each paged twice in the UI and through the API: 55.9 s against the local stand-in.
+    test.slow();
     const summary = await apiGet("explorer.runSummary");
-    const sources = await apiGet("explorer.sources");
+    const sources = (await apiGet("explorer.sources")) as Sources;
+    const kinds = sources.sources.map((s) => s.source_kind);
+    expect([...kinds].sort()).toEqual(["contractor", "parcel", "permit"]);
+    const byKind = new Map(sources.sources.map((s) => [s.source_kind, s]));
     await page.goto("/");
     await expect(page.getByTestId("limitations").locator("li")).toHaveCount(
       summary.run.limitations.length,
@@ -164,12 +170,37 @@ test.describe("with credentials", () => {
       summary.run.run_id,
     );
     await page.getByRole("tab", { name: "Sources & pages" }).click();
+    const srcRows = page.getByTestId("sources").locator("tbody tr");
+    await expect(srcRows).toHaveCount(sources.sources.length);
     for (const s of sources.sources) {
-      await expect(page.getByTestId("sources")).toContainText(s.source_name);
-      await expect(page.getByTestId("sources")).toContainText(
-        fmt(s.record_count),
+      const row = page
+        .getByTestId("sources")
+        .locator(`tbody tr[data-kind="${s.source_kind}"]`);
+      await expect(row).toContainText(s.source_name);
+      await expect(row).toContainText(fmt(s.record_count));
+      await expect(row.getByTestId("source-license")).toHaveText(
+        s.license ?? "—",
+      );
+      await expect(row.getByTestId("source-attribution")).toHaveText(
+        s.attribution ?? "—",
       );
     }
+    // The terms as recorded: the permit datasets state no license (portal terms of May 2014) and their
+    // attribution field reads "TSB"; the contractor view is CC BY 4.0, attribution LADBS, with the changes made.
+    const permitSrc = byKind.get("permit")!,
+      contractorSrc = byKind.get("contractor")!;
+    expect(permitSrc.license).toContain("May 2014");
+    expect(permitSrc.attribution).toContain("LADBS");
+    expect(permitSrc.attribution).toContain('"TSB"');
+    expect(permitSrc.query_urls!.length).toBeGreaterThan(0);
+    expect(contractorSrc.license).toBe("CC BY 4.0");
+    expect(contractorSrc.attribution).toBe("LADBS");
+    await expect(
+      page
+        .getByTestId("sources")
+        .locator('tbody tr[data-kind="contractor"]')
+        .getByTestId("source-changes"),
+    ).toHaveText("license classes normalized");
     const rows = page.getByTestId("pages").locator("tbody tr");
     await expect(rows).toHaveCount(sources.pages.length);
     // Every row's cells in one browser call: the county run has 2,429 pages, too many for a round trip each.
@@ -179,29 +210,85 @@ test.describe("with credentials", () => {
       ),
     );
     expect(cells).toHaveLength(sources.pages.length);
+    const PAGE_FILE: Record<SourceKind, RegExp> = {
+      parcel: /^(page-\d{4}\.json|pages\/page-\d{5}\.json\.gz)$/,
+      permit: /^pages\/[a-z0-9]{4}-[a-z0-9]{4}_p\d{3}\.json\.gz$/,
+      contractor: /^pages\/[a-z0-9]{4}-[a-z0-9]{4}_p\d{3}\.json\.gz$/,
+    };
+    const perKind: Record<string, number> = {};
     for (const c of cells) {
+      const kind = c[5] as SourceKind;
+      const s = byKind.get(kind)!;
+      perKind[kind] = (perKind[kind] ?? 0) + 1;
+      expect(c[0]).toMatch(PAGE_FILE[kind]);
       expect(c[2]).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
-      expect(c[3]).toMatch(/^https:\/\/services\.arcgis\.com\/.+\/query\?/);
+      // The exact request: the source's own query URL (the roll's ArcGIS query, or one of the LADBS datasets).
+      if (kind === "parcel") {
+        expect(c[3]).toMatch(/^https:\/\/services\.arcgis\.com\/.+\/query\?/);
+        expect(c[3]!.startsWith(`${s.query_url}?`)).toBe(true);
+      } else {
+        expect(c[3]).toMatch(
+          /^https:\/\/data\.lacity\.org\/resource\/[a-z0-9]{4}-[a-z0-9]{4}\.json\?/,
+        );
+        expect(s.query_urls!.some((u) => c[3]!.startsWith(`${u}?`))).toBe(true);
+      }
       expect(c[4]).toMatch(/^[0-9a-f]{64}$/);
     }
+    for (const s of sources.sources)
+      expect(perKind[s.source_kind]).toBe(s.page_count);
+
     await page.getByRole("tab", { name: "Records" }).click();
+    // The roll first, as before; then every source from the selector, each with the API's own total.
     await expect(page.getByTestId("records-total")).toContainText(
-      `${fmt(sources.sources[0].record_count)} records`,
+      `${fmt(byKind.get("parcel")!.record_count)} records`,
     );
-    const first = await page
-      .getByTestId("records")
-      .locator("tbody tr td")
-      .first()
-      .innerText();
-    await page.getByTestId("records-next").click();
-    await expect(page.getByTestId("records-total")).toContainText("page 2");
-    expect(
-      await page
+    for (const s of [
+      byKind.get("parcel")!,
+      ...sources.sources.filter((x) => x.source_kind !== "parcel"),
+    ]) {
+      const expected = await apiGet("explorer.records", {
+        source_name: s.source_name,
+        limit: 50,
+      });
+      await page.getByTestId("records-source").selectOption(s.source_name);
+      await expect(page.getByTestId("records")).toHaveAttribute(
+        "data-kind",
+        s.source_kind,
+      );
+      await expect(page.getByTestId("records-total")).toHaveText(
+        `${fmt(expected.total)} records · page 1`,
+      );
+      const firstCell = page
         .getByTestId("records")
         .locator("tbody tr td")
-        .first()
-        .innerText(),
-    ).not.toBe(first);
+        .first();
+      await expect(firstCell).toHaveText(
+        s.source_kind === "contractor"
+          ? expected.items[0].permit_number
+          : expected.items[0].record_key,
+      );
+      if (s.source_kind === "contractor")
+        await expect(page.getByTestId("records-attribution")).toHaveText(
+          `Contains data from ${s.attribution}, licensed under ${s.license}; license classes normalized.`,
+        );
+      if (s.source_kind === "permit")
+        await expect(page.getByTestId("records-attribution")).toContainText(
+          String(s.attribution),
+        );
+      expect(expected.next_after).not.toBeNull();
+      await page.getByTestId("records-next").click();
+      await expect(page.getByTestId("records-total")).toContainText("page 2");
+      const next = await apiGet("explorer.records", {
+        source_name: s.source_name,
+        after: expected.next_after,
+        limit: 50,
+      });
+      await expect(firstCell).toHaveText(
+        s.source_kind === "contractor"
+          ? next.items[0].permit_number
+          : next.items[0].record_key,
+      );
+    }
   });
 
   test("7. radius form: count equals the API at 15 and 80 years, rule stated, every result inside the radius", async ({
@@ -222,8 +309,9 @@ test.describe("with credentials", () => {
       await expect(page.getByTestId("radius-count")).toHaveText(
         fmt(expected.count),
       );
+      await expect(page.getByTestId("rule")).toHaveText(expected.rule.text);
       await expect(page.getByTestId("rule")).toContainText(
-        `built before ${expected.rule.built_before_year}`,
+        `effective roof year before ${expected.rule.built_before_year}`,
       );
       const rows = await page
         .getByTestId("radius-results")
@@ -236,10 +324,12 @@ test.describe("with credentials", () => {
       );
       expect(Math.max(...dists)).toBeLessThanOrEqual(5);
       for (const r of rows.slice(0, 5)) {
-        const c = await r.locator("td").allInnerTexts();
-        expect(
-          haversine([VN.lat, VN.lon], [Number(c[5]), Number(c[6])]),
-        ).toBeCloseTo(Number(c[4]), 2);
+        const [lat, lon, d] = await Promise.all(
+          ["lat", "lon", "distance"].map(async (id) =>
+            Number(await r.getByTestId(id).innerText()),
+          ),
+        );
+        expect(haversine([VN.lat, VN.lon], [lat!, lon!])).toBeCloseTo(d!, 2);
       }
     }
   });
@@ -253,5 +343,127 @@ test.describe("with credentials", () => {
       await expect(c).toHaveAttribute("aria-disabled", "true");
       await expect(c.getByRole("button")).toBeDisabled();
     }
+    // Permits are delivered: no card says they are coming, and the long-open view is a tab of its own.
+    for (const t of await cards.allInnerTexts())
+      expect(t).not.toMatch(/not harvested|LADBS later/i);
+    await expect(
+      page.getByRole("tab", { name: "Long-open permits" }),
+    ).toBeVisible();
+  });
+
+  test("9. long-open roofing permits: count and rule equal permits.longOpen at the default and a changed window, BBB not available, contractors from forParcel, the source cited, no description", async ({
+    page,
+  }) => {
+    const sources = (await apiGet("explorer.sources")) as Sources;
+    const permitSrc = sources.sources.find((s) => s.source_kind === "permit")!;
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Long-open permits" }).click();
+    // The default window is the API's own default (no min_open_days sent here).
+    const expected = await apiGet("permits.longOpen", {
+      ...VN,
+      radius_miles: 5,
+    });
+    expect(expected.count).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "Find long-open permits" }).click();
+    await expect(page.getByTestId("long-open-count")).toHaveText(
+      fmt(expected.count),
+    );
+    await expect(page.getByTestId("long-open-rule")).toHaveText(
+      expected.rule.text,
+    );
+    await expect(page.getByTestId("long-open-rule")).toContainText(
+      "Roofing work only",
+    );
+    await expect(
+      page.getByRole("spinbutton", { name: "Open at least (days)" }),
+    ).toHaveValue(String(expected.rule.min_open_days));
+    const rows = page.getByTestId("long-open-row");
+    await expect(rows).toHaveCount(expected.items.length);
+    await expect(rows.first()).toHaveAttribute(
+      "data-permit",
+      expected.items[0].permit_number,
+    );
+    const bbb = await page.getByTestId("bbb").allInnerTexts();
+    expect(bbb).toHaveLength(expected.items.length);
+    for (const b of bbb) expect(b).toBe("not available");
+    for (const s of await page.getByTestId("source").allInnerTexts())
+      expect(s).toBe(permitSrc.source_name);
+    const cite = page.getByTestId("long-open-source");
+    await expect(cite).toContainText(permitSrc.source_name);
+    await expect(cite).toContainText(permitSrc.last_retrieved_at);
+    await expect(cite).toContainText(String(permitSrc.attribution));
+    // No description: none served, no column for one, no description text on the page.
+    for (const i of expected.items)
+      expect(
+        Object.keys(i).filter(
+          (k) => /desc/i.test(k) && k !== "source_status_desc",
+        ),
+      ).toEqual([]);
+    const headers = await page
+      .getByTestId("long-open-results")
+      .locator("th")
+      .allInnerTexts();
+    expect(headers.join("|")).not.toMatch(/desc/i);
+    expect(await page.locator("main").innerText()).not.toMatch(
+      /work_desc|description/i,
+    );
+
+    // Contractors of the first row come from permits.forParcel for its parcel, on expanding the row.
+    const firstRowContractors = async (item: {
+      parcel_id: string;
+      permit_number: string;
+    }) => {
+      const parcel = await apiGet("permits.forParcel", {
+        parcel_id: item.parcel_id,
+      });
+      expect(parcel.bbb.available).toBe(false);
+      const contractors =
+        parcel.permits.find(
+          (p: { permit_number: string }) =>
+            p.permit_number === item.permit_number,
+        )?.contractors ?? [];
+      await rows.first().getByTestId("contractors-toggle").click();
+      await expect(page.getByTestId("bbb-reason")).toHaveText(
+        `BBB: not available. ${parcel.bbb.reason}`,
+      );
+      if (contractors.length) {
+        const trs = page.getByTestId("contractors").locator("tbody tr");
+        await expect(trs).toHaveCount(contractors.length);
+        await expect(trs.first().locator("td").first()).toHaveText(
+          contractors[0].contractors_business_name ?? "—",
+        );
+      } else await expect(page.getByTestId("no-contractors")).toBeVisible();
+      return contractors.length;
+    };
+    const shown = [await firstRowContractors(expected.items[0])];
+
+    // A changed window: a larger minimum and a maximum.
+    const changed = await apiGet("permits.longOpen", {
+      ...VN,
+      radius_miles: 5,
+      min_open_days: 2000,
+      max_open_days: 4383,
+    });
+    await page
+      .getByRole("spinbutton", { name: "Open at least (days)" })
+      .fill("2000");
+    await page
+      .getByRole("spinbutton", { name: "Open at most (days, optional)" })
+      .fill("4383");
+    await page.getByRole("button", { name: "Find long-open permits" }).click();
+    await expect(page.getByTestId("long-open-count")).toHaveText(
+      fmt(changed.count),
+    );
+    await expect(page.getByTestId("long-open-rule")).toHaveText(
+      changed.rule.text,
+    );
+    // Permits open at most 4,383 days (12 years) were issued in the contractor view's years (2013 to 2023), so
+    // contractor rows show here; the default window starts with the oldest permits, which have none.
+    await expect(rows.first()).toHaveAttribute(
+      "data-permit",
+      changed.items[0].permit_number,
+    );
+    shown.push(await firstRowContractors(changed.items[0]));
+    expect(Math.max(...shown)).toBeGreaterThan(0);
   });
 });

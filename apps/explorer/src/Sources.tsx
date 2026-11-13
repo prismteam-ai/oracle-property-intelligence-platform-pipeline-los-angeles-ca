@@ -1,13 +1,18 @@
-import type { ApiClient } from "@oracle-la/api-client";
+import { CHANGES_MADE, retrieved, type LoadSources } from "./sources.ts";
 import { useQuery } from "./useQuery.ts";
 
-export function Sources({ api }: { api: ApiClient }) {
-  const { data, error } = useQuery(
-    () => api.explorer.sources.query(),
-    "sources",
-  );
+/** Every source of the run (the roll, the LADBS permits, the LADBS contractor view) with its terms and pages. */
+export function Sources({ loadSources }: { loadSources: LoadSources }) {
+  const { data, error } = useQuery(loadSources, "sources");
   if (error) return <p className="error">{error}</p>;
   if (!data) return <p>Loading sources…</p>;
+  // Pages grouped by source, in the sources' order, then by page file (the API orders by page file only).
+  const rank = new Map(data.sources.map((s, i) => [s.source_name, i]));
+  const pages = [...data.pages].sort(
+    (a, b) =>
+      (rank.get(a.source_name) ?? 0) - (rank.get(b.source_name) ?? 0) ||
+      a.source_page_file.localeCompare(b.source_page_file),
+  );
   return (
     <section>
       <h2>Records by source</h2>
@@ -15,23 +20,35 @@ export function Sources({ api }: { api: ApiClient }) {
         <thead>
           <tr>
             <th>Source</th>
+            <th>Kind</th>
             <th>Records</th>
             <th>Pages</th>
             <th>Retrieved</th>
             <th>Query URL</th>
+            <th>License</th>
+            <th>Attribution</th>
+            <th>Changes made</th>
             <th>Terms</th>
           </tr>
         </thead>
         <tbody>
           {data.sources.map((s) => (
-            <tr key={s.source_name}>
+            <tr key={s.source_name} data-kind={s.source_kind}>
               <td>{s.source_name}</td>
+              <td>{s.source_kind}</td>
               <td>{s.record_count.toLocaleString("en-US")}</td>
-              <td>{s.page_count}</td>
-              <td>
-                {s.first_retrieved_at} → {s.last_retrieved_at}
+              <td>{s.page_count.toLocaleString("en-US")}</td>
+              <td>{retrieved(s)}</td>
+              <td className="mono">
+                {(s.query_urls ?? [s.query_url]).map((u) => (
+                  <div key={u}>{u}</div>
+                ))}
               </td>
-              <td className="mono">{s.query_url}</td>
+              <td data-testid="source-license">{s.license ?? "—"}</td>
+              <td data-testid="source-attribution">{s.attribution ?? "—"}</td>
+              <td data-testid="source-changes">
+                {CHANGES_MADE[s.source_kind] ?? "—"}
+              </td>
               <td>
                 <a href={s.terms_of_use ?? "#"}>terms</a>
               </td>
@@ -48,16 +65,18 @@ export function Sources({ api }: { api: ApiClient }) {
             <th>Retrieved at (UTC)</th>
             <th>Request URL</th>
             <th>Page sha256</th>
+            <th>Source</th>
           </tr>
         </thead>
         <tbody>
-          {data.pages.map((p) => (
-            <tr key={p.source_page_file}>
+          {pages.map((p) => (
+            <tr key={`${p.source_name}/${p.source_page_file}`}>
               <td>{p.source_page_file}</td>
               <td>{p.record_count}</td>
               <td>{p.source_retrieved_at}</td>
               <td className="mono">{p.source_request_url}</td>
               <td className="mono">{p.source_page_sha256}</td>
+              <td>{p.source_kind}</td>
             </tr>
           ))}
         </tbody>

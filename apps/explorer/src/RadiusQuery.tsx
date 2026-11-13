@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import type { ApiClient, SearchResult } from "@oracle-la/api-client";
+import { basisLabel } from "./basis.ts";
 
 /** Radius + roof-age query as form and table (no map in the Explorer; the CRM owns the map). */
 export function RadiusQuery({ api }: { api: ApiClient }) {
@@ -108,7 +109,9 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
                 <th>Parcel</th>
                 <th>Address</th>
                 <th>Year built</th>
-                <th>Roof-age proxy (years)</th>
+                <th>Effective roof year</th>
+                <th>Basis</th>
+                <th>Roof age (years)</th>
                 <th>Distance (mi)</th>
                 <th>Latitude</th>
                 <th>Longitude</th>
@@ -119,11 +122,15 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
                 <tr key={i.parcel_id}>
                   <td>{i.parcel_id}</td>
                   <td>{i.address}</td>
-                  <td>{i.year_built}</td>
-                  <td>{i.roof_age_years_proxy}</td>
+                  <td>{i.year_built ?? "—"}</td>
+                  <td>{i.effective_roof_year}</td>
+                  <td title={i.roof_age_basis} data-testid="basis">
+                    {basisLabel(i.roof_age_basis, i.roof_year_permit_number)}
+                  </td>
+                  <td>{i.roof_age_years}</td>
                   <td data-testid="distance">{i.distance_miles}</td>
-                  <td>{i.latitude}</td>
-                  <td>{i.longitude}</td>
+                  <td data-testid="lat">{i.latitude}</td>
+                  <td data-testid="lon">{i.longitude}</td>
                 </tr>
               ))}
             </tbody>

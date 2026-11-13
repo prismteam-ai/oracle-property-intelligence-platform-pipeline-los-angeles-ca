@@ -17,13 +17,29 @@ interface RunView {
     parquet?: number;
     expected_from_source_count?: number;
     raw_pages?: number;
+    /** Permit runs: the LADBS rows staged and the permit Parquet files' row counts. */
+    permits?: {
+      staged?: number;
+      parquet?: {
+        permits?: number;
+        permit_parcels?: number;
+        permit_contractors?: number;
+      };
+    };
   };
   coverage?: {
     with_coordinates?: number;
     with_coordinates_pct?: number;
     with_year_built?: number;
     with_year_built_pct?: number;
+    permit_data?: {
+      parcels_with_permit_data?: number;
+      parcels_without_permit_data?: number;
+      parcels_with_permits?: number;
+    };
   };
+  /** Permit runs: the date open durations count to. */
+  derived_field_reference_date?: string;
   delta?: { added?: number; removed?: number };
   scope?: { where?: string; permits_harvested?: boolean };
   /** County runs record the validator's `overall` result; the pilot run recorded `preflight`. */
@@ -89,6 +105,39 @@ export function RunSummary({ api }: { api: ApiClient }) {
           </b>
         </div>
       </div>
+      {r.row_counts?.permits && (
+        <>
+          <h3>City of Los Angeles permits (LADBS)</h3>
+          <div className="cards" data-testid="permit-counts">
+            <div className="card">
+              <span>Permits</span>
+              <b data-testid="permit-count">
+                {fmt(r.row_counts.permits.parquet?.permits)}
+              </b>
+            </div>
+            <div className="card">
+              <span>Permit-to-parcel links</span>
+              <b>{fmt(r.row_counts.permits.parquet?.permit_parcels)}</b>
+            </div>
+            <div className="card">
+              <span>Contractor rows</span>
+              <b>{fmt(r.row_counts.permits.parquet?.permit_contractors)}</b>
+            </div>
+            <div className="card">
+              <span>Parcels with permit data</span>
+              <b>{fmt(r.coverage?.permit_data?.parcels_with_permit_data)}</b>
+            </div>
+            <div className="card">
+              <span>Parcels with a linked permit</span>
+              <b>{fmt(r.coverage?.permit_data?.parcels_with_permits)}</b>
+            </div>
+            <div className="card">
+              <span>Open durations count to</span>
+              <b>{fmt(r.derived_field_reference_date)}</b>
+            </div>
+          </div>
+        </>
+      )}
       <h3>Scope</h3>
       <p className="mono">{r.scope?.where}</p>
       <p data-testid="readiness">
