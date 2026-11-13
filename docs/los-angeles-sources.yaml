@@ -6,7 +6,7 @@ slug: los-angeles
 fips: "06037"
 snapshot_time: "2026-11-11T15:52:13Z"
 verified_time: "2026-11-11T15:52:13Z"
-scope: parcels only (increment 1 pilot slice, then increment 4 county-wide); no permits, no Query DB writes, no publication
+scope: county-wide parcels (increment 4) plus City of Los Angeles permits from the LADBS caches (increment 5); no Query DB writes, no publication
 parcel:
   canonical_source: tax_roll
   canonical_source_name: LA County Assessor - Assessor Parcel Data Roll 2026
@@ -41,7 +41,7 @@ permits:
       datasets:
         [pi9x-tg5x, dyxf-7hc4, e67z-kt2n, gwh9-jnip, n3xg-rixm, b6ii-mhed]
       historical_records: true
-      notes: City of LA only. Not harvested in this pilot.
+      notes: City of LA only. Built in increment 5 from local caches of the six permit datasets and the contractor view 8guu-8f5m.
     - jurisdiction: unincorporated
       status: needs-review
       vendor: unknown (EPIC-LA, LA County Public Works)
@@ -681,8 +681,33 @@ destination:
   environment: non-production
   independent_identity_sources: [cloudformation_stack_output, s3_bucket_tags]
 approved_exceptions:
-  # The validator reports the first permit exception, so the current county-wide entry comes first.
+  # The validator reports the first permit exception, so the current entry comes first.
   # The scope guard (src/scope-guard.ts) accepts a run only inside one entry's scope.
+  - gate: permit
+    reason: >-
+      Increment 5: all of Los Angeles County's parcels (the 89 jurisdictions: 88
+      incorporated cities and the unincorporated areas), no ZIP filter, LA County
+      Assessor roll 2026, plus City of Los Angeles building permits and their
+      contractor rows from the LADBS open-data caches (data.lacity.org). The 88
+      jurisdictions without a classified permit source are not yet covered: they stay
+      needs-review and are listed by name in docs/los-angeles-county-findings.md
+      (section 6b) and in run_manifest.json limitations. Expires when those
+      jurisdictions are classified; the readiness check is then re-run without it.
+    scope:
+      {
+        increment: 5,
+        data: parcels-and-permits,
+        jurisdiction: all,
+        zips: [],
+        roll_year: "2026",
+        permit_jurisdictions: [Los Angeles],
+      }
+    permits_harvested: true
+    not_yet_covered_count: 88
+    expires: "Expires when the 88 jurisdictions are classified; the readiness check is then re-run without it."
+    approved_by: "Mario Ferraro, 2026-11-13"
+expired_exceptions:
+  # Kept as a record; neither the validator nor the scope guard reads them. Runs under them are refused.
   - gate: permit
     reason: >-
       Increment 4: parcels only, all of Los Angeles County (the 89 jurisdictions: 88
@@ -704,6 +729,8 @@ approved_exceptions:
     not_yet_covered_count: 88
     expires: "Expires when permits are added; the readiness check is then re-run without it."
     approved_by: "Mario Ferraro, 2026-11-12"
+    expired: "2026-11-13"
+    expired_because: "City of Los Angeles permits were added in increment 5, under the increment-5 entry."
   - gate: permit
     reason: >-
       Increment 1 only: parcels only, City of Los Angeles, ZIP codes 91405, 91406 and
@@ -725,3 +752,5 @@ approved_exceptions:
     not_yet_covered_count: 88
     expires: "Expires when permits are added; the readiness check is then re-run without it."
     approved_by: "Mario Ferraro, 2026-11-11"
+    expired: "2026-11-13"
+    expired_because: "City of Los Angeles permits were added in increment 5, under the increment-5 entry."

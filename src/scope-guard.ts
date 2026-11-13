@@ -1,7 +1,8 @@
 /**
  * Scope guard: run before any seed or download. Fails (exit 1) unless the run's scope
  * matches one of the approved permit-gate exceptions in the sources catalog (jurisdiction,
- * ZIP set, roll year and permits flag).
+ * ZIP set, roll year, permits flag and the set of permit jurisdictions). Entries under
+ * expired_exceptions are never read.
  * It does not change or replace the kit's readiness validator.
  *
  * Usage: node src/scope-guard.ts [run-config.json] [sources.yaml]
@@ -16,6 +17,8 @@ export interface ExceptionScope {
   zips: string[];
   roll_year: string;
   permits_harvested: boolean;
+  /** Jurisdictions whose permits the exception allows; empty when no permits are harvested. */
+  permit_jurisdictions: string[];
 }
 
 function scopeOf(entry: Record<string, unknown>, n: number): ExceptionScope {
@@ -33,11 +36,21 @@ function scopeOf(entry: Record<string, unknown>, n: number): ExceptionScope {
   if (typeof entry.permits_harvested !== "boolean") {
     throw new Error(`permit exception ${n} has no boolean permits_harvested`);
   }
+  const permitJurisdictions = scope.permit_jurisdictions ?? [];
+  if (!Array.isArray(permitJurisdictions))
+    throw new Error(
+      `permit exception ${n}: permit_jurisdictions is not a list`,
+    );
+  if (entry.permits_harvested !== permitJurisdictions.length > 0)
+    throw new Error(
+      `permit exception ${n}: permits_harvested must name its permit_jurisdictions, and only then`,
+    );
   return {
     jurisdiction: scope.jurisdiction,
     zips: scope.zips.map(String),
     roll_year: String(scope.roll_year),
     permits_harvested: entry.permits_harvested,
+    permit_jurisdictions: permitJurisdictions.map(String),
   };
 }
 
@@ -90,6 +103,15 @@ export function checkScope(run: RunScope, allowed: ExceptionScope): string[] {
       `permits_harvested ${run.permits_harvested} is not the approved ${allowed.permits_harvested}`,
     );
   }
+  const permitJurisdictions = run.permit_jurisdictions ?? [];
+  if (
+    !Array.isArray(permitJurisdictions) ||
+    !sameSet(permitJurisdictions, allowed.permit_jurisdictions)
+  ) {
+    errors.push(
+      `permit_jurisdictions [${permitJurisdictions.join(", ")}] are not the approved [${allowed.permit_jurisdictions.join(", ")}]`,
+    );
+  }
   return errors;
 }
 
@@ -124,7 +146,7 @@ export function guardOrThrow(
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const runPath = process.argv[2] ?? "config/la-pilot-run.json";
+  const runPath = process.argv[2] ?? "config/la-county-permits-run.json";
   const catalogPath = process.argv[3] ?? "docs/los-angeles-sources.yaml";
   try {
     const n = guardOrThrow(runPath, catalogPath);

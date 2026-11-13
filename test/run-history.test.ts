@@ -78,3 +78,46 @@ test("a new run ID is appended and its delta base is the last recorded run", () 
     "run-c",
   ]);
 });
+
+const permitFiles = (sha: string) => [
+  { role: "permits", path: "p.parquet", sha256: `${sha}1` },
+  { role: "permit_parcels", path: "pp.parquet", sha256: `${sha}2` },
+  { role: "permit_contractors", path: "pc.parquet", sha256: `${sha}3` },
+];
+
+test("a permit run records its permit files; the same files rebuild to nothing new", () => {
+  appendRunHistory(historyPath, row("run-a", "aa"));
+  const permitRow = { ...row("run-p", "pp"), permit_files: permitFiles("x") };
+  expect(appendRunHistory(historyPath, permitRow)).toBe("added");
+  const [old, latest] = readHistory(historyPath);
+  expect(old!.permit_files).toBeUndefined();
+  expect(latest!.permit_files).toEqual(permitFiles("x"));
+  // The same files in another order are the same build.
+  expect(
+    planHistory(
+      readHistory(historyPath),
+      "run-p",
+      "pp",
+      [...permitFiles("x")].reverse(),
+    ).kind,
+  ).toBe("recorded");
+  expect(appendRunHistory(historyPath, permitRow)).toBe("already-recorded");
+});
+
+test("the same run ID with other permit files fails and writes nothing", () => {
+  appendRunHistory(historyPath, {
+    ...row("run-p", "pp"),
+    permit_files: permitFiles("x"),
+  });
+  const before = readFileSync(historyPath);
+  expect(() =>
+    appendRunHistory(historyPath, {
+      ...row("run-p", "pp"),
+      permit_files: permitFiles("y"),
+    }),
+  ).toThrow(/other permit files/);
+  expect(() => planHistory(readHistory(historyPath), "run-p", "pp")).toThrow(
+    /other permit files/,
+  );
+  expect(readFileSync(historyPath)).toEqual(before);
+});
