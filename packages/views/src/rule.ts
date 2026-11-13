@@ -78,8 +78,10 @@ export function longOpenRule(
     min_open_days: minOpenDays,
     max_open_days: maxOpenDays,
     text:
-      `Long-open: an issued LADBS permit still open (status class open-issued) for ${range}, counted from its ` +
-      `issue date to the run's reference date ${referenceDate}. Durations are in days; a number of years ` +
+      `Long-open: an issued LADBS permit for roofing work still open (status class open-issued) for ${range}, ` +
+      `counted from its issue date to the run's reference date ${referenceDate}. Roofing work only: permits ` +
+      `that are not roofing work never count; a roof-coating-only permit is roofing work and counts (flagged ` +
+      `roof_coating_only). Durations are in days; a number of years ` +
       `converts as round(years x 365.25), so 5 years is 1,826 days (the default minimum). Application-stage ` +
       `permits and permits without an issue date do not count. A building-level (condominium) permit counts once, ` +
       `at its nearest unit.`,

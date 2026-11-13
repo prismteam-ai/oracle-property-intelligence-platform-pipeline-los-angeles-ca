@@ -258,9 +258,10 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     expect(p.max_points).toBe(MAX_POINTS);
     // The 25,000th nearest (distance, then parcel ID) is 2259006029, about 2.524 mi away.
     expect(p.id.at(-1)).toBe("2259006029");
-    // All 25,000 nearest are in the City of Los Angeles; 858 have a long-open permit (default window).
+    // All 25,000 nearest are in the City of Los Angeles; 806 have a long-open roofing permit (default window;
+    // 858 before long-open counted roofing work only).
     expect(p.permit_data_available.filter((x) => x === 1)).toHaveLength(25_000);
-    expect(p.long_open_permit.filter((x) => x === 1)).toHaveLength(858);
+    expect(p.long_open_permit.filter((x) => x === 1)).toHaveLength(806);
     const bytes = Buffer.byteLength(JSON.stringify(p));
     expect(bytes).toBeLessThan(3_000_000);
     expect(metrics).toEqual([["PointsResponseBytes", bytes]]);
@@ -330,30 +331,33 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       caller.parcels.detail({ parcel_id: "0000000000" }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
-  test("permits.longOpen: 126 / 2,759 / 6,614 long-open permits at 1 / 5 / 10 mi (default 1,826 days), equal to plain SQL on the views", async () => {
+  test("permits.longOpen: 112 / 2,409 / 5,614 long-open roofing permits at 1 / 5 / 10 mi (default 1,826 days), equal to plain SQL on the views", async () => {
+    // Roofing work only: 126 / 2,759 / 6,614 without that condition.
     for (const [miles, n] of [
-      [1, 126],
-      [5, 2759],
-      [10, 6614],
+      [1, 112],
+      [5, 2409],
+      [10, 5614],
     ] as const) {
       expect(
         (await caller.permits.longOpen({ ...VAN_NUYS, radius_miles: miles }))
           .count,
         `${miles} mi`,
       ).toBe(n);
-      // Without the macro: distinct open-issued permits of at least 1,826 days with a linked parcel inside.
+      // Without the macro: distinct open-issued roofing-work permits of at least 1,826 days with a linked
+      // parcel inside.
       const [r] = await db.rows(
         `select count(distinct p.permit_number)::integer n
          from oracle.v_permit p join oracle.v_permit_parcel pp using (permit_number)
          join oracle.v_property v using (parcel_id)
-         where p.permit_status_class = 'open-issued' and p.open_days >= 1826 and v.latitude is not null
+         where p.roofing_work and p.permit_status_class = 'open-issued' and p.open_days >= 1826
+           and v.latitude is not null
            and oracle.haversine_miles($1, $2, v.latitude, v.longitude) <= $3`,
         [VAN_NUYS.lat, VAN_NUYS.lon, miles],
       );
       expect(r, `${miles} mi plain`).toEqual({ n });
     }
   });
-  test("permits.longOpen at 10 mi: each permit once (405 building-level), sorted, max and threshold, first page under 3,000,000 bytes", async () => {
+  test("permits.longOpen at 10 mi: each permit once (388 building-level), sorted, max and threshold, first page under 3,000,000 bytes", async () => {
     const r = await caller.permits.longOpen({
       ...VAN_NUYS,
       radius_miles: 10,
@@ -366,6 +370,7 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     expect(days).toEqual([...days].sort((a, b) => b - a));
     for (const i of r.items) {
       expect(i.permit_status_class).toBe("open-issued");
+      expect(i.roofing_work).toBe(true);
       expect(i.open_days!).toBeGreaterThanOrEqual(1826);
       expect(i.parcel_id).toMatch(/^\d{10}$/);
     }
@@ -375,7 +380,7 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
        from oracle.long_open_permits(1826, null, null, $1, $2, 10)`,
       [VAN_NUYS.lat, VAN_NUYS.lon],
     );
-    expect(once).toEqual({ n: 6614, d: 6614, bl: 405 });
+    expect(once).toEqual({ n: 5614, d: 5614, bl: 388 });
     const near = await caller.permits.longOpen({
       ...VAN_NUYS,
       radius_miles: 10,
@@ -392,7 +397,7 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
           max_open_days: 3652,
         })
       ).count,
-    ).toBe(4651);
+    ).toBe(4167);
     expect(
       (
         await caller.permits.longOpen({
@@ -401,7 +406,33 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
           threshold_years: 15,
         })
       ).count,
-    ).toBe(5419);
+    ).toBe(4662);
+  });
+  test("long-open counts roofing work only: 10,974 joined long-open roofing permits city-wide, 2,318 of 13,292 left out; coating-only permits are roofing work", async () => {
+    // Default window (at least 1,826 days to the reference date), permits linked to at least one parcel.
+    const split = await db.rows(
+      `select p.roofing_work, count(distinct p.permit_number)::integer n
+       from oracle.v_permit p join oracle.v_permit_parcel pp using (permit_number)
+       where p.permit_status_class = 'open-issued' and p.open_days >= 1826 group by 1 order by 1`,
+    );
+    expect(split).toEqual([
+      { roofing_work: false, n: 2318 },
+      { roofing_work: true, n: 10974 },
+    ]);
+    const [macro] = await db.rows(
+      `select count(distinct permit_number)::integer n,
+         count(distinct permit_number) filter (where not roofing_work)::integer non_roofing
+       from oracle.long_open_parcels(1826, null) join oracle.v_permit using (permit_number)`,
+    );
+    expect(macro).toEqual({ n: 10974, non_roofing: 0 });
+    // Every one of the 574 coating-only permits is roofing work, so the filter keeps them.
+    const [coating] = await db.rows(
+      `select count(*)::integer n, count(*) filter (where roofing_work)::integer roofing
+       from oracle.v_permit where roof_coating_only`,
+    );
+    expect(coating).toEqual({ n: 574, roofing: 574 });
+    const r = await caller.permits.longOpen({ ...VAN_NUYS, radius_miles: 1 });
+    expect(r.rule.text).toContain("Roofing work only");
   });
   test("permits.forParcel: the parcel with the most permits (174) under 3,000,000 bytes; outside-LA parcels keep their 60 joined permits", async () => {
     const [top] = await db.rows(

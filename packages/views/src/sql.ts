@@ -241,18 +241,21 @@ from (
 group by all
 order by source_page_file;
 
--- Permit-to-parcel links of the long-open permits: open-issued, open for at least min_open_days and, when
+-- Permit-to-parcel links of the long-open permits: roofing work only (roofing_work; a roof-coating-only
+-- permit is roofing work and stays in), open-issued, open for at least min_open_days and, when
 -- max_open_days is not null, at most max_open_days (open_days counts from the issue date to the run's
--- reference date). A building-level permit gives one row per unit.
+-- reference date). A building-level permit gives one row per unit. long_open_permits and the points
+-- highlight both read this macro.
 create or replace macro oracle.long_open_parcels(min_open_days, max_open_days) as table
 select pp.permit_number, pp.parcel_id
 from oracle.v_permit p
 join oracle.v_permit_parcel pp using (permit_number)
-where p.permit_status_class = ${lit(OPEN_ISSUED)}
+where p.roofing_work
+  and p.permit_status_class = ${lit(OPEN_ISSUED)}
   and p.open_days >= min_open_days
   and (max_open_days is null or p.open_days <= max_open_days);
 
--- Long-open permits with a linked parcel inside the circle (and, when threshold_years is not null, whose
+-- Long-open (roofing work) permits with a linked parcel inside the circle (and, when threshold_years is not null, whose
 -- parcel's effective roof year is older than the threshold, as in roof_age_candidates). Each permit is one
 -- row at its nearest qualifying parcel (distance, then parcel ID), so a building-level permit counts once.
 -- The parcel columns (parcel_id, distance_miles, effective roof year and basis) describe that parcel;

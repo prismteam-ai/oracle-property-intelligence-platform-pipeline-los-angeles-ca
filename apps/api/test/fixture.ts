@@ -230,6 +230,8 @@ function permitRow(p: {
   cls: string;
   days: number | null;
   roofing?: boolean;
+  /** Roofing work only through the roof-coating phrase (implies roofing). */
+  coatingOnly?: boolean;
   join?: string | null;
   page?: string;
   dataset?: string;
@@ -242,7 +244,8 @@ function permitRow(p: {
   ${p.status ? lit(p.status) : "null::varchar"} as source_status_desc, ${d(p.issue)} as status_date,
   ${lit(p.cls)} as permit_status_class,
   ${p.days === null ? "null::date" : d(p.issue)} as open_since, ${p.days ?? "null"}::integer as open_days,
-  ${p.roofing ?? false} as roof_r, false as roof_only, ${p.roofing ?? false} as roofing_work, false as roof_coating_only,
+  ${p.roofing ?? false} as roof_r, false as roof_only, ${p.roofing ?? false} as roofing_work,
+  ${p.coatingOnly ?? false} as roof_coating_only,
   ${p.join === undefined ? "'direct'" : p.join === null ? "null::varchar" : lit(p.join)} as join_method,
   ${p.join === null ? "'apn-missing/no-usable-address'" : "null::varchar"} as unjoined_cause,
   ${lit(p.dataset ?? "pi9x-tg5x")} as source_dataset, 'issued' as source_dataset_kind,
@@ -291,24 +294,28 @@ export const PERMIT_WORK_DESC = "FIXTURE WORK DESCRIPTION NOT SERVED";
  *
  * Parcels (all in the City of Los Angeles unless noted):
  *   0000000011 A  at the point, built 1950, roof year 2020 from permit P1 (basis PERMIT)
- *   0000000012 B  0.1 mi N, built 1950, an open-application permit (P8) only
+ *   0000000012 B  0.1 mi N, built 1950, an open-application permit (P8) and a long-open permit that is not
+ *                 roofing work (P11): no long-open roofing permit
  *   0000000021-23 C1-C3  condominium units of one building, 0.3 / 0.2 / 0.4 mi N, built 1980
  *   0000000031 D  0.5 mi S, built 1960, outside the City of Los Angeles (PASADENA), one closed permit (P4)
- *   0000000041 E  0.05 mi N, built 1970, one long-open permit (P9)
+ *   0000000041 E  0.05 mi N, built 1970, one long-open permit (P9, roof coating only)
  *   0000000042 H  0.06 mi N, built 1970, no permit
  *   0000000051 F  2 mi N, built 1960, three open-issued permits (P5, P6, P7)
  *
- * Permits (open_days to the reference date):
+ * Permits (open_days to the reference date). Long-open counts roofing work only: every open-issued permit
+ * is roofing work except P11.
  *   P1 16016-10000-00001  A, roofing, Permit Finaled (closed); two contractor rows
- *   P2 16016-10000-00002  A, open-issued, 3,237 days
+ *   P2 16016-10000-00002  A, open-issued, 3,237 days, roofing
  *   P3 17016-20000-00003  C1-C3 building-level (condo-building), open-issued, 2,500 days, roofing; one contractor
  *   P4 18016-30000-00004  D, closed
- *   P5 19016-10000-00005  F, open-issued, 1,000 days (under the default minimum)
- *   P6 19016-10000-00006  F, open-issued, 2,000 days
- *   P7 13016-10000-00007  F, open-issued, 4,000 days
+ *   P5 19016-10000-00005  F, open-issued, 1,000 days, roofing (under the default minimum)
+ *   P6 19016-10000-00006  F, open-issued, 2,000 days, roofing
+ *   P7 13016-10000-00007  F, open-issued, 4,000 days, roofing
  *   P8 20016-10000-00008  B, open-application, 3,000 days (never long-open)
- *   P9 10016-10000-00009  E, open-issued, 2,000 days (ties with P6; the lower permit number first)
- *   P10 21016-10000-00010 unjoined, open-issued, 3,000 days (no parcel, never long-open)
+ *   P9 10016-10000-00009  E, open-issued, 2,000 days, roofing through the roof-coating phrase only (counts,
+ *                         flagged roof_coating_only); ties with P6, the lower permit number first
+ *   P10 21016-10000-00010 unjoined, open-issued, 3,000 days, roofing (no parcel, never long-open)
+ *   P11 22016-10000-00011 B, open-issued, 3,000 days, not roofing work (never long-open; listed by forParcel)
  * Contractor rows: P1 two (a C-39 business and an owner-builder), P3 one, and one for 12016-10000-00099, a
  * permit not in the permit table.
  */
@@ -317,7 +324,7 @@ export const PERMIT_FIXTURE = {
   contractorSource: "Fixture LADBS contractors",
   referenceDate: "2026-11-12",
   parcels: 9,
-  permits: 10,
+  permits: 11,
   contractorRows: 4,
   p: {
     P1: "16016-10000-00001",
@@ -330,6 +337,7 @@ export const PERMIT_FIXTURE = {
     P8: "20016-10000-00008",
     P9: "10016-10000-00009",
     P10: "21016-10000-00010",
+    P11: "22016-10000-00011",
   },
 } as const;
 
@@ -369,6 +377,7 @@ export async function writePermitFixture(): Promise<FixtureRun> {
       status: issued,
       cls: oi,
       days: 3237,
+      roofing: true,
     }),
     permitRow({
       n: P.P3,
@@ -393,6 +402,7 @@ export async function writePermitFixture(): Promise<FixtureRun> {
       cls: oi,
       days: 1000,
       page: "pages/pi9x-tg5x_p001.json.gz",
+      roofing: true,
     }),
     permitRow({
       n: P.P6,
@@ -401,6 +411,7 @@ export async function writePermitFixture(): Promise<FixtureRun> {
       cls: oi,
       days: 2000,
       page: "pages/pi9x-tg5x_p001.json.gz",
+      roofing: true,
     }),
     permitRow({
       n: P.P7,
@@ -409,6 +420,7 @@ export async function writePermitFixture(): Promise<FixtureRun> {
       cls: oi,
       days: 4000,
       page: "pages/pi9x-tg5x_p001.json.gz",
+      roofing: true,
     }),
     permitRow({
       n: P.P8,
@@ -425,6 +437,8 @@ export async function writePermitFixture(): Promise<FixtureRun> {
       status: issued,
       cls: oi,
       days: 2000,
+      roofing: true,
+      coatingOnly: true,
     }),
     permitRow({
       n: P.P10,
@@ -432,7 +446,15 @@ export async function writePermitFixture(): Promise<FixtureRun> {
       status: issued,
       cls: oi,
       days: 3000,
+      roofing: true,
       join: null,
+    }),
+    permitRow({
+      n: P.P11,
+      issue: "2018-08-26",
+      status: issued,
+      cls: oi,
+      days: 3000,
     }),
   ];
   const links = [
@@ -447,6 +469,7 @@ export async function writePermitFixture(): Promise<FixtureRun> {
     linkRow(P.P7, "0000000051", "direct", false),
     linkRow(P.P8, "0000000012", "address", false),
     linkRow(P.P9, "0000000041", "direct", false),
+    linkRow(P.P11, "0000000012", "direct", false),
   ];
   const contractors = [
     contractorRow({

@@ -74,6 +74,7 @@ export const parcelsRouter = router({
     )
     .query(async ({ ctx, input }): Promise<PointsResult> => {
       const db = await ctx.db();
+      // long_open_parcels counts roofing work only (roofing_work), the same rule as permits.longOpen.
       const rows = await db.rows(
         `select c.parcel_id, round(c.latitude, 5) as lat, round(c.longitude, 5) as lon,
            coalesce(c.permit_data_available, false) as permit_data, lo.parcel_id is not null as long_open

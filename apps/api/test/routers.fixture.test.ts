@@ -393,6 +393,55 @@ describe("permit routes on the synthetic permit run", () => {
     expect(DEFAULT_MIN_OPEN_DAYS).toBe(Math.round(5 * 365.25));
     expect(r.rule.text).toContain("at least 1,826 days");
     expect(r.rule.text).toContain("round(years x 365.25)");
+    expect(r.rule.text).toContain("Roofing work only");
+  });
+  test("longOpen and the points highlight count roofing work only: a long-open permit that is not roofing work is left out; a coating-only one counts, flagged", async () => {
+    // P11 (B, 3,000 days, not roofing work) is inside every window below; P9 (E) is roofing work only through
+    // the roof-coating phrase.
+    for (const window of [
+      {},
+      { min_open_days: 0 },
+      { min_open_days: 3000, max_open_days: 3000 },
+    ]) {
+      const r = await longOpen({ ...window, limit: 100 });
+      expect(nums(r)).not.toContain(N.P11);
+      expect(r.items.every((i) => i.roofing_work)).toBe(true);
+    }
+    expect(nums(await longOpen({ radius_miles: 0.15 }))).toEqual([N.P2, N.P9]);
+    const p9 = (await longOpen()).items.find((i) => i.permit_number === N.P9);
+    expect(p9).toMatchObject({
+      parcel_id: "0000000041",
+      roofing_work: true,
+      roof_coating_only: true,
+    });
+    const r = await longOpen();
+    expect(r.rule.text).toContain("Roofing work only");
+    expect(r.rule.text).toContain(
+      "roof-coating-only permit is roofing work and counts",
+    );
+    // The points highlight: B (only P11 in the window) is not marked, E (only P9) is.
+    for (const window of [{}, { min_open_days: 3000, max_open_days: 3000 }]) {
+      const p = keep(
+        await caller.parcels.points({
+          ...P,
+          radius_miles: 5,
+          threshold_years: 15,
+          ...window,
+        }),
+      );
+      const at = Object.fromEntries(
+        p.id.map((id, i) => [id, p.long_open_permit[i]]),
+      );
+      expect(at["0000000012"]).toBe(0);
+    }
+    const all = keep(
+      await caller.parcels.points({
+        ...P,
+        radius_miles: 5,
+        threshold_years: 15,
+      }),
+    );
+    expect(all.long_open_permit[all.id.indexOf("0000000041")]).toBe(1);
   });
   test("longOpen: sort by distance, ties by permit number; offset and limit page through", async () => {
     const r = await longOpen({ sort: "distance" });
@@ -517,7 +566,11 @@ describe("permit routes on the synthetic permit run", () => {
       building_level: false,
       parcel_count: 1,
     });
-    expect(p2).toMatchObject({ roofing_work: false, open_days: 3237 });
+    expect(p2).toMatchObject({
+      roofing_work: true,
+      roof_coating_only: false,
+      open_days: 3237,
+    });
     expect(sorted(Object.keys(p1!))).toEqual(
       sorted([...PERMIT_KEYS, "contractors"]),
     );
@@ -542,6 +595,25 @@ describe("permit routes on the synthetic permit run", () => {
     for (const c of p1!.contractors)
       expect(sorted(Object.keys(c))).toEqual(sorted(CONTRACTOR_KEYS));
     expect(p2!.contractors).toEqual([]);
+  });
+  test("forParcel still lists a long-open permit that is not roofing work, tagged roofing_work false", async () => {
+    const b = keep(await caller.permits.forParcel({ parcel_id: "0000000012" }));
+    // Same issue date: by permit number.
+    expect(b.permits.map((p) => p.permit_number)).toEqual([N.P8, N.P11]);
+    expect(b.permits[1]).toMatchObject({
+      permit_status_class: "open-issued",
+      open_days: 3000,
+      roofing_work: false,
+      roof_coating_only: false,
+    });
+    const e = keep(await caller.permits.forParcel({ parcel_id: "0000000041" }));
+    expect(e.permits).toEqual([
+      expect.objectContaining({
+        permit_number: N.P9,
+        roofing_work: true,
+        roof_coating_only: true,
+      }),
+    ]);
   });
   test("forParcel: a building-level permit on a unit; a parcel without permits; outside the City of Los Angeles", async () => {
     const c1 = keep(
@@ -643,7 +715,8 @@ describe("permit routes on the synthetic permit run", () => {
       "0000000042": 1,
       "0000000051": 1,
     });
-    // Every unit of the building-level permit P3 is marked; B's permit is application-stage.
+    // Every unit of the building-level permit P3 is marked; B's permits are application-stage (P8) and not
+    // roofing work (P11).
     expect(at(p.long_open_permit)).toEqual({
       "0000000012": 0,
       "0000000021": 1,
@@ -748,6 +821,7 @@ describe("permit routes on the synthetic permit run", () => {
       N.P6,
       N.P8,
       N.P10,
+      N.P11,
     ]);
     const c = keep(
       await caller.explorer.records({

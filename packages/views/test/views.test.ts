@@ -64,15 +64,22 @@ beforeAll(async () => {
       row("0000000006", 1950, 34.199, -118.487, "page-0001.json", 2015),
     ].join(" union all ")}) to ${lit(parquet)} (format parquet)`,
   );
-  // Permits: P1 building-level on A and F (both at the centre), open-issued 2,000 days; P2 on E (~33 mi),
-  // open-issued 3,000 days; P3 on A, closed. The permit table has a work_desc column no view may show.
-  const permit = (n: string, cls: string, days: number | null) => `select
+  // Permits: P1 building-level on A and F (both at the center), open-issued 2,000 days, roofing work; P2 on E
+  // (~33 mi), open-issued 3,000 days, roofing work through the roof-coating phrase only; P3 on A, closed; P4 on
+  // B (at the center), open-issued 3,000 days, not roofing work. The permit table has a work_desc column no
+  // view may show.
+  const permit = (
+    n: string,
+    cls: string,
+    days: number | null,
+    work: "roofing" | "coating-only" | "not roofing" = "roofing",
+  ) => `select
     ${lit(n)} as permit_number, null::varchar as source_apn, '1 TEST ST' as unnormalized_address, '91406' as postal_code,
     'Bldg-Alter/Repair' as source_permit_type, null::varchar as source_permit_sub_type, null::varchar as source_business_unit,
     date '2020-01-01' as application_received_date, date '2020-01-01' as permit_issue_date, 'Issued' as source_status_desc,
     date '2020-01-01' as status_date, ${lit(cls)} as permit_status_class, date '2020-01-01' as open_since,
-    ${days ?? "null"}::integer as open_days, true as roof_r, false as roof_only, true as roofing_work,
-    false as roof_coating_only, 'direct' as join_method, null::varchar as unjoined_cause, 'pi9x-tg5x' as source_dataset,
+    ${days ?? "null"}::integer as open_days, ${work !== "not roofing"} as roof_r, false as roof_only,
+    ${work !== "not roofing"} as roofing_work, ${work === "coating-only"} as roof_coating_only, 'direct' as join_method, null::varchar as unjoined_cause, 'pi9x-tg5x' as source_dataset,
     'issued' as source_dataset_kind, 'roof-flags-4' as roof_flag_rule_version, 'permit-status-1' as permit_status_rule_version,
     'permit-join-1' as join_rule_version, 'NOT SERVED' as work_desc, 'https://example.test/p' as source_http_request,
     'GET' as source_http_method, timestamptz '2026-11-12 13:14:56.570+00' as source_retrieved_at, 'sha-p' as source_page_sha256,
@@ -80,14 +87,15 @@ beforeAll(async () => {
   await c.run(
     `copy (${[
       permit("16016-10000-00001", "open-issued", 2000),
-      permit("16016-10000-00002", "open-issued", 3000),
+      permit("16016-10000-00002", "open-issued", 3000, "coating-only"),
       permit("16016-10000-00003", "closed", null),
+      permit("16016-10000-00004", "open-issued", 3000, "not roofing"),
     ].join(" union all ")}) to ${lit(permits)} (format parquet)`,
   );
   await c.run(
     `copy (select * from (values ('16016-10000-00001', '0000000001', 'condo-building', true),
        ('16016-10000-00001', '0000000006', 'condo-building', true), ('16016-10000-00002', '0000000005', 'direct', false),
-       ('16016-10000-00003', '0000000001', 'direct', false))
+       ('16016-10000-00003', '0000000001', 'direct', false), ('16016-10000-00004', '0000000002', 'direct', false))
        t(permit_number, parcel_identifier, join_method, building_level), (select 'permit-join-1' as join_rule_version))
      to ${lit(permitParcels)} (format parquet)`,
   );
@@ -248,7 +256,7 @@ describe("contract views", () => {
       {
         source_kind: "permit",
         source_page_file: "pages/pi9x-tg5x_p000.json.gz",
-        n: 3,
+        n: 4,
         source_retrieved_at: "2026-11-12T13:14:56.570Z",
       },
     ]);
@@ -311,6 +319,7 @@ describe("longOpenRule and daysFromYears", () => {
     });
     expect(r.text).toContain("at least 1,826 days");
     expect(r.text).toContain("2026-11-12");
+    expect(r.text).toContain("Roofing work only");
     expect(longOpenRule("2026-11-12", 1826, 3653).text).toContain(
       "between 1,826 and 3,653 days",
     );
@@ -368,6 +377,61 @@ describe("permit views", () => {
       { parcel_id: "0000000001" },
       { parcel_id: "0000000005" },
       { parcel_id: "0000000006" },
+    ]);
+  });
+  test("long_open_parcels and long_open_permits count roofing work only; a coating-only permit counts", async () => {
+    // P4 (B, at the center, 3,000 days) is open-issued but not roofing work: in no window, at no radius.
+    for (const args of [
+      "1826, null, null, 34.199, -118.487, 50",
+      "0, null, null, 34.199, -118.487, 50",
+      "3000, 3000, null, 34.199, -118.487, 50",
+    ])
+      expect(
+        await q(
+          `select permit_number, roofing_work, roof_coating_only from oracle.long_open_permits(${args}) order by 1`,
+        ),
+        args,
+      ).toEqual(
+        args.startsWith("3000")
+          ? [
+              {
+                permit_number: "16016-10000-00002",
+                roofing_work: true,
+                roof_coating_only: true,
+              },
+            ]
+          : [
+              {
+                permit_number: "16016-10000-00001",
+                roofing_work: true,
+                roof_coating_only: false,
+              },
+              {
+                permit_number: "16016-10000-00002",
+                roofing_work: true,
+                roof_coating_only: true,
+              },
+            ],
+      );
+    expect(
+      await q(
+        "select distinct permit_number from oracle.long_open_parcels(0, null) order by 1",
+      ),
+    ).toEqual([
+      { permit_number: "16016-10000-00001" },
+      { permit_number: "16016-10000-00002" },
+    ]);
+    // The permit views still list P4, tagged.
+    expect(
+      await q(
+        "select p.permit_number, p.roofing_work, pp.parcel_id from oracle.v_permit p join oracle.v_permit_parcel pp using (permit_number) where p.permit_number = '16016-10000-00004'",
+      ),
+    ).toEqual([
+      {
+        permit_number: "16016-10000-00004",
+        roofing_work: false,
+        parcel_id: "0000000002",
+      },
     ]);
   });
   test("contractor rows are numbered per permit in value order; dates are text", async () => {

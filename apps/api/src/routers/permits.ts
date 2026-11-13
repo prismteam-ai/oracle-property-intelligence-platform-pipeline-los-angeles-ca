@@ -86,6 +86,7 @@ export const permitsRouter = router({
         input.lon,
         input.radius_miles,
       ];
+      // Roofing work only: the macro keeps permits with roofing_work (roof-coating-only permits included).
       const from =
         "oracle.long_open_permits($1::integer, $2::integer, $3::integer, $4, $5, $6)";
       // Longest open first or nearest first; ties by permit number either way.

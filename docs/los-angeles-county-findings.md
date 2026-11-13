@@ -789,6 +789,14 @@ Every raw status maps to one class; an unknown status would be `unmapped` and co
 - Only open-issued counts as open for long-open. The data API's long-open filter takes a
   minimum open duration in days, by default 1,826 days (5 × 365.25, rounded), adjustable,
   and an optional maximum, unset by default.
+- Long-open counts roofing work only (`roofing_work`, §14e), in the long-open permit list
+  and in the map's long-open highlight alike. A permit that is roofing work only through
+  the coating phrase stays in, flagged `roof_coating_only`. A parcel's permit list still
+  shows every permit, each tagged with `roofing_work`.
+- In the default window (at least 1,826 days to the reference date 2026-11-12), 13,292
+  open-issued permits joined to a parcel are long-open city-wide. The filter excludes the
+  2,318 that are not roofing work and keeps 10,974. None of the 574 coating-only permits
+  is among them.
 
 ### 14g. Effective roof year
 
