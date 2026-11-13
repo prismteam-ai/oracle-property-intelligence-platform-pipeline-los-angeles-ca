@@ -246,9 +246,11 @@ Its permits are built from increment 5 on (section 14); these 88 have none.
 
 - **Republication rights are unverified.** The LA County eGIS Terms of Use
   (https://egis-lacounty.hub.arcgis.com/pages/terms-of-use) describe the data as "for
-  informational purposes", and nothing explicitly grants republication. No artifact
-  derived from this source may be published (IPFS or anywhere else) until those rights
-  are confirmed. This blocks publication, not local pilot work.
+  informational purposes", and nothing explicitly grants republication. No
+  record-bearing artifact derived from this source may be published (IPFS or anywhere
+  else) until those rights are confirmed. Files without records (the run manifest,
+  coverage counts, the schema and the artifact manifest) may be published after approval.
+  This blocks publication, not local pilot work.
 
 ## 8. Implementation choices
 
@@ -265,15 +267,21 @@ Oracle runtime path.
   and be torn down or scaled to zero afterwards, or be replaced. Nothing is always-on.
 - The run ends in local CARs, CIDs, the user's own artifact manifest and run history,
   with no upload. **IPFS publication is the last step and needs user approval. There is
-  no Atlas.**
+  no Atlas.** The artifact manifest and the publishable directory (run manifest,
+  coverage, schema, artifact manifest) are built by `src/build-ipfs-artifacts.ts`; only
+  these record-free files are ever published, and every data file is listed with
+  `published: false`.
 - How a bulk file enters the runtime: as both seed and capture. The roll pages become
   the seed (parcel list and ETA denominator) and are also stored as per-parcel captures
   keyed by AIN with the exact request URL, so the transform reads stored captures and
   does not re-fetch.
 - Other needs: the full roll (2.43M rows, about 2,430 pages at 1000 rows each,
   roughly 81 min at 1 request per 2 s); S3 for raw data in eu-north-1 (AWS mode); a
-  transform validated against the lexicon; elephant-cli `validate`/`hash` for local CARs
-  only; a permit adapter per jurisdiction; CSLB and CA SOS adapters.
+  transform validated against the lexicon; local CIDs and CARs of a run's files computed
+  with ipfs-car 3.1.0 (UnixFS CIDv1, raw leaves, fixed 1 MiB chunks, balanced width 1024:
+  IPIP-0499 unixfs-v1-2025 for files), not elephant-cli; elephant-cli only for the later
+  Lexicon slice (validation, hash-to-CAR and CAR validation, local, no upload); a permit
+  adapter per jurisdiction; CSLB and CA SOS adapters.
 
 ## 10. Scope guard (pipeline repo; the kit checker is unchanged)
 
@@ -537,6 +545,11 @@ Code and config (committed):
   `src/stage-contractors.ts`, `src/roof-flags.ts`, `src/address-normalize.ts`,
   `src/permit-join.ts`, `src/license-classes.ts`, `src/permit-status.ts`,
   `src/permit-sql.ts`
+- Local IPFS artifacts: `src/ipfs-unixfs.ts`, `src/artifact-manifest.ts`,
+  `src/publishable-docs.ts`, `src/publish-guard.ts`, `src/publish-scans.ts`,
+  `src/build-ipfs-artifacts.ts`, `src/gateway-verify.ts`. Rebuild (local only; writes
+  the ignored `data/ipfs/`): `node src/build-ipfs-artifacts.ts --all [--source <repo>]
+[--out data/ipfs]`
 - `test/*.test.ts` and the synthetic fixtures under `test/fixtures/`
 
 Run metadata (no rows, no addresses):
@@ -623,10 +636,11 @@ seed (since the county run, the county seed).
 
 Package manager: pnpm 12.16.1 (kit: pnpm workspaces), with one lockfile
 (`pnpm-lock.yaml`), exact versions, a 14-day minimum release age and no allowed
-install scripts (`pnpm-workspace.yaml`). The manifest of run 2026-11-11T16-17-38-928Z is a tool record left as written; it lists `npm ci --ignore-scripts` as its install step. Install with `pnpm install --frozen-lockfile`.
+install scripts (`pnpm-workspace.yaml`; `allowBuilds` denies the scripts of `fsevents`,
+`esbuild` and `protobufjs`, whose postinstall only prints a warning). The manifest of run 2026-11-11T16-17-38-928Z is a tool record left as written; it lists `npm ci --ignore-scripts` as its install step. Install with `pnpm install --frozen-lockfile`.
 
-Tests run on Vitest (kit testing guideline), with `vitest.config.ts` at the repo root. The only runtime dependencies are
-`@duckdb/node-api` and `yaml`.
+Tests run on Vitest (kit testing guideline), with `vitest.config.ts` at the repo root. The runtime dependencies are
+`@duckdb/node-api`, `yaml` and `ipfs-car` (local CIDs and CARs).
 
 ## 14. City of Los Angeles permits and contractors (increment 5)
 
