@@ -386,6 +386,9 @@ test.describe("with credentials", () => {
     const bbb = await page.getByTestId("bbb").allInnerTexts();
     expect(bbb).toHaveLength(expected.items.length);
     for (const b of bbb) expect(b).toBe("not available");
+    await expect(page.getByTestId("source").first()).toHaveText(
+      permitSrc.source_name,
+    );
     for (const s of await page.getByTestId("source").allInnerTexts())
       expect(s).toBe(permitSrc.source_name);
     const cite = page.getByTestId("long-open-source");
