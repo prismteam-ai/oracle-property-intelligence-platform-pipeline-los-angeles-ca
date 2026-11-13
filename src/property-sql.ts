@@ -6,8 +6,24 @@
 
 export const sqlLiteral = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
+/**
+ * The roof-age basis of a parcel, one label per basis. The year-built proxy is every parcel's basis
+ * in this table; src/permit-sql.ts replaces it with the permit label where a finaled roofing permit
+ * sets the effective roof year.
+ */
+export const ROOF_AGE_BASIS = {
+  yearBuilt:
+    "PROXY: assessor year built / effective year built; not a roof installation date",
+  permit:
+    "PERMIT: latest finaled LADBS roofing permit (status date); a roof coating alone does not count",
+} as const;
+
+/** The tax-rate-area city whose permits the LADBS caches hold (the City of Los Angeles). */
+export const PERMIT_JURISDICTION = "LOS ANGELES";
+
 // Publishable table. Column names follow bundled lexicon (kit use-neutral-lexicon model-c) where one exists;
-// source_* and *_proxy columns are not lexicon fields (see findings section 10).
+// source_* and *_proxy columns, roof_age_basis and permit_data_available are not lexicon fields (see
+// findings section 12).
 export function propertyTableSql(
   referenceDate: string,
   sourceName: string,
@@ -20,7 +36,7 @@ select
   AIN::varchar                                                    as request_identifier,
   case when try_cast(YearBuilt as integer) between 1800 and 2100 then try_cast(YearBuilt as integer) end as property_structure_built_year,
   case when try_cast(EffectiveYearBuilt as integer) between 1800 and 2100 then try_cast(EffectiveYearBuilt as integer) end as property_effective_built_year,
-  'PROXY: assessor year built / effective year built; not a roof installation date' as roof_age_basis,
+  ${sqlLiteral(ROOF_AGE_BASIS.yearBuilt)} as roof_age_basis,
   nullif(trim(UseType), '')                                       as source_use_type,
   nullif(trim(UseCode), '')                                       as source_use_code,
   concat_ws(' | ', nullif(trim(UseCodeDescChar1), ''), nullif(trim(UseCodeDescChar2), ''), nullif(trim(UseCodeDescChar3), ''), nullif(trim(UseCodeDescChar4), '')) as source_use_code_description,
@@ -38,6 +54,7 @@ select
   nullif(CENTER_LON::double, 0)                                   as longitude,
   'assessor parcel center point (CENTER_LAT/CENTER_LON)'          as coordinate_basis,
   trim(TaxRateArea_CITY)                                          as tax_rate_area_city,
+  trim(TaxRateArea_CITY) = ${sqlLiteral(PERMIT_JURISDICTION)}          as permit_data_available,
   RollYear::varchar                                               as roll_year,
   case when RecordingDate is not null then cast(epoch_ms(RecordingDate::bigint) as date) end as last_recording_date,
   case when RecordingDate is null then null
