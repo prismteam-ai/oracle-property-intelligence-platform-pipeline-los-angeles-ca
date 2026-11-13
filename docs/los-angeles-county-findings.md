@@ -1,4 +1,4 @@
-# Los Angeles County, CA: findings (increment 1 pilot, increment 4 county run)
+# Los Angeles County, CA: findings (increment 1 pilot, increment 4 county run, increment 5 permits run)
 
 Status:
 
@@ -7,7 +7,12 @@ Status:
 - The increment-4 county run `2026-11-12T01-44-04-047Z` built all **2,428,433 parcels**
   of roll 2026 from the verified roll cache (section 11b). The hosted data API serves it
   from its private bucket (section 11c).
-- The preflight passes with the approved permit exceptions and the proven destination,
+- The increment-5 run `2026-11-12T14-00-51-383Z` adds City of Los Angeles building
+  permits (296,909) and their contractor rows (113,642) from local caches of the LADBS
+  open data, joined to the same 2,428,433 parcels, with an effective roof year per parcel
+  (sections 11d and 14). The data API still serves the increment-4 run until it is
+  redeployed on this one.
+- The preflight passes with the increment-5 permit exception and the proven destination,
   and the scope guard passes. Nothing has been published publicly.
 
 Snapshot: 2026-11-11T15:52Z. Machine-readable catalog: `docs/los-angeles-sources.yaml`.
@@ -31,6 +36,19 @@ Snapshot: 2026-11-11T15:52Z. Machine-readable catalog: `docs/los-angeles-sources
   files in the bucket are kept.
 - Not used: the Oracle runtime (Restate, Postgres, Batch), the Query DB, Atlas,
   elephant-cli and IPFS.
+
+## Scope of increment 5
+
+- All of the county's 2,428,433 parcels (roll 2026, no ZIP filter) plus the City of Los
+  Angeles building permits whose work description contains ROOF, and the contractor rows
+  of those permits, from LADBS on data.lacity.org. This is the third permit-gate
+  exception, approved by Mario Ferraro on 2026-11-13 (section 6a); the two earlier ones
+  have expired.
+- Built locally from three caches (the roll, the permits, the contractors); nothing is
+  downloaded again. Permit data exists only for the City of Los Angeles: the other 88
+  jurisdictions stay not yet covered (section 6b).
+- Not used: the Oracle runtime, the Query DB, Atlas, elephant-cli, IPFS, CSLB, BBB and
+  the LADBS inspections dataset (section 14j).
 
 ## 1. Assessor (appraiser) source
 
@@ -103,7 +121,8 @@ distinct `TaxRateArea_CITY` values in roll 2026.
 - **City of Los Angeles**: LADBS publishes permits on data.lacity.org (Socrata, `Crawl-delay: 1`).
   Datasets: issued 2020-present `pi9x-tg5x`, 2010-2019 `dyxf-7hc4`, before 2010 `e67z-kt2n`;
   submitted `gwh9-jnip`, `n3xg-rixm`, `b6ii-mhed`; plus electrical, mechanical and
-  certificate-of-occupancy datasets. **These cover the City of LA only.**
+  certificate-of-occupancy datasets. **These cover the City of LA only.** Increment 5
+  builds the six building-permit datasets and the contractor view `8guu-8f5m` (section 14).
 - **Unincorporated LA County**: EPIC-LA (https://epicla.lacounty.gov/, LA County Public
   Works). It is reachable, but the vendor, history depth and search-by-AIN have not been
   probed.
@@ -128,7 +147,7 @@ distinct `TaxRateArea_CITY` values in roll 2026.
 | ---------------- | ------------------ | ------------------------------------------------------------------------------------------- |
 | catalog_metadata | PASS               | Los Angeles CA, slug los-angeles, FIPS 06037                                                |
 | parcel           | PASS               | tax_roll 2,428,433 vs GIS 2,433,388 (0.20%)                                                 |
-| permit           | APPROVED_EXCEPTION | the county-wide exception of 2026-11-12 (section 6a)                                        |
+| permit           | APPROVED_EXCEPTION | the increment-5 exception of 2026-11-13 (section 6a)                                        |
 | destination      | PASS               | proven from two independent sources: the CloudFormation stack output and the S3 bucket tags |
 | enrichment       | PASS               | no BBB claim                                                                                |
 
@@ -139,12 +158,13 @@ upload time.
 
 The validator's outputs, written by the tool and never edited:
 
-| File (`docs/evidence/`)              | Date       | Overall | Permit             | Destination    |
-| ------------------------------------ | ---------- | ------- | ------------------ | -------------- |
-| `la-preflight-blocked.json`          | 2026-11-11 | BLOCKED | BLOCKED            | NOT_APPLICABLE |
-| `la-preflight-pass.json`             | 2026-11-11 | PASS    | APPROVED_EXCEPTION | NOT_APPLICABLE |
-| `la-preflight-pass-destination.json` | 2026-11-12 | PASS    | APPROVED_EXCEPTION | PASS           |
-| `la-preflight-pass-county.json`      | 2026-11-12 | PASS    | APPROVED_EXCEPTION | PASS           |
+| File (`docs/evidence/`)                 | Date       | Overall | Permit             | Destination    |
+| --------------------------------------- | ---------- | ------- | ------------------ | -------------- |
+| `la-preflight-blocked.json`             | 2026-11-11 | BLOCKED | BLOCKED            | NOT_APPLICABLE |
+| `la-preflight-pass.json`                | 2026-11-11 | PASS    | APPROVED_EXCEPTION | NOT_APPLICABLE |
+| `la-preflight-pass-destination.json`    | 2026-11-12 | PASS    | APPROVED_EXCEPTION | PASS           |
+| `la-preflight-pass-county.json`         | 2026-11-12 | PASS    | APPROVED_EXCEPTION | PASS           |
+| `la-preflight-pass-county-permits.json` | 2026-11-13 | PASS    | APPROVED_EXCEPTION | PASS           |
 
 On 2026-11-11 the permit gate was BLOCKED: 88 of 89 jurisdictions were unclassified
 (unincorporated/EPIC-LA plus 87 cities), and the destination was NOT_APPLICABLE because
@@ -157,64 +177,52 @@ The build runs the validator itself (`src/readiness.ts`). It first checks the va
 file against its sha256 at kit commit 71b8341 and fails on a mismatch. It fails closed
 unless the result is PASS with the permit exception and seed and ingest are allowed. The
 run manifest records the kit commit, the validator's sha256, each gate's status and the
-sha256 of the output (for the county run, the bytes of `la-preflight-pass-county.json`).
+sha256 of the output (for the county run, the bytes of `la-preflight-pass-county.json`;
+for the permits run, the bytes of `la-preflight-pass-county-permits.json`).
 
-### 6a. Approved permit-gate exceptions (Mario Ferraro, 2026-11-11 and 2026-11-12)
+### 6a. Permit-gate exceptions: the current one and the expired ones
 
-`approved_exceptions` in `docs/los-angeles-sources.yaml` holds two permit entries. The
-county-wide one (approved 2026-11-12) comes first, because the validator reports the
-first permit exception:
+`approved_exceptions` in `docs/los-angeles-sources.yaml` holds one permit entry, for
+increment 5 (approved by Mario Ferraro on 2026-11-13):
 
 ```yaml
 approved_exceptions:
   - gate: permit
     reason: >-
-      Increment 4: parcels only, all of Los Angeles County (the 89 jurisdictions: 88
+      Increment 5: all of Los Angeles County's parcels (the 89 jurisdictions: 88
       incorporated cities and the unincorporated areas), no ZIP filter, LA County
-      Assessor roll 2026. No permits are harvested in this increment. The 88
-      jurisdictions without a classified permit source are not yet covered and are
-      listed by name in docs/los-angeles-county-findings.md (section 6b) and in
-      run_manifest.json limitations. Expires when permits are added; the readiness
-      check is then re-run without it.
+      Assessor roll 2026, plus City of Los Angeles building permits and their
+      contractor rows from the LADBS open-data caches (data.lacity.org). The 88
+      jurisdictions without a classified permit source are not yet covered: they stay
+      needs-review and are listed by name in docs/los-angeles-county-findings.md
+      (section 6b) and in run_manifest.json limitations. Expires when those
+      jurisdictions are classified; the readiness check is then re-run without it.
     scope:
       {
-        increment: 4,
-        data: parcels-only,
+        increment: 5,
+        data: parcels-and-permits,
         jurisdiction: all,
         zips: [],
         roll_year: "2026",
+        permit_jurisdictions: [Los Angeles],
       }
-    permits_harvested: false
+    permits_harvested: true
     not_yet_covered_count: 88
-    expires: "Expires when permits are added; the readiness check is then re-run without it."
-    approved_by: "Mario Ferraro, 2026-11-12"
+    expires: "Expires when the 88 jurisdictions are classified; the readiness check is then re-run without it."
+    approved_by: "Mario Ferraro, 2026-11-13"
 ```
 
-The pilot entry (approved 2026-11-11) follows, unchanged:
+The two earlier entries expired on 2026-11-13, when permits were added. They moved,
+unchanged, to `expired_exceptions`, each with `expired: "2026-11-13"` and the reason:
 
-```yaml
-- gate: permit
-  reason: >-
-    Increment 1 only: parcels only, City of Los Angeles, ZIP codes 91405, 91406 and
-    91411, LA County Assessor roll 2026. No permits are harvested in this increment.
-    The 88 jurisdictions without a classified permit source are not yet covered and
-    are listed by name in docs/los-angeles-county-findings.md (section 6b) and in
-    run_manifest.json limitations. Expires when permits are added; the readiness
-    check is then re-run without it. Full-county parcels are outside this scope and
-    need their own approved exception.
-  scope:
-    {
-      increment: 1,
-      data: parcels-only,
-      jurisdiction: Los Angeles,
-      zips: ["91405", "91406", "91411"],
-      roll_year: "2026",
-    }
-  permits_harvested: false
-  not_yet_covered_count: 88
-  expires: "Expires when permits are added; the readiness check is then re-run without it."
-  approved_by: "Mario Ferraro, 2026-11-11"
-```
+- increment 4 (approved 2026-11-12): parcels only, all of Los Angeles County, no ZIP
+  filter, roll 2026, no permits;
+- increment 1 (approved 2026-11-11): parcels only, City of Los Angeles, ZIP codes 91405,
+  91406 and 91411, roll 2026, no permits.
+
+Neither the validator nor the scope guard reads `expired_exceptions`, so
+`config/la-pilot-run.json` and `config/la-county-run.json` are now refused by the scope
+guard. Their runs stay recorded as they were.
 
 How the validator reads it: `_approved()` in the kit's `validate-county-readiness.py`
 matches any `approved_exceptions` item with `gate: permit` and a non-empty `reason`. The
@@ -222,8 +230,8 @@ permit gate then reports `APPROVED_EXCEPTION`, and overall becomes PASS (exit 0)
 the other gates are PASS or NOT_APPLICABLE. The validator **ignores** `scope`, `expires`
 and the other extra keys. It does not enforce scope or expiry, and it would pass a
 preflight of any scope while an entry is present. Scope is enforced by this repo's scope
-guard (section 10); expiry stays procedural: the entries are removed when permits are
-added. Enforcing it automatically would need a kit validator
+guard (section 10); expiry stays procedural: an expired entry moves to
+`expired_exceptions`. Enforcing it automatically would need a kit validator
 change (for example, checking `expires`/`scope` against a run-scope argument). That
 change has not been made.
 
@@ -231,8 +239,8 @@ change has not been made.
 
 Unincorporated Los Angeles County (EPIC-LA), Agoura Hills, Alhambra, Arcadia, Artesia, Avalon, Azusa, Baldwin Park, Bell, Bell Gardens, Bellflower, Beverly Hills, Bradbury, Burbank, Calabasas, Carson, Cerritos, Claremont, Commerce, Compton, Covina, Cudahy, Culver City, Diamond Bar, Downey, Duarte, El Monte, El Segundo, Gardena, Glendale, Glendora, Hawaiian Gardens, Hawthorne, Hermosa Beach, Hidden Hills, Huntington Park, Industry, Inglewood, Irwindale, La Canada Flintridge, La Habra Heights, La Mirada, La Puente, La Verne, Lakewood, Lancaster, Lawndale, Lomita, Long Beach, Lynwood, Malibu, Manhattan Beach, Maywood, Monrovia, Montebello, Monterey Park, Norwalk, Palmdale, Palos Verdes Estates, Paramount, Pasadena, Pico Rivera, Pomona, Rancho Palos Verdes, Redondo Beach, Rolling Hills, Rolling Hills Estates, Rosemead, San Dimas, San Fernando, San Gabriel, San Marino, Santa Clarita, Santa Fe Springs, Santa Monica, Sierra Madre, Signal Hill, South El Monte, South Gate, South Pasadena, Temple City, Torrance, Vernon, Walnut, West Covina, West Hollywood, Westlake Village, Whittier.
 
-The only classified jurisdiction is the City of Los Angeles (LADBS on data.lacity.org),
-and its permits are not harvested in increment 1 either.
+The only classified jurisdiction is the City of Los Angeles (LADBS on data.lacity.org).
+Its permits are built from increment 5 on (section 14); these 88 have none.
 
 ## 7. Publication blockers
 
@@ -271,24 +279,24 @@ Oracle runtime path.
 
 - What it is: `src/scope-guard.ts`. It runs before any seed or download, and
   `fetch-slice.ts` and `build-outputs.ts` call it first.
-- What it checks: it compares the run config with every approved permit exception in
-  `docs/los-angeles-sources.yaml`, and passes only when the run is inside one of them:
-  jurisdiction, ZIP set, roll year and `permits_harvested` all match. Otherwise it fails
-  with exit 1 and each exception's mismatches.
-  - `config/la-pilot-run.json` (Los Angeles, ZIP 91405/91406/91411, roll 2026, no
-    permits) passes only under the pilot entry.
-  - `config/la-county-run.json` (jurisdiction `all`, no ZIPs, roll 2026, no permits)
-    passes only under the county entry. An exception without ZIPs allows only a run
-    without a ZIP filter, and the reverse.
+- What it checks: it compares the run config with every entry in `approved_exceptions`
+  in `docs/los-angeles-sources.yaml`, and passes only when the run is inside one of
+  them: jurisdiction, ZIP set, roll year, `permits_harvested` and the set of permit
+  jurisdictions all match. Otherwise it fails with exit 1 and each exception's
+  mismatches. An exception must name its permit jurisdictions exactly when it harvests
+  permits.
+  - `config/la-county-permits-run.json` (jurisdiction `all`, no ZIPs, roll 2026,
+    permits for Los Angeles) passes under the increment-5 entry.
+  - `config/la-pilot-run.json` and `config/la-county-run.json` (no permits) are refused:
+    their entries have expired (section 6a).
   - It also fails when no permit exception is present or a scope is incomplete.
-- How to run it: `node src/scope-guard.ts [run-config.json] [sources.yaml]`.
-  Tests (`test/scope-guard.test.ts`): the county config passes only under the county
-  entry, the pilot config only under its own; a county run with only the pilot entry,
-  another roll year, permits turned on, another ZIP set, or a county run with a ZIP
-  filter all fail.
-- The guard does **not** modify the kit's `validate-county-readiness.py`. That checker
-  still ignores `scope` and `expires`. Expiry stays manual: the exceptions expire when
-  permits are added; the readiness check is then re-run without them.
+- How to run it: `node src/scope-guard.ts [run-config.json] [sources.yaml]` (default:
+  the permits config). Tests (`test/scope-guard.test.ts`): the permits config passes;
+  the two earlier configs are refused; other permit jurisdictions, none, permits off, a
+  ZIP filter, one city's parcels or another roll year all fail; expired entries are
+  never read.
+- The guard does **not** modify the kit's `validate-county-readiness.py`, which still
+  ignores `scope` and `expires`.
 
 ## 11. Run results
 
@@ -343,7 +351,7 @@ Small data notes:
   no outside check was made.
 
 - `city_name` is the situs city exactly as the source gives it: mostly `LOS ANGELES`,
-  but also neighbourhood names (VAN NUYS, SHERMAN OAKS, LAKE BALBOA, NORTH HOLLYWOOD)
+  but also neighborhood names (VAN NUYS, SHERMAN OAKS, LAKE BALBOA, NORTH HOLLYWOOD)
   and one `VAN NUYS,` artifact.
 - Jurisdiction is decided by `tax_rate_area_city`, which is `LOS ANGELES` for every row.
 
@@ -421,10 +429,46 @@ redeployed on this run.
   years. The 10-mile points response held 25,000 IDs, marked truncated, with the same
   last parcel as the local query.
 
-## 12. Publishable table and lexicon names
+### 11d. Permits run (run 2026-11-12T14-00-51-383Z)
 
-File: `data/out/<run_id>/los-angeles_property_roll2026.parquet` for the county run
-(`los-angeles_property_roll2026_slice.parquet` for the pilot), one row per AIN.
+Inputs, all local caches, read only: the roll cache of the county run (`generated_at`
+2026-11-12T01:44:04.047Z), the LADBS permit cache (2026-11-12T13:14:56.570Z) and the LADBS
+contractor cache (2026-11-12T14:00:51.383Z). The run ID is the latest of the three times;
+the reference date for every derived duration is the permit cache's date, 2026-11-12
+(section 14k).
+
+| Measure                     | Value                                                                                                                                  |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Parcels                     | 2,428,433 (delta against the county run: 0 added, 0 removed)                                                                           |
+| Permits staged / in Parquet | 296,909 / 296,909 (issued sets 287,817, submitted sets 9,092)                                                                          |
+| Permit-parcel links         | 607,702                                                                                                                                |
+| Contractor rows             | 113,661 in the cache, 19 exact duplicates staged once, 113,642 in Parquet                                                              |
+| Readiness                   | PASS, permit gate APPROVED_EXCEPTION; output sha256 = `la-preflight-pass-county-permits.json`                                          |
+| Property Parquet            | `los-angeles_property_roll2026.parquet`, 71,816,364 B, sha256 `3f949fb2d1d910033fff6aa2cc2875e87778f4a165c9ddb5390884edd278bad8`       |
+| Permits Parquet             | `los-angeles_ladbs_permits.parquet`, 6,314,075 B, sha256 `b70c417a9123a352f8914e1a259cc2f2ad878da7eb0ce932eefd89c569c1db12`            |
+| Permit-parcel Parquet       | `los-angeles_ladbs_permit_parcels.parquet`, 2,643,361 B, sha256 `8b024a4c8f9fe533803cc65d12be066c6969c30d35f7649cebdada7bf741c208`     |
+| Contractor Parquet          | `los-angeles_ladbs_permit_contractors.parquet`, 1,366,649 B, sha256 `13d3d22a111d46b002274c8561b7211f433df5aec0d8a43c332d80146c3b178b` |
+| Seed CSV                    | 2,428,433 rows, sha256 `b4c4be3d4c59c7cfd1501c2884edf62e89d49503f7fde176174ea39bd2520063` (byte-identical to the county run's seed)    |
+| Build (local VM, 4 vCPU)    | 2 min 8 s wall, peak RSS 2.44 GB                                                                                                       |
+| Determinism                 | three dry runs and the recorded build gave byte-identical Parquet files and seed                                                       |
+
+**Radius counts** from (34.1990, -118.4870), older than 15 years, on the year built
+(the rule of the county run) and on the effective roof year (section 14g):
+
+| Radius   | Year built (county run) | Effective roof year | Dropped by a permit | Added by a permit |
+| -------- | ----------------------- | ------------------- | ------------------- | ----------------- |
+| 1 mile   | 5,114                   | 4,183               | 934                 | 3                 |
+| 5 miles  | 143,389                 | 113,632             | 29,791              | 34                |
+| 10 miles | 373,785                 | 309,117             | 64,802              | 134               |
+
+"Added by a permit" are parcels without a year built that get a permit year before 2011.
+The data API applies the effective roof year once it is redeployed on this run.
+
+## 12. Publishable tables and lexicon names
+
+File: `data/out/<run_id>/los-angeles_property_roll2026.parquet` for the county and
+permits runs (`los-angeles_property_roll2026_slice.parquet` for the pilot), one row per
+AIN. The permits run adds three permit tables (below).
 Names come from the bundled kit catalog (`use-neutral-lexicon` model-c), not from the
 live Elephant lexicon or MCP, which were not available.
 
@@ -449,6 +493,21 @@ live Elephant lexicon or MCP, which were not available.
 - `source_http_method`, `source_retrieved_at`, `source_page_sha256`, `source_page_file`,
   `source_name`
 
+**Permit tables (permits run).** Lexicon names from the same catalog where one fits:
+
+| Table (file)                                                       | Lexicon names                                                                                                                                                                   | Not lexicon fields                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| permit (`los-angeles_ladbs_permits.parquet`)                       | `permit_number`, `application_received_date`, `permit_issue_date` (property_improvement); `unnormalized_address`, `postal_code` (address)                                       | `source_apn`, `source_permit_type`, `source_permit_sub_type`, `source_business_unit`, `source_status_desc` (raw LADBS values, not lexicon enum values); `status_date`, `permit_status_class`, `open_since`, `open_days`, `roof_r`, `roof_only`, `roofing_work`, `roof_coating_only`, `join_method`, `unjoined_cause`, `source_dataset`, `source_dataset_kind`, the rule versions and the `source_*` provenance columns |
+| permit_parcel (`los-angeles_ladbs_permit_parcels.parquet`)         | `permit_number`, `parcel_identifier`                                                                                                                                            | `join_method`, `building_level`, `join_rule_version`                                                                                                                                                                                                                                                                                                                                                                   |
+| permit_contractor (`los-angeles_ladbs_permit_contractors.parquet`) | `permit_number`, `permit_issue_date`, `license_identifier`, `license_expiration_date` (license); `city_name`, `state_code` (address); `is_owner_builder` (property_improvement) | `contractors_business_name` (the source name; the lexicon's company `name` would be ambiguous in a wide table), `source_license_type`, `license_class`, `license_class_name`, `license_class_note`, `license_class_rule_version` and the provenance columns                                                                                                                                                            |
+
+The property table adds `permit_data_available`, `effective_roof_year`,
+`roof_year_permit_number` and `roof_year_rule_version`, none of them lexicon fields.
+`roof_age_basis` stays the one basis column: the year-built PROXY label, or a PERMIT label
+where a permit sets the roof year (section 14g). The lexicon's permit entity is
+`property_improvement`; its `improvement_status` and `improvement_type` enums are not
+mapped from the LADBS values, which are kept raw.
+
 **Deliberately not used:**
 
 - `sales_history.ownership_transfer_date`, because the recording date is not proven to
@@ -457,20 +516,27 @@ live Elephant lexicon or MCP, which were not available.
   use codes has been made yet.
 
 **Personal data:** the build fails if any owner, mail, contact, phone or email column
-appears. The source has none, so there are no person entities and no private owner file.
+appears in any published table, or if the permit work description does. The roll has no
+owner fields, so there are no person entities and no private owner file. Contractor
+business names and license numbers are published as LADBS publishes them (section 14h).
 
 ## 13. Files and rebuild steps (data is gitignored and never committed)
 
 Code and config (committed):
 
 - `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml` (pnpm settings), `tsconfig.json`
-- `config/la-pilot-run.json`, `config/la-county-run.json`
+- `config/la-pilot-run.json`, `config/la-county-run.json` (both now refused by the scope
+  guard), `config/la-county-permits-run.json`
 - `scripts/fetch-roll.mjs`: downloads the whole roll into a cache (gzipped raw pages,
   `manifest.jsonl`, `summary.json`)
 - `src/run-config.ts`, `src/scope-guard.ts`, `src/readiness.ts`, `src/fetch-slice.ts`,
   `src/raw-fields.ts`, `src/stage-raw.ts`, `src/stage-cache.ts`, `src/property-sql.ts`,
   `src/build-outputs.ts`, `src/run-history.ts`, `src/manifest-files.ts`,
   `src/query-radius.ts`
+- Permits: `src/permit-fields.ts`, `src/socrata-cache.ts`, `src/stage-permits.ts`,
+  `src/stage-contractors.ts`, `src/roof-flags.ts`, `src/address-normalize.ts`,
+  `src/permit-join.ts`, `src/license-classes.ts`, `src/permit-status.ts`,
+  `src/permit-sql.ts`
 - `test/*.test.ts` and the synthetic fixtures under `test/fixtures/`
 
 Run metadata (no rows, no addresses):
@@ -481,6 +547,8 @@ Run metadata (no rows, no addresses):
   sha256, the download script's sha256 (the committed file and, separately, the copy that
   ran), and each page's request URL and body sha256, with paths relative to the cache.
 - `runs/run_history.jsonl`: one line per run, with the delta against the previous run.
+  A permits run's line also lists the three permit Parquet files with their sha256
+  (`permit_files`); earlier lines have none.
   Rebuilding a recorded run with the same Parquet adds no line; the same run ID with a
   different Parquet fails.
 
@@ -511,6 +579,18 @@ node src/query-radius.ts --parquet data/out/<run_id>/los-angeles_property_roll20
 Upload: the Parquet, the run manifest and the run history go to the data API's private
 bucket under `runs/<run_id>/`. The bucket is read from the OracleLaDataApi stack output
 at upload time; no bucket name is kept in the repository.
+
+Rebuild the permits run (the three caches sit outside the repository; the LADBS caches
+were written by their own download scripts, and the run manifest records their sha256):
+
+```
+node src/scope-guard.ts config/la-county-permits-run.json
+KIT_DIR=<kit checkout at 71b8341> node src/build-outputs.ts <roll-cache-dir> config/la-county-permits-run.json \
+  --permit-cache <ladbs-permits-cache-dir> --contractor-cache <ladbs-contractors-cache-dir> [--dry-run]
+```
+
+`--dry-run` builds everything under `data/work/<run_id>/dry-run/` and writes nothing under
+`runs/`, `data/out/` or `data/seeds/`.
 
 Rebuild the pilot (history):
 
@@ -547,3 +627,228 @@ install scripts (`pnpm-workspace.yaml`). The manifest of run 2026-11-11T16-17-38
 
 Tests run on Vitest (kit testing guideline), with `vitest.config.ts` at the repo root. The only runtime dependencies are
 `@duckdb/node-api` and `yaml`.
+
+## 14. City of Los Angeles permits and contractors (increment 5)
+
+### 14a. Sources, terms and attribution
+
+| Source                                                                                                         | Rows (cache)              | Terms                                                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| LADBS building permits, issued: `pi9x-tg5x` (2020-present), `dyxf-7hc4` (2010-2019), `e67z-kt2n` (before 2010) | 94,073 / 86,704 / 107,040 | The dataset metadata states no license; the data.lacity.org terms of use of May 2014 (https://data.lacity.org/terms-of-use) apply. The metadata's attribution field reads "TSB". |
+| LADBS building permits, submitted: `gwh9-jnip`, `n3xg-rixm`, `b6ii-mhed`                                       | 3,484 / 3,431 / 2,177     | as above                                                                                                                                                                         |
+| LADBS "roofing permits" contractor view `8guu-8f5m`                                                            | 113,661                   | Creative Commons Attribution 4.0 International (CC BY 4.0), attribution LADBS                                                                                                    |
+
+- Attribution: **LADBS** (City of Los Angeles Department of Building and Safety), the
+  owning department, for all seven sources.
+- The permit cache holds the rows whose work description contains ROOF (the submitted
+  sets also without an issue date), as SoQL pages; the contractor cache holds the whole
+  view, with exactly its eight columns.
+- Changes made to the contractor data (CC BY 4.0): 19 exact duplicate rows staged once;
+  the license class normalized to the CSLB form with class columns added (section 14h);
+  date-times converted to dates; city and state upper-cased; owner-builder and N/A rows given
+  no license number. Business names and license numbers are otherwise as published.
+
+### 14b. Staging and verification
+
+`src/stage-permits.ts` and `src/stage-contractors.ts` check every cached page against its
+cache manifest before staging a row: the plain page name, the gzip and JSON sha256 and
+sizes, the row count, the request URL (the dataset's resource with the recorded query),
+the query's filter and selected columns, contiguous paging, and the totals against the
+manifest's expected and fetched counts and the cache summary. Every permit number appears
+once. The staged rows keep only the listed fields (`src/permit-fields.ts`) plus their
+provenance; coordinates, PIN, use codes, valuation and the other unused permit fields are
+dropped. The derived roofing flag file in the permit cache is never read. The run manifest
+records each cache file's sha256 and each page's request URL and digests, never the
+cache files' contents.
+
+### 14c. Work descriptions are not served
+
+The permit work description (`work_desc`) is free text that holds people's names. A
+counts-only scan of all 296,909 descriptions, printing no text, found:
+
+- 100 rows with an addressing word (ATTN, Mr/Mrs/Ms, OWNER:, NAME:, CALL) followed
+  directly by a common given name, 95 of them "ATTN <name>": `gwh9-jnip` 82, `pi9x-tg5x`
+  11, `dyxf-7hc4` 3, `e67z-kt2n` 2, `n3xg-rixm` 2;
+- 211 rows with an email address or a phone number with an area code (6 email, 205
+  phone);
+- 404 rows with a common given name anywhere as a whole word (some are street or place
+  names).
+
+So the description is read only to set the roofing flags (section 14e) and is in no
+published table; a test checks every published table's columns and contents. The staged
+copy stays in the ignored `data/work/` folder.
+
+### 14d. Permit-to-parcel join (`src/permit-join.ts`, `src/address-normalize.ts`)
+
+- **Direct:** the permit's APN has 10 digits and equals a parcel's AIN.
+- **Address**, for direct misses only, on a full match: the house number (leading
+  integer), the normalized street name and the 5-digit ZIP all equal; the pre-direction
+  and the fraction (e.g. 1/2) must agree where both carry one. When the APN starts with 7
+  digits (map book and page), candidates are narrowed to that book and page; this never
+  replaces the street match. Street names: upper case, punctuation and unit designators
+  removed, a fixed suffix table, text after the street's suffix cut.
+- **Accepted:** exactly one parcel (`address`), or the units of one condo building, all
+  at one address with a condominium use code (UseCode ending in C or E;
+  `condo-building`). A condo permit attaches to every unit, marked `building_level`, and
+  is counted once. Condo buildings appear unit by unit; the roof decision belongs to the
+  owners' association.
+- **No coordinate matching:** the nearest parcel center can be a neighbor's parcel.
+  Anything else stays unjoined, with its cause; unjoined permits' parcels keep the
+  year-built proxy.
+
+| Stage          | All permits (296,909) | Share  | Joined so far | Roofing work (234,054) | Share  | Joined so far |
+| -------------- | --------------------- | ------ | ------------- | ---------------------- | ------ | ------------- |
+| direct         | 272,181               | 91.67% | 91.67%        | 220,139                | 94.05% | 94.05%        |
+| address        | 7,705                 | 2.60%  | 94.27%        | 4,018                  | 1.72%  | 95.77%        |
+| condo-building | 8,941                 | 3.01%  | 97.28%        | 6,559                  | 2.80%  | 98.57%        |
+| unjoined       | 8,082                 | 2.72%  |               | 3,338                  | 1.43%  |               |
+
+Condo buildings: 8,941 permits make 327,816 unit links to 67,892 distinct units.
+
+Unjoined by cause (APN case / address case):
+
+| APN case        | no-address-match | address-ambiguous | zip-or-direction-disagrees | book-page-disagrees | no-usable-address | Total |
+| --------------- | ---------------- | ----------------- | -------------------------- | ------------------- | ----------------- | ----- |
+| apn-not-in-roll | 3,586            | 512               | 513                        | 456                 | 380               | 5,447 |
+| apn-masked      | 646              | 510               | 503                        | 320                 | 303               | 2,282 |
+| apn-missing     | 59               | 9                 | 10                         | 0                   | 260               | 338   |
+| apn-malformed   | 4                | 0                 | 2                          | 3                   | 6                 | 15    |
+| Total           | 4,295            | 1,031             | 1,028                      | 779                 | 949               | 8,082 |
+
+Of the no-address-match permits, most have their street in the same ZIP but no parcel
+with that house number (renumbered or split lots).
+
+**Permits on parcels outside the City of Los Angeles:** 60 permits join parcels whose
+tax-rate-area city is not Los Angeles: direct 55, address 4, condo-building 1. They are
+kept and counted (border, annexation or APN-typo cases).
+
+### 14e. Roofing work (`src/roof-flags.ts`, rule version roof-flags-4)
+
+The cache's own flags matched substrings: ROOFING inside SOUNDPROOFING, "RE ROOF" inside
+ENTIRE ROOF, and every Express Permit. The build recomputes them:
+
+- **Words:** a word is a run of the letters A-Z; underscore, digits and every other
+  character separate words, and a word start is the start of the text or a non-letter.
+- **Re-roof word:** a word starting with REROOF or RE-ROOF (REROOFING, REROOFWITH,
+  REROOF99SQRS), or the two words RE ROOF(S/ED/ING). Letters before it (BATHREROOF,
+  GRE-ROOF) make it no word start.
+- **roof_r:** a re-roof word, ROOF COVER(S/ING/INGS), ROOFING, ROOF TILE(S), or COATING
+  TO AN EXISTING ROOF; or ENTIRE ROOF(S), or ROOF SYSTEM (letters may follow SYSTEM), when
+  the description also holds a word starting with REPLAC, REFRAM, REBUIL, RECONSTRUCT
+  (each with or without a hyphen after RE), SHEATH or SHEATING, or the word NEW.
+- **roof_only:** the cache's two start patterns ("RE-ROOF WITH CLASS A OR B", "REROOF
+  WITH <n> SQRS"), or an Express Permit with a re-roof word or the word ROOF(S/ED/ING);
+  ROOFTOP and ROOF TOP are not a roof word.
+- **roofing_work** = roof_r or roof_only. SOUNDPROOF, WATERPROOF, FIREPROOF and
+  DAMPPROOF (and their -ING forms) are never roofing.
+
+| Group          | This run | Cache flags |
+| -------------- | -------- | ----------- |
+| roof_r only    | 10,767   | 13,824      |
+| roof_only only | 20,740   | 21,489      |
+| both           | 202,547  | 206,173     |
+| neither        | 62,855   | 55,423      |
+
+Roofing work: 234,054 permits (78.83%). Against the cache's flags, 7,493 permits moved to
+"neither" (SOUNDPROOF 5,141; WATERPROOF 982; a cache term (ROOFING, RE ROOF, ROOF COVER, ...) only inside a
+longer word 566; Express Permits without a roof word 319; FIREPROOF 306; RESTRUCTURE, RECONFIGURE or
+RESTORE ROOF 115; ENTIRE ROOF without a qualifying word 45; Express Permits with only
+ROOFTOP 19) and 61 moved to roofing work.
+
+**Limitations:**
+
+- Phrases left "neither" (rows whose text holds the phrase): ENTIRE ROOF 46 (one of them
+  only as ENTIRE ROOFTOP or another longer word); ROOF SYSTEM 92, of which 8 hold it
+  only as the end of WATERPROOF SYSTEM (3 of these also hold a replacement word, but
+  WATERPROOF is not a roof word, so they stay "neither"); RESTRUCTURE ROOF 92; RECONFIGURE ROOF 18;
+  RESTORE ROOF 10.
+- Note: 38 permits are roofing work through ENTIRE ROOF or ROOF SYSTEM with the word NEW
+  alone (no replacement, reframing or rebuilding word).
+- Partial roof work described without a re-roof or roofing word (for example "replace
+  roof over kitchen", "partial roof replacement", underlayment) is not counted: roughly
+  1 in 10 "neither" permits, estimated from a seeded sample of 40.
+- Partial repairs that do use a roofing word stay in roofing work.
+- Coating only: 574 permits are roofing work only through COATING TO AN EXISTING ROOF.
+  They stay in the permit table, but never set a roof year (368 of them are finaled).
+
+### 14f. Status classes and open duration (`src/permit-status.ts`)
+
+Every raw status maps to one class; an unknown status would be `unmapped` and counted.
+
+| Class            | Permits | Statuses                                                                                                                    |
+| ---------------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
+| open-issued      | 31,975  | Issued, Re-Activate Permit, Permit Extended, Insp Scheduled, Pre-Insp Required/Completed, Intent to Revoke                  |
+| open-application | 6,687   | plan check and application stages (PC ..., Corrections Issued, Verifications in Progress, Submitted, Fees Due, ...)         |
+| closed           | 255,747 | Permit Finaled, Permit Expired, Permit Closed, CofO/CofC Issued, CofO Corrected/Superseded, OK for CofC, Refund in Progress |
+| unclear          | 2,500   | Quality Review Completed, CofO in Progress: neither open nor closed                                                         |
+| unmapped         | 0       |                                                                                                                             |
+
+- `open_since` is the issue date for open-issued and the submitted date for
+  open-application; `open_days` counts from it to the reference date, never the build
+  date. It is missing for 10 open-issued and 20 open-application permits (no such date).
+- Only open-issued counts as open for long-open. The data API's long-open filter takes a
+  minimum open duration in days, by default 1,826 days (5 × 365.25, rounded), adjustable,
+  and an optional maximum, unset by default.
+
+### 14g. Effective roof year
+
+- Per parcel: the later of the year built and the year of the status date of the latest
+  roofing permit with status Permit Finaled linked to it (building-level links count for
+  every unit). A permit that is roofing work only through the coating phrase never
+  counts. A qualifying permit dated in a year before the year built is ignored and
+  counted; so is one dated after the reference date (none in this run).
+- `roof_age_basis` says which: the year-built PROXY label, or the PERMIT label;
+  `roof_year_permit_number` names the permit.
+
+| Basis                                      | Parcels   |
+| ------------------------------------------ | --------- |
+| permit                                     | 189,716   |
+| year built (PROXY)                         | 2,017,258 |
+| none (no year built, no qualifying permit) | 221,459   |
+
+- 189,668 of the permit-based parcels are in the City of Los Angeles (23.53% of its
+  805,901 parcels); 48 are outside it.
+- 1,371 parcels without a year built get a roof year from a permit.
+- Ignored qualifying permits dated in a year before the year built: 1,350, by join
+  method: direct 1,124 (0.41% of 272,181 direct joins), address 203 (2.63% of 7,705),
+  condo-building 23 (0.26% of 8,941).
+
+### 14h. Contractor rows and license classes (`src/license-classes.ts`)
+
+- 113,642 rows for 113,435 permits; 89,022 of those permits are in the permit table. The
+  view has rows only for permits issued 2013-01-02 to 2023-05-19.
+- The license class is normalized to the CSLB form: C plus one or two digits, or the
+  digits alone, become C-n; D plus two digits become the limited specialty C-61/D-nn
+  (D-51 Waterproofing and Weatherproofing, D-59 Hydroseed Spraying); A and B stay; ASB
+  and HAZ are certifications, not classes. NA is an owner-builder placeholder (11,796
+  rows, no license number, `is_owner_builder` true); N/A and empty values have no class.
+  Values not in the table are `unmapped`: C93 and 2B, one row each.
+- 11,825 rows have no license number (owner-builder and N/A rows).
+
+### 14i. Permit coverage
+
+`permit_data_available` is true for the 805,901 parcels (33.19%) whose tax-rate-area city
+is the City of Los Angeles, and false for the other 1,622,532, which have no permit data
+(section 6b). 279,900 parcels have at least one linked permit.
+
+### 14j. Inspections dataset: considered, not ingested
+
+The LADBS inspections dataset (`9w5z-rg2h`, CC0, refreshed weekly) records final
+inspections for only about a third of the roofing permits; the permit status is the
+more complete signal, so it is not ingested.
+
+A one-off sample check compared the status date of "Permit Finaled" permits with their
+last final inspection, for 2,000 sampled permits: 1,519 are finaled in the cache; 877 of
+them have no final inspection in the dataset; 642 have both dates. Of those 642, the
+status date equals the last final inspection for 288, is 1-7 days later for 348, 8-30
+days later for 1, more than 30 days later for 2, and 1-7 days earlier for 3 (median +1
+day). So 636 of 642 (99.1%) fall 0-7 days after the final inspection: the status date
+behaves as the finalization date. This is a sample check, not a confirmation.
+
+### 14k. Run ID and reference date
+
+- The run ID is the latest `generated_at` of the three caches (the contractor cache's,
+  2026-11-12T14:00:51.383Z), with ":" and "." replaced: `2026-11-12T14-00-51-383Z`.
+- The reference date for every derived duration (open days, the 10-year recording proxy,
+  the roof-year cut-off) is the permit cache's `generated_at` date, 2026-11-12, never the
+  build date. The same caches and code give byte-identical files.
