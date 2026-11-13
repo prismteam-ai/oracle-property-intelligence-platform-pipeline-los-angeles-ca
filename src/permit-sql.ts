@@ -23,7 +23,7 @@ import type { DuckDBConnection } from "@duckdb/node-api";
 import {
   createLicenseClassTable,
   LICENSE_CLASS_RULE_VERSION,
-} from "./licence-classes.ts";
+} from "./license-classes.ts";
 import { joinPermits } from "./permit-join.ts";
 import {
   FINALED_STATUS,

@@ -113,7 +113,7 @@ distinct `TaxRateArea_CITY` values in roll 2026.
 
 ## 5. Later sources (not in increment 1)
 
-- CSLB (Contractors State License Board) licence data is the official contractor licence
+- CSLB (Contractors State License Board) license data is the official contractor license
   identity. It is the California equivalent of Florida DBPR.
 - California Secretary of State (bizfile Online) is the official business entity
   registry, the California equivalent of Florida Sunbiz.

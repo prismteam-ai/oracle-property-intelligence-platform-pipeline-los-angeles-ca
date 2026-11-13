@@ -29,14 +29,14 @@
         "b6ii-mhed"
       ],
       "terms_of_use": "https://data.lacity.org/terms-of-use",
-      "licence": "none stated in the dataset metadata; the portal's terms of use (May 2014) apply",
+      "license": "none stated in the dataset metadata; the portal's terms of use (May 2014) apply",
       "attribution": "LADBS (City of Los Angeles Department of Building and Safety); the datasets' attribution field reads \"TSB\""
     },
     "contractors": {
       "name": "LADBS roofing permits, contractor view (data.lacity.org 8guu-8f5m)",
       "datasets": ["8guu-8f5m"],
       "terms_of_use": "https://data.lacity.org/terms-of-use",
-      "licence": "CC BY 4.0",
+      "license": "CC BY 4.0",
       "attribution": "LADBS"
     }
   },

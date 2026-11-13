@@ -15,7 +15,7 @@ export interface PermitSource {
   /** data.lacity.org dataset or view IDs the cache must hold, exactly. */
   datasets: string[];
   terms_of_use: string;
-  licence: string;
+  license: string;
   attribution: string;
 }
 

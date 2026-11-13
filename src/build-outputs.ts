@@ -470,10 +470,10 @@ const permitLimitations = (ps: PermitBuildStats): string[] => {
     `Effective roof year: the year of the status date of the latest roofing permit with status Permit Finaled linked to the parcel (building-level links count for every unit); otherwise the year built, a PROXY (roof_age_basis says which). The status date is taken as the final date: a sample check against final inspections supports it, it is not a confirmation. Permits dated after the reference date or in a year before the year built are ignored (permits.roof_permits_ignored).`,
     `Status classes: open-issued (the only class counted as open for long-open), open-application (details only), closed, and unclear (Quality Review Completed, CofO in Progress: neither open nor closed). Unknown statuses are "unmapped" and counted. open_since is the issue date (open-issued) or the submitted date (open-application); open_days counts to the reference date ${referenceDate}, never the build date.`,
     "Permit work descriptions are not served: the free text can hold people's names. The build reads them only to set the roofing flags.",
-    `Contractor rows: business names and licence numbers as LADBS publishes them; the licence class is normalized to the CSLB form, and unknown values are unmapped and counted; owner-builder and N/A rows carry no licence number. Contractor rows exist only for permits issued ${contractorWindow.first} to ${contractorWindow.last}.`,
+    `Contractor rows: business names and license numbers as LADBS publishes them; the license class is normalized to the CSLB form, and unknown values are unmapped and counted; owner-builder and N/A rows carry no license number. Contractor rows exist only for permits issued ${contractorWindow.first} to ${contractorWindow.last}.`,
     `${outside} permits join parcels outside the City of Los Angeles (by method in permits.joined_outside_permit_jurisdiction): border, annexation or APN-typo cases, kept and counted. Parcels outside the City of Los Angeles have no permit data (permit_data_available false).`,
     "The LADBS inspections dataset (9w5z-rg2h) is not used: it records final inspections for only part of the roofing permits, and the permit status is the more complete signal.",
-    `Permit data terms: the building-permit datasets state no licence (${cfg.permit_sources!.permits.terms_of_use}, May 2014); the contractor view is ${cfg.permit_sources!.contractors.licence}. Attribution: ${cfg.permit_sources!.permits.attribution}.`,
+    `Permit data terms: the building-permit datasets state no license (${cfg.permit_sources!.permits.terms_of_use}, May 2014); the contractor view is ${cfg.permit_sources!.contractors.license}. Attribution: ${cfg.permit_sources!.permits.attribution}.`,
   ];
 };
 
@@ -591,7 +591,7 @@ const manifest = {
               (d) => `https://data.lacity.org/resource/${d}.json`,
             ),
             terms_of_use: src.terms_of_use,
-            licence: src.licence,
+            license: src.license,
             attribution: src.attribution,
             access:
               "anonymous SoQL pages, cached locally; request URLs per page in permit_caches",
@@ -748,7 +748,7 @@ const manifest = {
     "Lexicon names are taken from the bundled kit catalog (use-neutral-lexicon model-c) without the live Elephant lexicon/MCP; source_* columns, roof_age_basis, coordinate_basis, *_proxy, last_recording_date, tax_rate_area_city, roll_year and assessor_id_formatted are not lexicon fields; property_usage_type/property_type enums are not mapped (raw use code kept).",
     ...(withPermits
       ? [
-          "Permit tables: permit_number, application_received_date, permit_issue_date, unnormalized_address, postal_code, parcel_identifier, license_identifier, license_expiration_date, city_name, state_code and is_owner_builder follow the bundled lexicon; raw LADBS values keep source_* names (they are not lexicon enum values); status_date, the status class, open_since/open_days, the roofing flags, join columns, licence class columns, contractors_business_name, permit_data_available, effective_roof_year, roof_year_permit_number and the rule versions are not lexicon fields.",
+          "Permit tables: permit_number, application_received_date, permit_issue_date, unnormalized_address, postal_code, parcel_identifier, license_identifier, license_expiration_date, city_name, state_code and is_owner_builder follow the bundled lexicon; raw LADBS values keep source_* names (they are not lexicon enum values); status_date, the status class, open_since/open_days, the roofing flags, join columns, license class columns, contractors_business_name, permit_data_available, effective_roof_year, roof_year_permit_number and the rule versions are not lexicon fields.",
         ]
       : []),
     countyWide

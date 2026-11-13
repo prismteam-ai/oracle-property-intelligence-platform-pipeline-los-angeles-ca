@@ -4,7 +4,7 @@ import {
   classifyLicense,
   createLicenseClassTable,
   LICENSE_CLASS_NAMES,
-} from "../src/licence-classes.ts";
+} from "../src/license-classes.ts";
 
 // Every raw license_type value in the contractor cache's summary (52 values and null), with its
 // expected class and note.

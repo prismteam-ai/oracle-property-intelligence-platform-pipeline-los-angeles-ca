@@ -1,5 +1,5 @@
 /**
- * Licence classes for LADBS contractor rows (license_type, view 8guu-8f5m), as California CSLB
+ * License classes for LADBS contractor rows (license_type, view 8guu-8f5m), as California CSLB
  * classifications. Rules, on upper(trim(raw)):
  *  - "NA": no class; an owner-builder placeholder (is_owner_builder true);
  *  - "N/A", blank or null: no class, no note;

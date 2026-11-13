@@ -660,9 +660,9 @@ permits:
       }
 later_sources:
   - {
-      name: CSLB contractor licence data,
+      name: CSLB contractor license data,
       url: "https://www.cslb.ca.gov/",
-      role: official contractor licence identity (CA equivalent of FL DBPR),
+      role: official contractor license identity (CA equivalent of FL DBPR),
       status: not-started,
     }
   - {

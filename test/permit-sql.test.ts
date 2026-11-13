@@ -269,7 +269,7 @@ test("permit rows: dates, ZIP, status class, open duration, join, provenance", a
   });
 });
 
-test("contractor rows: classes, owner-builder and N/A without a licence number", async () => {
+test("contractor rows: classes, owner-builder and N/A without a license number", async () => {
   const r = await rows(`
     select permit_number, contractors_business_name, license_identifier, source_license_type, license_class,
       license_class_note, is_owner_builder, license_expiration_date::varchar exp, city_name, state_code
