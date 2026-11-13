@@ -33,7 +33,7 @@ import {
   permitStatusClassSql,
 } from "./permit-status.ts";
 import { ROOF_AGE_BASIS, sqlLiteral as lit } from "./property-sql.ts";
-import { ROOF_FLAG_GROUPS_SQL, roofFlagsTableSql } from "./roof-flags.ts";
+import { createRoofFlagsTable, ROOF_FLAG_GROUPS_SQL } from "./roof-flags.ts";
 
 export const ROOF_YEAR_RULE_VERSION = "roof-year-1";
 /** The tables a build publishes after buildPermitTables. */
@@ -212,7 +212,7 @@ export async function buildPermitTables(
       Object.entries((await q(sql))[0]!).map(([k, v]) => [k, Number(v)]),
     );
 
-  await c.run(roofFlagsTableSql("permit_raw", "_permit_flagged"));
+  await createRoofFlagsTable(c, "permit_raw", "_permit_flagged");
   await joinPermits(c, "permit_raw", "property");
   await c.run(permitTableSql(o));
   await createLicenseClassTable(

@@ -5,7 +5,8 @@ import {
   neitherSampleSql,
   ROOF_FLAG_GROUPS_SQL,
   ROOF_FLAG_RULE_VERSION,
-  roofFlagsTableSql,
+  createRoofFlagsTable,
+  roofFlags,
 } from "../src/roof-flags.ts";
 
 let db: DuckDBInstance;
@@ -38,7 +39,7 @@ async function flag(input: Row[]) {
     await c.run(
       `insert into src values (${lit(r.permit_nbr)}, ${r.work_desc === null ? "null" : lit(r.work_desc)}, ${r.business_unit === null ? "null" : lit(r.business_unit)}, 'T', 'S')`,
     );
-  await c.run(roofFlagsTableSql("src", "flagged"));
+  await createRoofFlagsTable(c, "src", "flagged");
   return rows("select * from flagged order by permit_nbr");
 }
 
@@ -88,6 +89,39 @@ const cases: Array<[string, string, boolean, boolean]> = [
   ["SOLAR ON ROOF TOP AND ROOF REPAIR", EX, false, true],
   ["T/O (E) ROOF", PC, false, false],
   ["ROOFTOP DECK, ROOF", EX, false, true],
+  // a) underscore, digits and every other non-letter separate words, also in the exclusions
+  ["REROOFING_ GARAGE", PC, true, false],
+  ["ROOFING_SHINGLES", PC, true, false],
+  ["2ROOFING LAYERS", PC, true, false],
+  ["ROOF_COVER", PC, true, false],
+  ["RE_ROOF", PC, true, false],
+  ["(E)ROOF REPAIR", EX, false, true],
+  ["ROOF3 LAYERS", EX, false, true],
+  ["SOUNDPROOFING_", PC, false, false],
+  ["WATERPROOF_DECK", EX, false, false],
+  ["FIREPROOFING1", PC, false, false],
+  ["DAMPPROOF_WALL", EX, false, false],
+  ["ROOFTOP_SOLAR", EX, false, false],
+  ["SOLAR ON ROOF_TOP", EX, false, false],
+  ["ROOFTOPS2 HVAC", EX, false, false],
+  // b) a word starting with REROOF or RE-ROOF is a re-roof word; letters before it are not a start
+  ["REROOFWITH COMP SHINGLES", PC, true, false],
+  ["RE-ROOFWITH CLASS A", PC, true, false],
+  ["REROOFW/COMP", PC, true, false],
+  ["RE-ROOFINGCOMPLY", PC, true, false],
+  ["REROOF99SQRS", PC, true, false],
+  ["99999-99999-99999RE-ROOF", PC, true, false],
+  ["REROOFWITH", EX, true, true],
+  ["BATHREROOF", PC, false, false],
+  ["GRE-ROOF", PC, false, false],
+  // c) ENTIRE ROOF and RESTRUCTURE / RECONFIGURE / RESTORE ROOF are not re-roof words
+  ["REPLACE ENTIRE ROOF", PC, false, false],
+  ["RESTRUCTURE ROOF", PC, false, false],
+  ["RECONFIGURE ROOF FRAMING", PC, false, false],
+  ["RESTORE ROOF", PC, false, false],
+  ["ENTIRE ROOF REROOF", PC, true, false],
+  ["RESTORE ROOFING", PC, true, false],
+  ["REPLACE ENTIRE ROOF", EX, false, true],
 ];
 
 test.each(cases)("%s (%s)", async (desc, bu, roofR, roofOnly) => {
@@ -135,6 +169,20 @@ test("roof_coating_only: only when the coating phrase alone makes it roofing wor
     [true, false],
     [false, false],
   ]);
+});
+
+test("the coating phrase with underscores, and next to a re-roof word", () => {
+  expect(roofFlags("COATING_TO_AN_EXISTING_ROOF", PC)).toEqual({
+    roof_r: true,
+    roof_only: false,
+    roof_coating_only: true,
+  });
+  expect(roofFlags("COATING TO AN EXISTING ROOF; REROOFWITH", PC)).toEqual({
+    roof_r: true,
+    roof_only: false,
+    roof_coating_only: false,
+  });
+  expect(roofFlags("COATING TO AN EXISTING ROOFS", PC).roof_r).toBe(false);
 });
 
 test("null description and business unit flag nothing", async () => {
