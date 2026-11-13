@@ -5,7 +5,7 @@ import { Tracer } from "@aws-lambda-powertools/tracer";
 import { S3Client } from "@aws-sdk/client-s3";
 import { awsLambdaRequestHandler } from "@trpc/server/adapters/aws-lambda";
 import type { APIGatewayProxyEventV2, Context } from "aws-lambda";
-import { openDb, type Db } from "./db.ts";
+import { openDb, parsePermitFiles, type Db } from "./db.ts";
 import { appRouter } from "./routers/index.ts";
 import type { Ctx, LoggerLike, MetricsLike } from "./trpc.ts";
 
@@ -25,30 +25,35 @@ const metricsLike: MetricsLike = {
 
 let dbPromise: Promise<Db> | undefined;
 const getDb = (): Promise<Db> => {
-  dbPromise ??= openDb(
-    {
-      runId: process.env.RUN_ID!,
-      parquetSha256: process.env.PARQUET_SHA256!,
-      parquetFile: process.env.PARQUET_FILE!,
-      bucket: process.env.DATA_BUCKET!,
-      prefix: process.env.DATA_PREFIX!,
-    },
-    s3,
-  ).then(
-    (db) => {
-      logger.info("data loaded", {
-        runId: db.runId,
-        rollYear: db.rollYear,
-        loadMs: db.loadMs,
-      });
-      metrics.addMetric("DataLoadMs", MetricUnit.Milliseconds, db.loadMs);
-      return db;
-    },
-    (err: unknown) => {
-      dbPromise = undefined; // retry on the next invocation
-      throw err;
-    },
-  );
+  dbPromise ??= Promise.resolve()
+    .then(() =>
+      openDb(
+        {
+          runId: process.env.RUN_ID!,
+          parquetSha256: process.env.PARQUET_SHA256!,
+          parquetFile: process.env.PARQUET_FILE!,
+          permitFiles: parsePermitFiles(process.env.PERMIT_FILES ?? ""),
+          bucket: process.env.DATA_BUCKET!,
+          prefix: process.env.DATA_PREFIX!,
+        },
+        s3,
+      ),
+    )
+    .then(
+      (db) => {
+        logger.info("data loaded", {
+          runId: db.runId,
+          rollYear: db.rollYear,
+          loadMs: db.loadMs,
+        });
+        metrics.addMetric("DataLoadMs", MetricUnit.Milliseconds, db.loadMs);
+        return db;
+      },
+      (err: unknown) => {
+        dbPromise = undefined; // retry on the next invocation
+        throw err;
+      },
+    );
   return dbPromise;
 };
 

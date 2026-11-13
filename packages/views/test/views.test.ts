@@ -5,7 +5,10 @@ import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
   CONTRACT,
+  daysFromYears,
   lit,
+  longOpenRule,
+  permitViewsSql,
   propertyViewsSql,
   roofAgeRule,
   runViewsSql,
@@ -15,25 +18,31 @@ const dir = mkdtempSync(join(tmpdir(), "views-test-"));
 const parquet = join(dir, "property.parquet");
 const manifest = join(dir, "run_manifest.json");
 const history = join(dir, "run_history.jsonl");
+const permits = join(dir, "permits.parquet");
+const permitParcels = join(dir, "permit_parcels.parquet");
+const contractors = join(dir, "permit_contractors.parquet");
 let c: DuckDBConnection;
 const q = async (sql: string, params?: unknown[]) =>
   (await c.runAndReadAll(sql, params as never)).getRowObjectsJson() as Array<
     Record<string, unknown>
   >;
 
-// Increment-1 Parquet column names (src/build-outputs.ts). Rows:
+// Property Parquet column names (src/property-sql.ts, src/permit-sql.ts). Rows:
 // A at the centre built 2010 (in at 15 y), B built 2011 (out), C no year built, D no coordinates,
-// E built 1950 but ~33 mi away.
+// E built 1950 but ~33 mi away, F at the centre built 1950 with a roof year 2015 from a permit (out at 15 y).
 const row = (
   id: string,
   yb: number | null,
   lat: number | null,
   lon: number | null,
   page: string,
+  permitYear?: number,
 ) => `select
   ${lit(id)} as parcel_identifier, ${lit(id)} as assessor_id_formatted, ${lit(id)} as request_identifier,
   ${yb ?? "null"}::integer as property_structure_built_year, ${yb ?? "null"}::integer as property_effective_built_year,
-  'PROXY' as roof_age_basis, 'SFR' as source_use_type, '0100' as source_use_code, 'Single' as source_use_code_description,
+  ${permitYear ? "'PERMIT'" : "'PROXY'"} as roof_age_basis, ${permitYear ?? yb ?? "null"}::integer as effective_roof_year,
+  ${permitYear ? "'16016-10000-00001'" : "null::varchar"} as roof_year_permit_number, 'roof-year-1' as roof_year_rule_version,
+  true as permit_data_available, 'SFR' as source_use_type, '0100' as source_use_code, 'Single' as source_use_code_description,
   '1 TEST ST' as unnormalized_address, '1' as street_number, null::varchar as street_pre_directional_text, 'TEST ST' as street_name,
   null::varchar as unit_identifier, 'VAN NUYS' as city_name, '91406' as postal_code, null::varchar as plus_four_postal_code,
   'Los Angeles' as county_name, 'CA' as state_code, ${lat ?? "null"}::double as latitude, ${lon ?? "null"}::double as longitude,
@@ -52,7 +61,46 @@ beforeAll(async () => {
       row("0000000003", null, 34.199, -118.487, "page-0001.json"),
       row("0000000004", 1950, null, null, "page-0001.json"),
       row("0000000005", 1950, 34.5, -118.0, "page-0001.json"),
+      row("0000000006", 1950, 34.199, -118.487, "page-0001.json", 2015),
     ].join(" union all ")}) to ${lit(parquet)} (format parquet)`,
+  );
+  // Permits: P1 building-level on A and F (both at the centre), open-issued 2,000 days; P2 on E (~33 mi),
+  // open-issued 3,000 days; P3 on A, closed. The permit table has a work_desc column no view may show.
+  const permit = (n: string, cls: string, days: number | null) => `select
+    ${lit(n)} as permit_number, null::varchar as source_apn, '1 TEST ST' as unnormalized_address, '91406' as postal_code,
+    'Bldg-Alter/Repair' as source_permit_type, null::varchar as source_permit_sub_type, null::varchar as source_business_unit,
+    date '2020-01-01' as application_received_date, date '2020-01-01' as permit_issue_date, 'Issued' as source_status_desc,
+    date '2020-01-01' as status_date, ${lit(cls)} as permit_status_class, date '2020-01-01' as open_since,
+    ${days ?? "null"}::integer as open_days, true as roof_r, false as roof_only, true as roofing_work,
+    false as roof_coating_only, 'direct' as join_method, null::varchar as unjoined_cause, 'pi9x-tg5x' as source_dataset,
+    'issued' as source_dataset_kind, 'roof-flags-4' as roof_flag_rule_version, 'permit-status-1' as permit_status_rule_version,
+    'permit-join-1' as join_rule_version, 'NOT SERVED' as work_desc, 'https://example.test/p' as source_http_request,
+    'GET' as source_http_method, timestamptz '2026-11-12 13:14:56.570+00' as source_retrieved_at, 'sha-p' as source_page_sha256,
+    'pages/pi9x-tg5x_p000.json.gz' as source_page_file, 'Permits' as source_name`;
+  await c.run(
+    `copy (${[
+      permit("16016-10000-00001", "open-issued", 2000),
+      permit("16016-10000-00002", "open-issued", 3000),
+      permit("16016-10000-00003", "closed", null),
+    ].join(" union all ")}) to ${lit(permits)} (format parquet)`,
+  );
+  await c.run(
+    `copy (select * from (values ('16016-10000-00001', '0000000001', 'condo-building', true),
+       ('16016-10000-00001', '0000000006', 'condo-building', true), ('16016-10000-00002', '0000000005', 'direct', false),
+       ('16016-10000-00003', '0000000001', 'direct', false))
+       t(permit_number, parcel_identifier, join_method, building_level), (select 'permit-join-1' as join_rule_version))
+     to ${lit(permitParcels)} (format parquet)`,
+  );
+  await c.run(
+    `copy (select * from (values ('16016-10000-00001', 'B CO', '2'), ('16016-10000-00001', 'A CO', '1'))
+       t(permit_number, contractors_business_name, license_identifier),
+       (select 'C39' as source_license_type, 'C-39' as license_class, 'Roofing' as license_class_name,
+         null::varchar as license_class_note, false as is_owner_builder, date '2027-01-31' as license_expiration_date,
+         'VAN NUYS' as city_name, 'CA' as state_code, date '2020-01-01' as permit_issue_date,
+         'license-classes-1' as license_class_rule_version, 'https://example.test/c' as source_http_request,
+         'GET' as source_http_method, timestamptz '2026-11-12 14:00:51.383+00' as source_retrieved_at,
+         'sha-c' as source_page_sha256, 'pages/8guu-8f5m_p000.json.gz' as source_page_file, 'Contractors' as source_name))
+     to ${lit(contractors)} (format parquet)`,
   );
   writeFileSync(
     manifest,
@@ -96,6 +144,13 @@ beforeAll(async () => {
     }) + "\n",
   );
   await c.run(propertyViewsSql({ propertyParquet: parquet }));
+  await c.run(
+    permitViewsSql({
+      permitsParquet: permits,
+      permitParcelsParquet: permitParcels,
+      permitContractorsParquet: contractors,
+    }),
+  );
   await c.run(runViewsSql({ runManifest: manifest, runHistory: history }));
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -117,7 +172,12 @@ describe("roof_age_candidates", () => {
         [0, 34.199, -118.487, 100],
       )
     ).map((r) => r.parcel_id);
-    expect(all).toEqual(["0000000001", "0000000002", "0000000005"]);
+    expect(all).toEqual([
+      "0000000001",
+      "0000000002",
+      "0000000005",
+      "0000000006",
+    ]);
   });
   test("threshold 80 means built before 1946; 75 means built before 1951", async () => {
     expect(
@@ -164,28 +224,44 @@ describe("contract views", () => {
   test("provenance per page and per source", async () => {
     expect(
       await q(
-        "select source_page_file, record_count::integer n, source_retrieved_at from oracle.v_source_page",
+        "select source_kind, source_page_file, record_count::integer n, source_retrieved_at from oracle.v_source_page",
       ),
     ).toEqual([
       {
+        source_kind: "parcel",
         source_page_file: "page-0000.json",
         n: 2,
         source_retrieved_at: "2026-11-11T16:17:40.932Z",
       },
       {
+        source_kind: "parcel",
         source_page_file: "page-0001.json",
-        n: 3,
+        n: 4,
         source_retrieved_at: "2026-11-11T16:17:40.932Z",
+      },
+      {
+        source_kind: "contractor",
+        source_page_file: "pages/8guu-8f5m_p000.json.gz",
+        n: 2,
+        source_retrieved_at: "2026-11-12T14:00:51.383Z",
+      },
+      {
+        source_kind: "permit",
+        source_page_file: "pages/pi9x-tg5x_p000.json.gz",
+        n: 3,
+        source_retrieved_at: "2026-11-12T13:14:56.570Z",
       },
     ]);
     const [s] = await q(
-      "select source_name, record_count::integer n, page_count::integer p, terms_of_use from oracle.v_source",
+      "select source_name, record_count::integer n, page_count::integer p, terms_of_use, license, query_urls from oracle.v_source where source_kind = 'parcel'",
     );
     expect(s).toEqual({
       source_name: "Test Source",
-      n: 5,
+      n: 6,
       p: 2,
       terms_of_use: "t",
+      license: null,
+      query_urls: null,
     });
   });
   test("run summary and history", async () => {
@@ -207,9 +283,121 @@ describe("roofAgeRule", () => {
   test("states the rule with the computed year", () => {
     const r = roofAgeRule(2026, 15);
     expect(r.built_before_year).toBe(2011);
-    expect(r.text).toContain("built before 2011");
+    expect(r.text).toContain("an effective roof year before 2011");
     expect(r.text).toContain("2010 or earlier");
     expect(() => roofAgeRule(2026, -1)).toThrow();
+  });
+  test("names both bases", () => {
+    const { text } = roofAgeRule(2026, 15);
+    expect(text).toContain("basis PROXY");
+    expect(text).toContain("basis PERMIT");
+    expect(text).toContain("finaled LADBS roofing permit");
+  });
+});
+
+describe("longOpenRule and daysFromYears", () => {
+  test("durations in days; 5 years is 1,826 days", () => {
+    expect(daysFromYears(5)).toBe(1826);
+    expect(daysFromYears(10)).toBe(3653);
+    expect(daysFromYears(1)).toBe(365);
+  });
+  test("states the window, the reference date and the status class", () => {
+    const r = longOpenRule("2026-11-12", 1826, null);
+    expect(r).toMatchObject({
+      reference_date: "2026-11-12",
+      status_class: "open-issued",
+      min_open_days: 1826,
+      max_open_days: null,
+    });
+    expect(r.text).toContain("at least 1,826 days");
+    expect(r.text).toContain("2026-11-12");
+    expect(longOpenRule("2026-11-12", 1826, 3653).text).toContain(
+      "between 1,826 and 3,653 days",
+    );
+    const bad: Array<[string, number, number | null]> = [
+      ["2026-11", 1826, null],
+      ["2026-11-12", -1, null],
+      ["2026-11-12", 1826, 1825],
+      ["2026-11-12", 1.5, null],
+    ];
+    for (const [d, min, max] of bad)
+      expect(() => longOpenRule(d, min, max)).toThrow();
+  });
+});
+
+describe("permit views", () => {
+  test("long_open_permits: a building-level permit counts once, at its nearest unit", async () => {
+    // P1 links A and F, both at the centre: it is counted once, at the lower parcel ID.
+    expect(
+      await q(
+        "select permit_number, parcel_id, parcel_count::integer pc, building_level from oracle.long_open_permits(1826, null, null, 34.199, -118.487, 50) order by 1",
+      ),
+    ).toEqual([
+      {
+        permit_number: "16016-10000-00001",
+        parcel_id: "0000000001",
+        pc: 2,
+        building_level: true,
+      },
+      {
+        permit_number: "16016-10000-00002",
+        parcel_id: "0000000005",
+        pc: 1,
+        building_level: false,
+      },
+    ]);
+  });
+  test("long_open_permits: maximum, radius and roof-age threshold; long_open_parcels marks every unit", async () => {
+    const n = async (args: string) =>
+      (
+        await q(
+          `select count(*)::integer n from oracle.long_open_permits(${args})`,
+        )
+      )[0]!.n;
+    expect(await n("1826, 2500, null, 34.199, -118.487, 50")).toBe(1);
+    expect(await n("1826, null, null, 34.199, -118.487, 5")).toBe(1);
+    expect(await n("0, null, null, 34.199, -118.487, 50")).toBe(2); // the closed permit never counts
+    // At 15 years A (2010) qualifies, so P1 stays, now at A; at 80 years neither A nor F does.
+    expect(await n("1826, null, 15, 34.199, -118.487, 5")).toBe(1);
+    expect(await n("1826, null, 80, 34.199, -118.487, 5")).toBe(0);
+    expect(
+      await q(
+        "select parcel_id from oracle.long_open_parcels(1826, null) order by 1",
+      ),
+    ).toEqual([
+      { parcel_id: "0000000001" },
+      { parcel_id: "0000000005" },
+      { parcel_id: "0000000006" },
+    ]);
+  });
+  test("contractor rows are numbered per permit in value order; dates are text", async () => {
+    expect(
+      await q(
+        "select contractor_row::integer r, contractors_business_name, license_expiration_date from oracle.v_permit_contractor order by 1",
+      ),
+    ).toEqual([
+      {
+        r: 1,
+        contractors_business_name: "A CO",
+        license_expiration_date: "2027-01-31",
+      },
+      {
+        r: 2,
+        contractors_business_name: "B CO",
+        license_expiration_date: "2027-01-31",
+      },
+    ]);
+  });
+  test("no permit view has a work description column", async () => {
+    const cols = (
+      await q(
+        "select table_name, column_name from information_schema.columns where table_schema = 'oracle'",
+      )
+    ).map((r) => `${r.table_name}.${r.column_name}`);
+    expect(cols.filter((c) => /^v_permit/.test(c) && /desc/i.test(c))).toEqual([
+      "v_permit.source_status_desc",
+    ]);
+    expect(cols.filter((c) => /^v_.*work_?desc/i.test(c))).toEqual([]);
   });
 });
 

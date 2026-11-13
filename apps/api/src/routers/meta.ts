@@ -9,6 +9,8 @@ export const metaRouter = router({
       api_version: API_VERSION,
       run_id: db.runId,
       parquet_sha256: db.parquetSha256,
+      permit_files: db.permitFiles,
+      reference_date: db.referenceDate,
       sha256_verified: true,
       views: [...CONTRACT.views],
       macros: [...CONTRACT.macros],

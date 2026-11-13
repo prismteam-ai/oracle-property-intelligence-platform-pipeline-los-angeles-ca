@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import * as cdk from "aws-cdk-lib";
 import { type ClientsFile, parseClients } from "../lib/clients.ts";
-import { DataApiStack } from "../lib/data-api-stack.ts";
+import { DataApiStack, type PermitFileEnv } from "../lib/data-api-stack.ts";
 import { GuardsStack } from "../lib/guards-stack.ts";
 
 const repoRoot = new URL("../../../../", import.meta.url).pathname;
@@ -41,9 +41,21 @@ const history = readFileSync(`${repoRoot}runs/run_history.jsonl`, "utf8")
         run_id: string;
         parquet_sha256: string;
         parquet_path: string;
+        permit_files?: Array<{ role: string; path: string; sha256: string }>;
       },
   );
 const latest = history.at(-1)!;
+// The API serves a permit run: the latest row must list its permit Parquet files (each keeps its file name
+// under runs/<run_id>/ in the bucket, as the property Parquet does).
+if (!latest.permit_files?.length)
+  throw new Error(
+    `the latest run in runs/run_history.jsonl (${latest.run_id}) has no permit_files; the data API serves a permit run`,
+  );
+const permitFiles: PermitFileEnv[] = latest.permit_files.map((f) => ({
+  role: f.role,
+  file: basename(f.path),
+  sha256: f.sha256,
+}));
 
 const app = new cdk.App();
 // The alert address lives only in the gitignored .secrets/alerts.json (never in source or tracked files).
@@ -60,6 +72,7 @@ new DataApiStack(app, "OracleLaDataApi", {
   parquetSha256: latest.parquet_sha256,
   // The run's Parquet keeps its file name under runs/<run_id>/ in the bucket.
   parquetFile: basename(latest.parquet_path),
+  permitFiles,
   clients: apiClients,
   amplifyAppIdParameter: clientsFile.amplifyAppIdParameter,
 });

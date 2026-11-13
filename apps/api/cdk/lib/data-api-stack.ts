@@ -25,12 +25,21 @@ export const METRICS_NAMESPACE = "OracleLa";
 /** SSM parameter holding the token authorizer's ARN (read by the CRM leads stack). */
 export const AUTHORIZER_ARN_PARAM = "/oracle-la/api/authorizer-arn";
 
+/** One permit Parquet file as the API reads it from PERMIT_FILES (apps/api/src/db.ts parsePermitFiles). */
+export interface PermitFileEnv {
+  role: string;
+  file: string;
+  sha256: string;
+}
+
 export interface DataApiStackProps extends cdk.StackProps {
   repoRoot: string;
   runId: string;
   parquetSha256: string;
   /** The run's Parquet file name under DATA_PREFIX (from the latest runs/run_history.jsonl row). */
   parquetFile: string;
+  /** The run's permit Parquet files under DATA_PREFIX (from the latest row's permit_files). */
+  permitFiles: PermitFileEnv[];
   /** One entry per frontend: drives CORS origins and the token-hash SSM parameter the authorizer reads. */
   clients: Array<ClientEntry & { tokenSha256: string }>;
   /** SSM parameter with the Amplify app ID for clients given as `amplifyBranch` (read at deploy time). */
@@ -94,6 +103,7 @@ export class DataApiStack extends cdk.Stack {
         RUN_ID: props.runId,
         PARQUET_SHA256: props.parquetSha256,
         PARQUET_FILE: props.parquetFile,
+        PERMIT_FILES: JSON.stringify(props.permitFiles),
         POWERTOOLS_SERVICE_NAME: "oracle-la-api",
         POWERTOOLS_METRICS_NAMESPACE: METRICS_NAMESPACE,
         NODE_OPTIONS: "--enable-source-maps",

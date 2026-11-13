@@ -1,12 +1,14 @@
 /**
- * DuckDB proof query: parcels within a radius of a point whose roof-age proxy is older than
- * the threshold, with provenance. Uses the shared view contract (@oracle-la/views): the
+ * DuckDB proof query: parcels within a radius of a point whose roof age is older than the
+ * threshold, with provenance. Uses the shared view contract (@oracle-la/views): the
  * oracle.roof_age_candidates macro and the oracle.v_* views, never raw Parquet columns.
  *
  * Usage: node src/query-radius.ts --parquet <file> [--lat=34.1990] [--lon=-118.4870]   (negative values need the = form)
  *        [--radius 5] [--age 15] [--limit 5]
- * Rule (shared): older than N years means year built < roll year - N; the roll year comes from the data.
- * "Older than 15 years" on roll 2026 means year built <= 2010.
+ * Rule (shared): older than N years means effective roof year < roll year - N; the roll year comes from
+ * the data. "Older than 15 years" on roll 2026 means an effective roof year of 2010 or earlier. The
+ * effective roof year is in the property Parquet of a permit run (src/permit-sql.ts), so the CLI reads
+ * those runs' Parquet files only.
  */
 import { parseArgs } from "node:util";
 import { DuckDBInstance } from "@duckdb/node-api";
@@ -57,12 +59,12 @@ const nearest = await rows(
   { lat, lon },
 );
 const summary = await rows(
-  `select count(*) as matches, min(year_built) as oldest, max(year_built) as newest, round(max(distance_miles), 2) as max_distance_miles
+  `select count(*) as matches, min(effective_roof_year) as oldest, max(effective_roof_year) as newest, round(max(distance_miles), 2) as max_distance_miles
   from oracle.roof_age_candidates($age, $lat, $lon, $miles)`,
   params,
 );
 const sample = await rows(
-  `select c.parcel_id, c.address, c.year_built, c.effective_year_built, c.roof_age_basis, round(c.distance_miles, 2) as distance_miles,
+  `select c.parcel_id, c.address, c.year_built, c.effective_year_built, c.effective_roof_year, c.roof_age_basis, round(c.distance_miles, 2) as distance_miles,
     c.latitude, c.longitude, p.source_name, p.source_request_url, p.source_retrieved_at, p.source_page_sha256
   from oracle.roof_age_candidates($age, $lat, $lon, $miles) c join oracle.v_property_provenance p using (parcel_id)
   order by c.distance_miles, c.parcel_id limit ${Math.trunc(limit)}`,
@@ -77,7 +79,7 @@ console.log(
       radius_miles: miles,
       age_threshold_years: age,
       roll_year: rule.roll_year,
-      rule: `year_built < ${rule.built_before_year} (i.e. <= ${rule.built_before_year - 1})`,
+      rule: `effective_roof_year < ${rule.built_before_year} (i.e. <= ${rule.built_before_year - 1})`,
       rule_text: rule.text,
       summary: summary[0],
       sample,

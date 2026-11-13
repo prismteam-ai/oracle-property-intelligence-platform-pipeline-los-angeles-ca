@@ -20,12 +20,17 @@
  *   pair, so the cap cuts through a tie.
  * - At 60 years the 1970 parcel drops out (even count), so a radius between pairs 12,500 and 12,501 gives
  *   exactly 25,000.
+ * Both runs have empty permit tables, so their effective roof year is the year built (basis PROXY).
+ *
+ * writePermitFixture() writes a third run for the permit routes (see PERMIT_FIXTURE).
  */
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DuckDBInstance } from "@duckdb/node-api";
+import { ROOF_AGE_BASIS } from "../src/contract.ts";
+import type { PermitFile } from "../src/db.ts";
 
 export const FIXTURE = {
   runId: "fixture-run",
@@ -38,6 +43,12 @@ export const FIXTURE = {
 /** The points-cap run (see the header). */
 export const NEAREST = { rows: 25_003 } as const;
 const lit = (s: string) => `'${s.replace(/'/g, "''")}'`;
+/** A parcel's roof year from a permit, and its tax-rate-area city (default: the City of Los Angeles). */
+interface RowExtra {
+  permitYear?: number;
+  permitNumber?: string;
+  city?: string;
+}
 /** One fixture row from SQL expressions for the ID, year built, coordinates and page file. */
 const rowSql = (
   id: string,
@@ -45,14 +56,20 @@ const rowSql = (
   lat: string,
   lon: string,
   page: string,
+  x: RowExtra = {},
 ) => `select
   ${id} as parcel_identifier, ${id} as assessor_id_formatted, ${id} as request_identifier,
   ${yb}::integer as property_structure_built_year, ${yb}::integer as property_effective_built_year,
-  'PROXY' as roof_age_basis, 'SFR' as source_use_type, '0100' as source_use_code, 'Single' as source_use_code_description,
+  ${lit(x.permitYear ? ROOF_AGE_BASIS.permit : ROOF_AGE_BASIS.proxy)} as roof_age_basis,
+  ${x.permitYear ?? yb}::integer as effective_roof_year,
+  ${x.permitNumber ? lit(x.permitNumber) : "null"}::varchar as roof_year_permit_number,
+  'roof-year-1' as roof_year_rule_version,
+  ${lit(x.city ?? "LOS ANGELES")} = 'LOS ANGELES' as permit_data_available,
+  'SFR' as source_use_type, '0100' as source_use_code, 'Single' as source_use_code_description,
   cast(${id}::bigint as varchar) || ' TEST ST' as unnormalized_address, cast(${id}::bigint as varchar) as street_number, null::varchar as street_pre_directional_text,
   'TEST ST' as street_name, null::varchar as unit_identifier, 'TEST CITY' as city_name, '00000' as postal_code, null::varchar as plus_four_postal_code,
   'Los Angeles' as county_name, 'CA' as state_code, ${lat}::double as latitude, ${lon}::double as longitude,
-  'fixture' as coordinate_basis, 'LOS ANGELES' as tax_rate_area_city, '2026' as roll_year, date '2010-01-01' as last_recording_date,
+  'fixture' as coordinate_basis, ${lit(x.city ?? "LOS ANGELES")} as tax_rate_area_city, '2026' as roll_year, date '2010-01-01' as last_recording_date,
   true as owner_unchanged_10y_proxy, null::boolean as out_of_area_owner,
   'https://example.test/query?page=' || ${page} as source_http_request, 'GET' as source_http_method,
   timestamptz '2026-11-11 16:17:40.932+00' as source_retrieved_at, 'sha-' || ${page} as source_page_sha256,
@@ -63,6 +80,7 @@ const row = (
   lat: number | null,
   lon: number | null,
   page: string,
+  x: RowExtra = {},
 ) =>
   rowSql(
     lit(id),
@@ -70,13 +88,18 @@ const row = (
     String(lat ?? "null"),
     String(lon ?? "null"),
     lit(page),
+    x,
   );
 
-/** Write the fixture files; returns the directory and the Parquet sha256. */
-export async function writeFixture(): Promise<{
+/** A fixture run: its directory, its Parquet sha256 and its permit files. */
+export interface FixtureRun {
   dir: string;
   parquetSha256: string;
-}> {
+  permitFiles: PermitFile[];
+}
+
+/** Write the fixture files; returns the directory and the Parquet sha256. */
+export async function writeFixture(): Promise<FixtureRun> {
   const { lat, lon } = FIXTURE.point;
   return writeRun(
     [
@@ -95,10 +118,7 @@ export async function writeFixture(): Promise<{
  * The points-cap run. Row i (0-based) sits at step k = ceil(i / 2) north of the point; within a pair
  * (2k - 1, 2k) the first row gets the higher ID: id(2k - 1) = 2k + 1, id(2k) = 2k. Row 0 has ID 1.
  */
-export async function writeNearestFixture(): Promise<{
-  dir: string;
-  parquetSha256: string;
-}> {
+export async function writeNearestFixture(): Promise<FixtureRun> {
   const { lat, lon } = FIXTURE.point;
   const id =
     "lpad(cast(case when i = 0 then 1 when i % 2 = 1 then i + 2 else i end as varchar), 10, '0')";
@@ -113,13 +133,47 @@ export async function writeNearestFixture(): Promise<{
   );
 }
 
+/** The permit tables of a run, as SELECT statements; omitted: empty tables with the stored columns. */
+interface PermitTables {
+  permits: string;
+  permit_parcels: string;
+  permit_contractors: string;
+}
+const emptyPermits = (): PermitTables => ({
+  permits: `${permitRow({ n: "00000-00000-00000", issue: null, status: null, cls: "closed", days: null })} where false`,
+  permit_parcels: `${linkRow("00000-00000-00000", "0000000000", "direct", false)} where false`,
+  permit_contractors: `${contractorRow({ permit: "00000-00000-00000" })} where false`,
+});
+/** File names of the permit Parquet files (configuration, as DataConfig.parquetFile). */
+export const PERMIT_FILE_NAMES = {
+  permits: "fixture_ladbs_permits.parquet",
+  permit_parcels: "fixture_ladbs_permit_parcels.parquet",
+  permit_contractors: "fixture_ladbs_permit_contractors.parquet",
+} as const;
+
 async function writeRun(
   selectSql: string,
-): Promise<{ dir: string; parquetSha256: string }> {
+  permitTables: PermitTables = emptyPermits(),
+  manifestExtra: Record<string, unknown> = {},
+): Promise<FixtureRun> {
   const dir = mkdtempSync(join(tmpdir(), "api-fixture-"));
   const parquet = join(dir, FIXTURE.parquetFile);
   const c = await (await DuckDBInstance.create(":memory:")).connect();
   await c.run(`copy (${selectSql}) to ${lit(parquet)} (format parquet)`);
+  const permitFiles: PermitFile[] = [];
+  for (const role of Object.keys(PERMIT_FILE_NAMES) as Array<
+    keyof PermitTables
+  >) {
+    const file = join(dir, PERMIT_FILE_NAMES[role]);
+    await c.run(
+      `copy (${permitTables[role]}) to ${lit(file)} (format parquet)`,
+    );
+    permitFiles.push({
+      role,
+      file: PERMIT_FILE_NAMES[role],
+      sha256: sha256(file),
+    });
+  }
   writeFileSync(
     join(dir, "run_manifest.json"),
     JSON.stringify({
@@ -147,6 +201,7 @@ async function writeRun(
           access: "anonymous",
         },
       ],
+      ...manifestExtra,
     }),
   );
   writeFileSync(
@@ -161,10 +216,304 @@ async function writeRun(
       published: false,
     }) + "\n",
   );
-  return {
-    dir,
-    parquetSha256: createHash("sha256")
-      .update(readFileSync(parquet))
-      .digest("hex"),
-  };
+  return { dir, parquetSha256: sha256(parquet), permitFiles };
+}
+
+const sha256 = (file: string) =>
+  createHash("sha256").update(readFileSync(file)).digest("hex");
+
+/** One permit row with the stored columns, plus a work_desc column that no view may pass on. */
+function permitRow(p: {
+  n: string;
+  issue: string | null;
+  status: string | null;
+  cls: string;
+  days: number | null;
+  roofing?: boolean;
+  join?: string | null;
+  page?: string;
+  dataset?: string;
+}): string {
+  const d = (v: string | null) => (v ? `date ${lit(v)}` : "null::date");
+  const page = p.page ?? "pages/pi9x-tg5x_p000.json.gz";
+  return `select ${lit(p.n)} as permit_number, null::varchar as source_apn, '1 PERMIT ST' as unnormalized_address,
+  '91406' as postal_code, 'Bldg-Alter/Repair' as source_permit_type, '1 or 2 Family Dwelling' as source_permit_sub_type,
+  'Express Permit' as source_business_unit, ${d(p.issue)} as application_received_date, ${d(p.issue)} as permit_issue_date,
+  ${p.status ? lit(p.status) : "null::varchar"} as source_status_desc, ${d(p.issue)} as status_date,
+  ${lit(p.cls)} as permit_status_class,
+  ${p.days === null ? "null::date" : d(p.issue)} as open_since, ${p.days ?? "null"}::integer as open_days,
+  ${p.roofing ?? false} as roof_r, false as roof_only, ${p.roofing ?? false} as roofing_work, false as roof_coating_only,
+  ${p.join === undefined ? "'direct'" : p.join === null ? "null::varchar" : lit(p.join)} as join_method,
+  ${p.join === null ? "'apn-missing/no-usable-address'" : "null::varchar"} as unjoined_cause,
+  ${lit(p.dataset ?? "pi9x-tg5x")} as source_dataset, 'issued' as source_dataset_kind,
+  'roof-flags-4' as roof_flag_rule_version, 'permit-status-1' as permit_status_rule_version,
+  'permit-join-1' as join_rule_version, ${lit(PERMIT_WORK_DESC)} as work_desc,
+  'https://example.test/permits?page=' || ${lit(page)} as source_http_request, 'GET' as source_http_method,
+  timestamptz '2026-11-12 13:14:56.570+00' as source_retrieved_at, 'sha-' || ${lit(page)} as source_page_sha256,
+  ${lit(page)} as source_page_file, ${lit(PERMIT_FIXTURE.permitSource)} as source_name`;
+}
+function linkRow(
+  permit: string,
+  parcel: string,
+  method: string,
+  buildingLevel: boolean,
+): string {
+  return `select ${lit(permit)} as permit_number, ${lit(parcel)} as parcel_identifier, ${lit(method)} as join_method,
+  ${buildingLevel} as building_level, 'permit-join-1' as join_rule_version`;
+}
+function contractorRow(c: {
+  permit: string;
+  name?: string | null;
+  license?: string | null;
+  type?: string;
+  cls?: string | null;
+  note?: string | null;
+  ownerBuilder?: boolean;
+}): string {
+  const v = (x: string | null | undefined) => (x ? lit(x) : "null::varchar");
+  const page = "pages/8guu-8f5m_p000.json.gz";
+  return `select ${lit(c.permit)} as permit_number, ${v(c.name)} as contractors_business_name,
+  ${v(c.license)} as license_identifier, ${v(c.type ?? "C39")} as source_license_type, ${v(c.cls)} as license_class,
+  ${v(c.cls ? "Roofing" : null)} as license_class_name, ${v(c.note)} as license_class_note,
+  ${c.ownerBuilder ?? false} as is_owner_builder, date '2027-01-31' as license_expiration_date,
+  'VAN NUYS' as city_name, 'CA' as state_code, date '2019-05-01' as permit_issue_date,
+  'license-classes-1' as license_class_rule_version,
+  'https://example.test/contractors?page=' || ${lit(page)} as source_http_request, 'GET' as source_http_method,
+  timestamptz '2026-11-12 14:00:51.383+00' as source_retrieved_at, 'sha-' || ${lit(page)} as source_page_sha256,
+  ${lit(page)} as source_page_file, ${lit(PERMIT_FIXTURE.contractorSource)} as source_name`;
+}
+
+/** Text in the fixture permits' work_desc column; no response may contain it. */
+export const PERMIT_WORK_DESC = "FIXTURE WORK DESCRIPTION NOT SERVED";
+
+/**
+ * The permit run, around FIXTURE.point (roll 2026, reference date 2026-11-12). 1 mi north is 0.01447 degree.
+ *
+ * Parcels (all in the City of Los Angeles unless noted):
+ *   0000000011 A  at the point, built 1950, roof year 2020 from permit P1 (basis PERMIT)
+ *   0000000012 B  0.1 mi N, built 1950, an open-application permit (P8) only
+ *   0000000021-23 C1-C3  condominium units of one building, 0.3 / 0.2 / 0.4 mi N, built 1980
+ *   0000000031 D  0.5 mi S, built 1960, outside the City of Los Angeles (PASADENA), one closed permit (P4)
+ *   0000000041 E  0.05 mi N, built 1970, one long-open permit (P9)
+ *   0000000042 H  0.06 mi N, built 1970, no permit
+ *   0000000051 F  2 mi N, built 1960, three open-issued permits (P5, P6, P7)
+ *
+ * Permits (open_days to the reference date):
+ *   P1 16016-10000-00001  A, roofing, Permit Finaled (closed); two contractor rows
+ *   P2 16016-10000-00002  A, open-issued, 3,237 days
+ *   P3 17016-20000-00003  C1-C3 building-level (condo-building), open-issued, 2,500 days, roofing; one contractor
+ *   P4 18016-30000-00004  D, closed
+ *   P5 19016-10000-00005  F, open-issued, 1,000 days (under the default minimum)
+ *   P6 19016-10000-00006  F, open-issued, 2,000 days
+ *   P7 13016-10000-00007  F, open-issued, 4,000 days
+ *   P8 20016-10000-00008  B, open-application, 3,000 days (never long-open)
+ *   P9 10016-10000-00009  E, open-issued, 2,000 days (ties with P6; the lower permit number first)
+ *   P10 21016-10000-00010 unjoined, open-issued, 3,000 days (no parcel, never long-open)
+ * Contractor rows: P1 two (a C-39 business and an owner-builder), P3 one, and one for 12016-10000-00099, a
+ * permit not in the permit table.
+ */
+export const PERMIT_FIXTURE = {
+  permitSource: "Fixture LADBS permits",
+  contractorSource: "Fixture LADBS contractors",
+  referenceDate: "2026-11-12",
+  parcels: 9,
+  permits: 10,
+  contractorRows: 4,
+  p: {
+    P1: "16016-10000-00001",
+    P2: "16016-10000-00002",
+    P3: "17016-20000-00003",
+    P4: "18016-30000-00004",
+    P5: "19016-10000-00005",
+    P6: "19016-10000-00006",
+    P7: "13016-10000-00007",
+    P8: "20016-10000-00008",
+    P9: "10016-10000-00009",
+    P10: "21016-10000-00010",
+  },
+} as const;
+
+export async function writePermitFixture(): Promise<FixtureRun> {
+  const { lat, lon } = FIXTURE.point;
+  const mi = 0.01447;
+  const P = PERMIT_FIXTURE.p;
+  const page = "pages/page-00000.json.gz";
+  const parcels = [
+    row("0000000011", 1950, lat, lon, page, {
+      permitYear: 2020,
+      permitNumber: P.P1,
+    }),
+    row("0000000012", 1950, lat + 0.1 * mi, lon, page),
+    row("0000000021", 1980, lat + 0.3 * mi, lon, page),
+    row("0000000022", 1980, lat + 0.2 * mi, lon, page),
+    row("0000000023", 1980, lat + 0.4 * mi, lon, page),
+    row("0000000031", 1960, lat - 0.5 * mi, lon, page, { city: "PASADENA" }),
+    row("0000000041", 1970, lat + 0.05 * mi, lon, page),
+    row("0000000042", 1970, lat + 0.06 * mi, lon, page),
+    row("0000000051", 1960, lat + 2 * mi, lon, "pages/page-00001.json.gz"),
+  ];
+  const oi = "open-issued";
+  const issued = "Issued";
+  const permits = [
+    permitRow({
+      n: P.P1,
+      issue: "2019-05-01",
+      status: "Permit Finaled",
+      cls: "closed",
+      days: null,
+      roofing: true,
+    }),
+    permitRow({
+      n: P.P2,
+      issue: "2018-01-01",
+      status: issued,
+      cls: oi,
+      days: 3237,
+    }),
+    permitRow({
+      n: P.P3,
+      issue: "2020-01-01",
+      status: issued,
+      cls: oi,
+      days: 2500,
+      roofing: true,
+      join: "condo-building",
+    }),
+    permitRow({
+      n: P.P4,
+      issue: "2015-01-01",
+      status: "Permit Closed",
+      cls: "closed",
+      days: null,
+    }),
+    permitRow({
+      n: P.P5,
+      issue: "2024-02-17",
+      status: issued,
+      cls: oi,
+      days: 1000,
+      page: "pages/pi9x-tg5x_p001.json.gz",
+    }),
+    permitRow({
+      n: P.P6,
+      issue: "2021-05-21",
+      status: issued,
+      cls: oi,
+      days: 2000,
+      page: "pages/pi9x-tg5x_p001.json.gz",
+    }),
+    permitRow({
+      n: P.P7,
+      issue: "2015-11-29",
+      status: issued,
+      cls: oi,
+      days: 4000,
+      page: "pages/pi9x-tg5x_p001.json.gz",
+    }),
+    permitRow({
+      n: P.P8,
+      issue: "2018-08-26",
+      status: "PC Approved",
+      cls: "open-application",
+      days: 3000,
+      page: "pages/gwh9-jnip_p000.json.gz",
+      dataset: "gwh9-jnip",
+    }),
+    permitRow({
+      n: P.P9,
+      issue: "2021-05-21",
+      status: issued,
+      cls: oi,
+      days: 2000,
+    }),
+    permitRow({
+      n: P.P10,
+      issue: "2018-08-26",
+      status: issued,
+      cls: oi,
+      days: 3000,
+      join: null,
+    }),
+  ];
+  const links = [
+    linkRow(P.P1, "0000000011", "direct", false),
+    linkRow(P.P2, "0000000011", "direct", false),
+    linkRow(P.P3, "0000000021", "condo-building", true),
+    linkRow(P.P3, "0000000022", "condo-building", true),
+    linkRow(P.P3, "0000000023", "condo-building", true),
+    linkRow(P.P4, "0000000031", "direct", false),
+    linkRow(P.P5, "0000000051", "direct", false),
+    linkRow(P.P6, "0000000051", "direct", false),
+    linkRow(P.P7, "0000000051", "direct", false),
+    linkRow(P.P8, "0000000012", "address", false),
+    linkRow(P.P9, "0000000041", "direct", false),
+  ];
+  const contractors = [
+    contractorRow({
+      permit: P.P1,
+      name: "FIXTURE ROOFING INC",
+      license: "100001",
+      type: "C39",
+      cls: "C-39",
+    }),
+    contractorRow({
+      permit: P.P1,
+      type: "NA",
+      note: "owner-builder",
+      ownerBuilder: true,
+    }),
+    contractorRow({
+      permit: P.P3,
+      name: "FIXTURE BUILDERS",
+      license: "100002",
+      type: "B",
+      cls: "B",
+    }),
+    contractorRow({
+      permit: "12016-10000-00099",
+      name: "FIXTURE OTHER",
+      license: "100003",
+      cls: "C-39",
+    }),
+  ];
+  return writeRun(
+    parcels.join(" union all "),
+    {
+      permits: permits.join(" union all "),
+      permit_parcels: links.join(" union all "),
+      permit_contractors: contractors.join(" union all "),
+    },
+    {
+      derived_field_reference_date: PERMIT_FIXTURE.referenceDate,
+      coverage: {
+        with_coordinates: PERMIT_FIXTURE.parcels,
+        permit_data: {
+          parcels_with_permit_data: 8,
+          parcels_without_permit_data: 1,
+          parcels_with_permits: 8,
+        },
+      },
+      sources: [
+        {
+          name: FIXTURE.source,
+          role: "roll",
+          query_url: "https://example.test/query",
+        },
+        {
+          name: PERMIT_FIXTURE.permitSource,
+          role: "permits",
+          query_urls: ["https://example.test/permits"],
+          license: "none stated",
+          attribution: "LADBS",
+        },
+        {
+          name: PERMIT_FIXTURE.contractorSource,
+          role: "contractors",
+          query_urls: ["https://example.test/contractors"],
+          license: "CC BY 4.0",
+          attribution: "LADBS",
+        },
+      ],
+    },
+  );
 }

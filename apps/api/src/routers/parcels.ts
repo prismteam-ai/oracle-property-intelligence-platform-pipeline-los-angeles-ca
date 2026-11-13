@@ -12,6 +12,7 @@ import {
   type SearchResult,
 } from "../contract.ts";
 import { procedure, router } from "../trpc.ts";
+import { maxNotBelowMin, openWindow } from "./permits.ts";
 
 const filter = z.object({
   lat: z.number().min(LA_BOUNDS.minLat).max(LA_BOUNDS.maxLat),
@@ -42,7 +43,10 @@ export const parcelsRouter = router({
         args(input),
       );
       const items = (await db.rows(
-        `select parcel_id, address, year_built, roll_year - year_built as roof_age_years_proxy, round(distance_miles, 3) as distance_miles, latitude, longitude
+        `select parcel_id, address, year_built, roll_year - year_built as roof_age_years_proxy, effective_roof_year,
+           roll_year - effective_roof_year as roof_age_years, roof_age_basis, roof_year_permit_number,
+           coalesce(permit_data_available, false) as permit_data_available, round(distance_miles, 3) as distance_miles,
+           latitude, longitude
          from oracle.roof_age_candidates($1, $2, $3, $4) order by distance_miles, parcel_id limit ${input.limit} offset ${input.offset}`,
         args(input),
       )) as unknown as SearchResult["items"];
@@ -57,14 +61,27 @@ export const parcelsRouter = router({
             : null,
       };
     }),
+  /**
+   * Map points: columnar, nearest first, capped at MAX_POINTS. Each point is marked for permit data and for
+   * a long-open permit under the same open-duration window as permits.longOpen.
+   */
   points: procedure
-    .input(filter)
+    .input(
+      filter.extend(openWindow).refine(maxNotBelowMin, {
+        message: "max_open_days must not be below min_open_days",
+        path: ["max_open_days"],
+      }),
+    )
     .query(async ({ ctx, input }): Promise<PointsResult> => {
       const db = await ctx.db();
       const rows = await db.rows(
-        `select parcel_id, round(latitude, 5) as lat, round(longitude, 5) as lon from oracle.roof_age_candidates($1, $2, $3, $4)
-       order by distance_miles, parcel_id limit ${MAX_POINTS + 1}`,
-        args(input),
+        `select c.parcel_id, round(c.latitude, 5) as lat, round(c.longitude, 5) as lon,
+           coalesce(c.permit_data_available, false) as permit_data, lo.parcel_id is not null as long_open
+         from oracle.roof_age_candidates($1, $2, $3, $4) c
+         left join (select distinct parcel_id from oracle.long_open_parcels($5::integer, $6::integer)) lo
+           on lo.parcel_id = c.parcel_id
+         order by c.distance_miles, c.parcel_id limit ${MAX_POINTS + 1}`,
+        [...args(input), input.min_open_days, input.max_open_days ?? null],
       );
       const [c] = await db.rows(
         "select count(*)::integer as n from oracle.roof_age_candidates($1, $2, $3, $4)",
@@ -78,6 +95,12 @@ export const parcelsRouter = router({
         id: kept.map((r) => String(r.parcel_id)),
         lat: kept.map((r) => Number(r.lat)),
         lon: kept.map((r) => Number(r.lon)),
+        permit_data_available: kept.map((r) => (r.permit_data ? 1 : 0)),
+        long_open_permit: kept.map((r) => (r.long_open ? 1 : 0)),
+        long_open: {
+          min_open_days: input.min_open_days,
+          max_open_days: input.max_open_days ?? null,
+        },
         truncated: rows.length > MAX_POINTS,
         max_points: MAX_POINTS,
       };
