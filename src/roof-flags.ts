@@ -14,12 +14,16 @@
  *    RE-ROOFED; letters before it, as in BATHREROOF, make it no word start), or the two words
  *    RE ROOF, RE ROOFS, RE ROOFED or RE ROOFING;
  *  - roof_r: a re-roof word, or the words ROOF COVER(S/ING/INGS), ROOFING, ROOF TILE(S), or the
- *    phrase COATING TO AN EXISTING ROOF;
+ *    phrase COATING TO AN EXISTING ROOF; or the words ENTIRE ROOF(S), or ROOF SYSTEM (letters may
+ *    follow SYSTEM, as in ROOF SYSTEMS), when the description also holds a word starting with
+ *    REPLAC, REFRAM, REBUIL, RECONSTRUCT (each with or without a hyphen after RE), SHEATH or
+ *    SHEATING, or the word NEW (whole-roof replacements and reframes);
  *  - roof_only: the cache's two start patterns ("RE-ROOF WITH CLASS A OR B"; "REROOF WITH <n> SQRS"),
  *    or an Express Permit whose description holds a re-roof word or the word ROOF, ROOFS, ROOFED or
  *    ROOFING. ROOFTOP(S), and ROOF and TOP(S) joined by one separator, are not a roof word;
- *  - so SOUNDPROOF, WATERPROOF, FIREPROOF, DAMPPROOF (and their -ING forms), ENTIRE ROOF and
- *    RESTRUCTURE, RECONFIGURE or RESTORE ROOF are not roofing on their own;
+ *  - so SOUNDPROOF, WATERPROOF, FIREPROOF, DAMPPROOF (and their -ING forms), ENTIRE ROOF or ROOF
+ *    SYSTEM without such a word, and RESTRUCTURE, RECONFIGURE or RESTORE ROOF are not roofing on
+ *    their own;
  *  - roofing_work = roof_r OR roof_only. Partial repairs stay in (a stated limitation);
  *  - roof_coating_only: roofing_work holds only because of the phrase COATING TO AN EXISTING ROOF
  *    (with the phrase removed, neither flag holds). Such a permit stays in the permit lists but does
@@ -29,7 +33,7 @@
 import type { DuckDBConnection } from "@duckdb/node-api";
 import { sqlLiteral } from "./property-sql.ts";
 
-export const ROOF_FLAG_RULE_VERSION = "roof-flags-2";
+export const ROOF_FLAG_RULE_VERSION = "roof-flags-4";
 export const EXPRESS_PERMIT = "Express Permit";
 
 /** A whole word or phrase: no letter right before or right after it. */
@@ -43,6 +47,12 @@ const COATING = word(`COATING${S}TO${S}AN${S}EXISTING${S}ROOF`);
 const COATING_ALL = word(`COATING${S}TO${S}AN${S}EXISTING${S}ROOF`, "g");
 const ROOF_R_WORDS = word(
   [`ROOF${S}COVER(?:S|ING|INGS)?`, "ROOFING", `ROOF${S}TILES?`].join("|"),
+);
+const WHOLE_ROOF = new RegExp(
+  `(?<![A-Z])(?:ENTIRE${S}ROOFS?(?![A-Z])|ROOF${S}SYSTEM)`,
+);
+const WHOLE_ROOF_WORK = new RegExp(
+  `(?<![A-Z])(?:RE-?(?:PLAC|FRAM|BUIL|CONSTRUCT)|SHEATH|SHEATING|NEW(?![A-Z]))`,
 );
 const START_PATTERNS =
   /^(?:RE-ROOF WITH CLASS A OR B|REROOF WITH [0-9]+(?:\.[0-9]+)? SQRS(?![A-Z]))/;
@@ -60,7 +70,11 @@ export const roofText = (workDesc: string | null | undefined) =>
   (workDesc ?? "").toUpperCase().replace(/\s+/g, " ").trim();
 
 function flagsOfText(t: string, businessUnit: string | null | undefined) {
-  const roofR = REROOF_WORD.test(t) || ROOF_R_WORDS.test(t) || COATING.test(t);
+  const roofR =
+    REROOF_WORD.test(t) ||
+    ROOF_R_WORDS.test(t) ||
+    COATING.test(t) ||
+    (WHOLE_ROOF.test(t) && WHOLE_ROOF_WORK.test(t));
   const roofOnly =
     START_PATTERNS.test(t) ||
     (businessUnit === EXPRESS_PERMIT &&
