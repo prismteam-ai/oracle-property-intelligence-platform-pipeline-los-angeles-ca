@@ -45,7 +45,8 @@ describe("Explorer web stack", () => {
       "BootstrapVersion",
     ]);
     t.hasOutput("AppId", {});
-  });
+    // A full CDK synth: it took over 5 s when the shared machine was busy, so it gets 20 s.
+  }, 20_000);
 
   test("host mode: only an explorer branch on the app named by the SSM parameter; no app, no IAM in this stack", () => {
     const t = synth(PARAM);
