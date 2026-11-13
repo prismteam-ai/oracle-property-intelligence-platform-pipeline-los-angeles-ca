@@ -1,0 +1,19 @@
+{
+  "name": "@oracle-la/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Question-answering agent over the Oracle LA data API: model providers, tools, policy and the capped agent loop.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "1.1.0",
+    "@anthropic-ai/sdk": "1.3.0",
+    "@oracle-la/api": "workspace:*",
+    "zod": "4.6.7"
+  }
+}

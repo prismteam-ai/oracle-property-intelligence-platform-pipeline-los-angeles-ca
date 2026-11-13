@@ -41,3 +41,15 @@ permissions:
     skills: false
   "@trpc/server":
     skills: false
+
+# Missing dependency declarations (https://pnpm.io/settings#packageextensions).
+# aws-sdk-client-mock 4.1.0 imports @smithy/types in its type declarations
+# without declaring it, so it resolved the hoisted copy under
+# node_modules/.pnpm/node_modules. That copy changed from 4.x to 2.12.0 when
+# @anthropic-ai/bedrock-sdk (packages/agent) brought in @smithy/types ^2.3.4,
+# and mockClient(S3Client) / mockClient(SSMClient) in apps/api tests stopped
+# type-checking. Pinned to 4.19.0, the version the S3 and SSM clients use.
+packageExtensions:
+  aws-sdk-client-mock@4.1.0:
+    dependencies:
+      "@smithy/types": 4.19.0
