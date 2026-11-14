@@ -1,4 +1,6 @@
+import { OWNERSHIP_BASIS, OWNERSHIP_PROXY_NOTE } from "@oracle-la/api/contract";
 import { beforeAll, describe, expect, test } from "vitest";
+import { ownershipRuleLine } from "../src/ownership.ts";
 import { basisWord, onceSources, type DataQueries } from "../src/permit-api.ts";
 import { dropDescriptions } from "../src/policy.ts";
 import {
@@ -8,13 +10,16 @@ import {
   toolSchemas,
 } from "../src/tools.ts";
 import {
+  CONTRACTOR_COVERAGE,
   CONTRACTOR_RETRIEVED,
   FAKE_PARCELS,
   FAKE_PERMITS,
   FAKE_SOURCES,
+  OWNERSHIP_COUNT,
   PERMIT_RETRIEVED,
   ROOF_AGE_BASIS,
   SECRET_DESCRIPTION,
+  apiOwnershipRule,
   blockNetwork,
   fakeQueries,
 } from "./helpers.ts";
@@ -78,6 +83,7 @@ describe("tool definitions for the model", () => {
         radius_miles: 5,
         threshold_years: 15,
         limit: 10,
+        ownership_filter: false,
       },
     );
     expect(toolSchemas.long_open_permits.parse({ lat: 34, lon: -118 })).toEqual(
@@ -434,6 +440,9 @@ describe("runTool", () => {
     expect(Object.keys(c.permits[0]!.contractors[0]!)).toEqual([
       "contractors_business_name",
       "license_identifier",
+      "contractor_identity_key",
+      "canonical_business_name",
+      "name_variant_count",
       "license_class",
       "source_license_type",
       "license_class_note",
@@ -752,12 +761,19 @@ describe("runTool", () => {
         "hub_page",
         "query_url",
         "query_urls",
+        "coverage",
         "terms_of_use",
         "license",
         "attribution",
         "access",
       ]),
     );
+    // The coverage window: the contractor rows' permit_issue_date range; null for the permits and the roll.
+    expect(sources.map((x) => x.coverage)).toEqual([
+      CONTRACTOR_COVERAGE,
+      null,
+      null,
+    ]);
     expect(sources[1]).toMatchObject({
       source_kind: "permit",
       page_count: 1,
@@ -792,5 +808,219 @@ describe("description guard", () => {
       value: { a: 1, nested: [{ keep: true, deeper: {} }] },
       dropped: 3,
     });
+  });
+});
+
+describe("search_aged_roofs: the ownership filter (P19)", () => {
+  const VN = { lat: 34.199, lon: -118.487 };
+  const searchInput = (calls: Array<{ fn: string; input: unknown }>) =>
+    calls.find((c) => c.fn === "parcels.search")!.input as Record<
+      string,
+      unknown
+    >;
+
+  test("the schema: ownership_filter (boolean, off by default) and ownership_basis (the contract's three bases, optional)", () => {
+    const search = anthropicTools().find(
+      (t) => t.name === "search_aged_roofs",
+    )!;
+    const props = search.input_schema.properties as Record<
+      string,
+      { type?: string; enum?: string[]; description?: string }
+    >;
+    expect(props.ownership_filter?.type).toBe("boolean");
+    expect(props.ownership_filter?.description).toMatch(/default: false/);
+    // The SDK's strict-mode transform states the enum in the description; zod refuses any other value.
+    expect(props.ownership_basis?.type).toBe("string");
+    expect(props.ownership_basis?.description).toContain(
+      '{enum: ["recording","base_year","both"]}',
+    );
+    expect(search.input_schema.required).toEqual(["lat", "lon"]);
+    expect(
+      toolSchemas.search_aged_roofs.parse({ ...VN, ownership_filter: true }),
+    ).not.toHaveProperty("ownership_basis");
+    expect(
+      toolSchemas.search_aged_roofs.safeParse({
+        ...VN,
+        ownership_filter: true,
+        ownership_basis: "sale",
+      }).success,
+    ).toBe(false);
+  });
+
+  test("off by default: no ownership_basis reaches parcels.search; no ownership or land_base_year in the result", async () => {
+    const { queries, calls } = fakeQueries();
+    const o = await runTool("search_aged_roofs", VN, queries);
+    expect(o.ok).toBe(true);
+    expect(searchInput(calls)).not.toHaveProperty("ownership_basis");
+    expect(o.content).not.toHaveProperty("ownership");
+    expect(keysDeep(o.content)).not.toContain("land_base_year");
+    expect(o.fact).toMatchObject({ ownership_basis: null, count: 42 });
+  });
+
+  test('on without a basis: "both"; the result states the basis, its text, weakness and the proxy note as the contract has them', async () => {
+    const { queries, calls } = fakeQueries();
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...VN, ownership_filter: true },
+      queries,
+    );
+    expect(o.ok).toBe(true);
+    expect(searchInput(calls)).toEqual({
+      ...VN,
+      radius_miles: 5,
+      threshold_years: 15,
+      ownership_basis: "both",
+      offset: 0,
+      limit: 10,
+    });
+    const c = o.content as {
+      count: number;
+      ownership: Record<string, string>;
+      items: Array<Record<string, unknown>>;
+    };
+    expect(c.count).toBe(OWNERSHIP_COUNT);
+    expect(c.ownership).toEqual({
+      basis: "both",
+      text: OWNERSHIP_BASIS.both.text,
+      weakness: OWNERSHIP_BASIS.both.weakness,
+      proxy_note: OWNERSHIP_PROXY_NOTE,
+    });
+    // The same texts the API states (apps/api/src/routers/parcels.ts ownershipRule).
+    expect(c.ownership).toEqual(apiOwnershipRule("both"));
+    expect(c.items.map((i) => i.land_base_year)).toEqual([1975, 1976, 1977]);
+    expect(o.fact).toMatchObject({
+      ownership_basis: "both",
+      count: OWNERSHIP_COUNT,
+    });
+  });
+
+  test.each(["recording", "base_year", "both"] as const)(
+    "basis %s: sent as named and stated with its own weakness",
+    async (basis) => {
+      const { queries, calls } = fakeQueries();
+      const o = await runTool(
+        "search_aged_roofs",
+        { ...VN, ownership_filter: true, ownership_basis: basis },
+        queries,
+      );
+      expect(searchInput(calls).ownership_basis).toBe(basis);
+      expect((o.content as { ownership: unknown }).ownership).toEqual(
+        apiOwnershipRule(basis),
+      );
+      expect(ownershipRuleLine(basis)).toBe(
+        `Ownership filter (basis "${basis}"): ${OWNERSHIP_BASIS[basis].text} Weakness: ${OWNERSHIP_BASIS[basis].weakness} ${OWNERSHIP_PROXY_NOTE}`,
+      );
+    },
+  );
+
+  test("a basis with the filter off is refused (not ignored) before any data call", async () => {
+    const { queries, calls } = fakeQueries();
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...VN, ownership_basis: "recording" },
+      queries,
+    );
+    expect(o).toMatchObject({
+      ok: false,
+      error: "ownership_basis is set but ownership_filter is off",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("a result whose stated basis differs from the one asked is an error, never shown as filtered", async () => {
+    const { queries } = fakeQueries();
+    const wrong: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        search: async (input) => ({
+          ...(await queries.parcels.search(input)),
+          ownership: null,
+        }),
+      },
+    };
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...VN, ownership_filter: true },
+      wrong,
+    );
+    expect(o).toMatchObject({
+      ok: false,
+      error: "the data API applied ownership basis none, not both",
+    });
+  });
+});
+
+describe("parcel_permits: the contractor identity (P19)", () => {
+  test("key, canonical name and variant count as served; the permit count and any variant list are not passed on", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool(
+      "parcel_permits",
+      { parcel_id: FAKE_PARCELS[0] },
+      queries,
+    );
+    const c = o.content as {
+      permits: Array<{ contractors: Array<Record<string, unknown>> }>;
+    };
+    expect(c.permits[0]!.contractors[0]).toMatchObject({
+      contractors_business_name: "ACME ROOFING INC",
+      license_identifier: "123456",
+      contractor_identity_key: "123456",
+      canonical_business_name: "ACME ROOFING, INC.",
+      name_variant_count: 2,
+    });
+    expect(keysDeep(o.content)).not.toContain("identity_permit_count");
+  });
+
+  test("a license without any name has no name: null canonical name, never one taken from elsewhere; variants never listed", async () => {
+    const { queries } = fakeQueries();
+    const nameless: DataQueries = {
+      ...queries,
+      permits: {
+        ...queries.permits,
+        forParcel: async (input) => {
+          const r = await queries.permits.forParcel(input);
+          const p = r.permits[0]!;
+          return {
+            ...r,
+            permits: [
+              {
+                ...p,
+                contractors: [
+                  {
+                    ...p.contractors[0]!,
+                    contractors_business_name: null,
+                    license_identifier: "999999",
+                    contractor_identity_key: "999999",
+                    canonical_business_name: null,
+                    name_variant_count: 0,
+                    // A list of variants is never part of the result, even if a row carried one.
+                    ...{ name_variants: ["GUESSED ROOFING"] },
+                  },
+                ],
+              },
+            ],
+          };
+        },
+      },
+    };
+    const o = await runTool(
+      "parcel_permits",
+      { parcel_id: FAKE_PARCELS[0] },
+      nameless,
+    );
+    const c = o.content as {
+      permits: Array<{ contractors: Array<Record<string, unknown>> }>;
+    };
+    expect(c.permits[0]!.contractors[0]).toMatchObject({
+      contractors_business_name: null,
+      license_identifier: "999999",
+      contractor_identity_key: "999999",
+      canonical_business_name: null,
+      name_variant_count: 0,
+    });
+    expect(keysDeep(o.content)).not.toContain("name_variants");
+    expect(JSON.stringify(o.content)).not.toContain("GUESSED");
+    expect(JSON.stringify(o.content)).not.toContain("ACME");
   });
 });

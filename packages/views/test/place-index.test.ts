@@ -1,9 +1,10 @@
 /**
  * PlaceIndex on a synthetic parcel set (design brief §11.1). The fake `rows` implements the two aggregate queries'
  * semantics in JS (distinct values with counts; median center and 90th-percentile spread over bound values,
- * quantile_cont = linear interpolation). The same SQL runs on DuckDB in apps/agent-mcp/test.
+ * quantile_cont = linear interpolation). The same SQL runs on DuckDB in apps/agent-mcp/test and apps/api/test
+ * (places.resolve). The module is shared by the data API and the agent.
  */
-import { beforeAll, describe, expect, test } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import {
   PLACE_VALUES_SQL,
   PlaceIndex,
@@ -14,9 +15,13 @@ import {
   sameCoord,
   type RowsDb,
 } from "../src/place-index.ts";
-import { blockNetwork } from "./helpers.ts";
 
-beforeAll(blockNetwork);
+/** Any fetch in a test is a bug: the stub throws. */
+beforeAll(() => {
+  vi.stubGlobal("fetch", () => {
+    throw new Error("network is disabled in tests");
+  });
+});
 
 interface P {
   jurisdiction: string;

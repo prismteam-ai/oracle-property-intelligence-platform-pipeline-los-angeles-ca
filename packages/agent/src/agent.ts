@@ -6,7 +6,13 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { AgentSettings } from "./config.ts";
+import {
+  answerStandardGaps,
+  contractorWindow,
+  type WindowRead,
+} from "./contractor-coverage.ts";
 import { modelErrorName, type ModelClient } from "./model-client.ts";
+import { ownershipRuleLine } from "./ownership.ts";
 import { onceSources, type DataQueries } from "./permit-api.ts";
 import {
   BASIS_LABEL,
@@ -15,7 +21,7 @@ import {
   resolvedPhrase,
   sameCoord,
   type PlaceBasis,
-} from "./place-index.ts";
+} from "../../views/src/place-index.ts";
 import {
   GAP_NO_CENTER,
   PEOPLE_REFUSAL_TEXT,
@@ -440,7 +446,7 @@ function explain(
     switch (f.tool) {
       case "search_aged_roofs":
         reasoning.push(
-          `searched parcels within ${f.radius_miles} mi of ${label} built before ${f.built_before_year} (roofs older than ${f.threshold_years} years): ${fmt(f.count)} match, ${f.returned} listed`,
+          `searched parcels within ${f.radius_miles} mi of ${label} built before ${f.built_before_year} (roofs older than ${f.threshold_years} years)${f.ownership_basis ? `, owner unchanged for 10 years or more by the "${f.ownership_basis}" basis` : ""}: ${fmt(f.count)} match, ${f.returned} listed`,
         );
         assumptions.push(
           f.proxy_count === f.returned
@@ -450,6 +456,8 @@ function explain(
         // Every listed parcel lies where no permit source reaches.
         if (f.returned > 0 && f.no_permit_data === f.returned)
           gaps.push(outsideCityGap(label));
+        // The basis, its weakness and the proxy note, stated with the answer (ownership.ts).
+        if (f.ownership_basis) rules.push(ownershipRuleLine(f.ownership_basis));
         break;
       case "long_open_permits":
         reasoning.push(
@@ -556,12 +564,24 @@ export async function runAgent(
     };
   }
 
+  // The contractor rows' window from the run's sources (read once per answer, shared with the tools' citations):
+  // the system prompt's contractor lines and the contractor gap name it. A failed read keeps the documented end.
+  const windowRead: WindowRead = await queries.explorer.sources().then(
+    (src): WindowRead => {
+      const window = contractorWindow(src);
+      return window ? { status: "stated", window } : { status: "none" };
+    },
+    (): WindowRead => ({ status: "failed" }),
+  );
   const messages: Anthropic.MessageParam[] = [
     ...history,
     userTurn(req, prevArea),
   ];
   const tools = anthropicTools();
-  const system = systemPrompt(s.maxToolTurns);
+  const system = systemPrompt(
+    s.maxToolTurns,
+    windowRead.status === "stated" ? windowRead.window : null,
+  );
   const outcomes: ToolOutcome[] = [];
   let toolRounds = 0;
   let stoppedBy: StoppedBy | undefined;
@@ -699,7 +719,7 @@ export async function runAgent(
   const ex = explain(req, prevArea, outcomes);
   const dropped = outcomes.reduce((n, o) => n + o.dropped, 0);
   const gaps = uniq([
-    ...STANDARD_GAPS,
+    ...answerStandardGaps(windowRead),
     ...outcomes.flatMap((o) => o.gaps),
     ...ex.gaps,
     ...(ex.centerKnown ? [] : [GAP_NO_CENTER]),

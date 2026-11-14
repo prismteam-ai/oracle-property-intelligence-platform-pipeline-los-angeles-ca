@@ -20,10 +20,18 @@ export interface Citation {
   collected_at: string;
 }
 
-/** Always listed in every answer (American spelling). */
+/**
+ * The contractor gap where the run's sources state no window, and in refusals (which read no data). An answer
+ * that reads the window states it instead (contractor-coverage.ts): on the served runs the same first sentence,
+ * then the source and its window.
+ */
+export const DOCUMENTED_CONTRACTOR_END = "May 2023";
+export const GAP_CONTRACTOR_DEFAULT = `No contractor license data after ${DOCUMENTED_CONTRACTOR_END}.`;
+
+/** Always listed in every answer (American spelling); the contractor gap as contractor-coverage.ts states it. */
 export const STANDARD_GAPS: readonly string[] = [
   "Permits cover the City of Los Angeles only (LADBS); parcels elsewhere in the county have no permit data.",
-  "No contractor license data after May 2023.",
+  GAP_CONTRACTOR_DEFAULT,
   "BBB ratings are not available.",
   "No owner data: owner names and contact details are neither collected nor served.",
   "Permit descriptions are not read or returned.",

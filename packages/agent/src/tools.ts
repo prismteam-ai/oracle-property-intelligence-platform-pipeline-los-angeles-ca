@@ -16,18 +16,24 @@ import type {
   DEFAULT_MIN_OPEN_DAYS as API_DEFAULT_MIN_OPEN_DAYS,
   MAX_OPEN_DAYS as API_MAX_OPEN_DAYS,
   LongOpenItem,
+  OwnershipBasis,
   ParcelPermit,
   SourceKind,
   Sources,
 } from "@oracle-la/api/contract";
 import { z } from "zod";
+import {
+  DEFAULT_OWNERSHIP_BASIS,
+  OWNERSHIP_BASES,
+  ownershipStated,
+} from "./ownership.ts";
 import { basisWord, type DataQueries } from "./permit-api.ts";
 import {
   resolutionNote,
   roundCenter,
   type PlaceCandidate,
   type PlaceResolution,
-} from "./place-index.ts";
+} from "../../views/src/place-index.ts";
 import {
   dedupeCitations,
   dropDescriptions,
@@ -100,6 +106,18 @@ export const toolSchemas = {
       .max(25)
       .default(10)
       .describe("Most items to return"),
+    ownership_filter: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Keep only parcels whose owner is unchanged for 10 years or more, by a County-roll proxy (not a sale date). Off by default; on only when the question asks for it",
+      ),
+    ownership_basis: z
+      .enum(OWNERSHIP_BASES)
+      .optional()
+      .describe(
+        'With ownership_filter on: "recording" (no recorded document in 10 years), "base_year" (no reassessment in 10 years) or "both" (the default)',
+      ),
   }),
   long_open_permits: z.strictObject({
     lat,
@@ -146,7 +164,10 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   search_aged_roofs:
     "Parcels within a radius of a center whose roof age is older than a threshold in years. Roof age counts from " +
     "the effective roof year: the assessor year-built proxy (roof_age_basis PROXY) or a finaled roofing permit " +
-    "(PERMIT). Returns the count, the rule text and up to `limit` parcels nearest first, each with its source citation.",
+    "(PERMIT). Returns the count, the rule text and up to `limit` parcels nearest first, each with its source citation. " +
+    "Optional ownership filter, off by default: ownership_filter keeps parcels whose owner is unchanged for 10 years " +
+    'or more by a County-roll proxy, on ownership_basis "recording", "base_year" or "both" (the default); the result ' +
+    "states the basis, its weakness and that the bases are proxies from the County roll, not sales records.",
   long_open_permits:
     "City of Los Angeles (LADBS) roofing-work permits, issued and still open, within a radius: open at least " +
     "min_open_days days (optionally at most max_open_days), longest open first, each counted once at its nearest " +
@@ -160,10 +181,13 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   parcel_permits:
     "One parcel's roof-year facts and whether permit data covers it, then its permits (status class, LADBS status " +
     "text, dates, open days, roofing flags) with contractor businesses (business name, license number, license " +
-    "class). BBB ratings are not available. Permit descriptions are never returned.",
+    "class) and each license's identity: its key (the license number), canonical name (null when the license has " +
+    "no name) and name variant count (variants are never listed). BBB ratings are not available. Permit " +
+    "descriptions are never returned.",
   run_summary:
     "The served data run: run ID, timestamps, row counts, limitations, and each source once: kind, name, query " +
-    "URL(s), hub page, terms of use, license, attribution, record and page counts and retrieval window. Records " +
+    "URL(s), hub page, terms of use, license, attribution, record and page counts, retrieval window and coverage " +
+    "window (the contractor rows' permit_issue_date range; null for the others). Records " +
     "carry only their source name and collection time; page-level files and hashes stay in the data API " +
     "(explorer.sources pages, explorer.records).",
 };
@@ -184,6 +208,8 @@ export type ToolFact =
       proxy_count: number;
       /** Listed parcels with permit_data_available false. */
       no_permit_data: number;
+      /** The ownership basis the search applied; null: no ownership filter. */
+      ownership_basis: OwnershipBasis | null;
     }
   | {
       tool: "long_open_permits";
@@ -342,9 +368,16 @@ const PERMIT_FIELDS: Record<string, string> = {
     "parcel_count",
   ),
 };
+/**
+ * The contractor identity (one per license number) comes as the API serves it: a license without any name keeps a
+ * null canonical name (never filled from another field), and name variants are counted, never listed.
+ */
 const CONTRACTOR_FIELDS = fields(
   "contractors_business_name",
   "license_identifier",
+  "contractor_identity_key",
+  "canonical_business_name",
+  "name_variant_count",
   "license_class",
   "source_license_type",
   "license_class_note",
@@ -423,14 +456,28 @@ const run = {
     q: DataQueries,
     input: ToolInput<"search_aged_roofs">,
   ): Promise<Produced> {
+    if (input.ownership_basis !== undefined && !input.ownership_filter)
+      throw new ToolInputError(
+        "ownership_basis is set but ownership_filter is off",
+      );
+    // Off by default; on, "both" unless a basis is named.
+    const ownership: OwnershipBasis | null = input.ownership_filter
+      ? (input.ownership_basis ?? DEFAULT_OWNERSHIP_BASIS)
+      : null;
     const res = await q.parcels.search({
       lat: input.lat,
       lon: input.lon,
       radius_miles: input.radius_miles,
       threshold_years: input.threshold_years,
+      ...(ownership ? { ownership_basis: ownership } : {}),
       offset: 0,
       limit: input.limit,
     });
+    // The count and items are only as filtered as the API says it filtered them.
+    if ((res.ownership?.basis ?? null) !== ownership)
+      throw new Error(
+        `the data API applied ownership basis ${res.ownership?.basis ?? "none"}, not ${ownership ?? "none"}`,
+      );
     // The roof-age facts come from the search item itself; the detail call is only for the provenance citation.
     // explorer.sources is read only when an item's roof year comes from a permit (its citation's source).
     const roofYearPermits = strings(
@@ -485,6 +532,13 @@ const run = {
             "distance_miles",
           ),
         ),
+        // The roll's land base year, which the "base_year" and "both" bases read, only with the filter on.
+        ...(ownership
+          ? project(
+              it as unknown as Record<string, unknown>,
+              fields("land_base_year"),
+            )
+          : {}),
         citation: citation
           ? {
               source_name: citation.source_name,
@@ -515,6 +569,8 @@ const run = {
         proxy === items.length
           ? "PROXY (assessor year built, not a roof installation date)"
           : `per item: ${proxy} PROXY, ${permit} PERMIT${unknown ? `, ${unknown} unknown` : ""}`,
+      // The ownership filter applied: its basis, text, weakness and the proxy note (ownership.ts).
+      ...(ownership ? { ownership: ownershipStated(ownership) } : {}),
       items,
       truncated,
     };
@@ -539,6 +595,7 @@ const run = {
         no_permit_data: res.items.filter(
           (it) => it.permit_data_available === false,
         ).length,
+        ownership_basis: ownership,
       },
     };
   },
@@ -780,6 +837,13 @@ const run = {
           ),
           query_urls: Array.isArray(x.query_urls)
             ? x.query_urls.filter((u): u is string => typeof u === "string")
+            : null,
+          // The window of the source's records in the data (the contractor rows' permit_issue_date); null: none.
+          coverage: x.coverage
+            ? project(
+                x.coverage as unknown as Record<string, unknown>,
+                fields("field", "first", "last"),
+              )
             : null,
           ...project(
             x as unknown as Record<string, unknown>,

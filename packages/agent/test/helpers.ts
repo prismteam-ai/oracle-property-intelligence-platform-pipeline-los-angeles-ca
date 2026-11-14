@@ -1,7 +1,11 @@
 /** Shared fakes for the agent tests: data queries that record their inputs, a fake clock, no network. */
 import { vi } from "vitest";
+// The contract's ownership texts as the API states them (a runtime import in the fakes only; the package's own
+// sources import the contract for types).
+import { OWNERSHIP_BASIS, OWNERSHIP_PROXY_NOTE } from "@oracle-la/api/contract";
 import type {
   LongOpenItem,
+  OwnershipRuleOut,
   ParcelDetail,
   ParcelPermit,
   ParcelPermits,
@@ -21,7 +25,7 @@ import type {
   MessagesClient,
 } from "../src/model-client.ts";
 import type { DataQueries, PermitQueries } from "../src/permit-api.ts";
-import { placeKey, type PlaceResolution } from "../src/place-index.ts";
+import { placeKey, type PlaceResolution } from "../../views/src/place-index.ts";
 import { textReply } from "../src/testing/scripted-model.ts";
 
 /** Any fetch in a test is a bug: the stub throws. */
@@ -138,6 +142,12 @@ export const FAKE_SOURCES = {
 export const PERMIT_RETRIEVED =
   "2026-11-12T10:00:00.000Z to 2026-11-12T11:30:00.000Z";
 export const CONTRACTOR_RETRIEVED = "2026-11-12T14:00:51.383Z";
+/** The contractor source's coverage window (as on the served rebuild run); the roll and the permits have none. */
+export const CONTRACTOR_COVERAGE = {
+  field: "permit_issue_date",
+  first: "2013-01-02",
+  last: "2023-05-19",
+} as const;
 
 const sourceRow = (
   source_kind: SourceKind,
@@ -159,8 +169,24 @@ const sourceRow = (
   license: null,
   attribution: null,
   access: null,
+  coverage: null,
   ...extra,
 });
+
+/** The fake search's count with an ownership basis (42 without one). */
+export const OWNERSHIP_COUNT = 17;
+
+/** The ownership rule the API states for a basis (apps/api/src/routers/parcels.ts ownershipRule). */
+export function apiOwnershipRule(
+  basis: OwnershipRuleOut["basis"],
+): OwnershipRuleOut {
+  return {
+    basis,
+    text: OWNERSHIP_BASIS[basis].text,
+    weakness: OWNERSHIP_BASIS[basis].weakness,
+    proxy_note: OWNERSHIP_PROXY_NOTE,
+  } as OwnershipRuleOut;
+}
 
 /** Contract-typed permit fields (drift in the contract fails the typecheck). */
 function permitFields(i: number, roofing: boolean): PermitFields {
@@ -244,6 +270,10 @@ export function fakeQueries(): {
       const contractor: PermitContractor = {
         contractors_business_name: "ACME ROOFING INC",
         license_identifier: "123456",
+        contractor_identity_key: "123456",
+        canonical_business_name: "ACME ROOFING, INC.",
+        name_variant_count: 2,
+        identity_permit_count: 9,
         source_license_type: "C39",
         license_class: "C-39",
         license_class_note: null,
@@ -298,19 +328,22 @@ export function fakeQueries(): {
             roof_age_basis: ROOF_AGE_BASIS.proxy,
             roof_year_permit_number: null,
             permit_data_available: covered,
+            land_base_year: 1975 + i,
             distance_miles: 0.1 * (i + 1),
             latitude: input.lat,
             longitude: input.lon,
           }),
         );
+        const basis = input.ownership_basis;
         return {
-          count: 42,
+          count: basis ? OWNERSHIP_COUNT : 42,
           rule: {
             roll_year: 2026,
             threshold_years: t,
             built_before_year: 2026 - t,
             text: `Roof age is a proxy: older than ${t} years means built before ${2026 - t}.`,
           },
+          ownership: basis ? apiOwnershipRule(basis) : null,
           items,
           next_offset: items.length,
         };
@@ -381,7 +414,11 @@ export function fakeQueries(): {
               "contractor",
               CONTRACTOR_RETRIEVED,
               CONTRACTOR_RETRIEVED,
-              { license: "CC BY 4.0", attribution: "LADBS" },
+              {
+                license: "CC BY 4.0",
+                attribution: "LADBS",
+                coverage: { ...CONTRACTOR_COVERAGE },
+              },
             ),
             sourceRow(
               "permit",

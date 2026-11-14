@@ -2,7 +2,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, test } from "vitest";
-import { PlaceIndex as AgentPlaceIndex } from "../../../packages/agent/src/place-index.ts";
+import { PlaceIndex as SharedPlaceIndex } from "@oracle-la/views";
+// The agent package's export, by relative path (apps/api does not depend on @oracle-la/agent).
+import { PlaceIndex as AgentPlaceIndex } from "../../../packages/agent/src/index.ts";
 import {
   DEFAULT_MIN_OPEN_DAYS,
   MAX_MATCH_IDS,
@@ -1292,7 +1294,7 @@ describe("permit routes on the synthetic permit run", () => {
   });
 });
 
-/** Always runs: places.resolve over the places run (fixture.ts PLACES), the agent's place-index cases. */
+/** Always runs: places.resolve over the places run (fixture.ts PLACES), the place module's own test cases. */
 describe("places.resolve on the synthetic places run", () => {
   let caller: ReturnType<typeof appRouter.createCaller>;
   let run: FixtureRun;
@@ -1394,7 +1396,9 @@ describe("places.resolve on the synthetic places run", () => {
         caller.places.resolve(bad as { name: string }),
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
-  test("parity: the route answers exactly as the agent's own PlaceIndex over the same Db", async () => {
+  test("parity: the agent's PlaceIndex is the route's module (packages/views), and answers as the route over the same Db", async () => {
+    // One module, not a copy: the class the agent exports is the class places.resolve builds its index from.
+    expect(AgentPlaceIndex).toBe(SharedPlaceIndex);
     const db = await openDb({
       runId: FIXTURE.runId,
       parquetSha256: run.parquetSha256,

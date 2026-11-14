@@ -10,6 +10,7 @@
  */
 import type {
   LongOpenResult,
+  OwnershipBasis,
   ParcelDetail,
   ParcelPermits,
   RoofAgeBasis,
@@ -17,7 +18,7 @@ import type {
   SearchResult,
   Sources,
 } from "@oracle-la/api/contract";
-import type { PlaceQueries } from "./place-index.ts";
+import type { PlaceQueries } from "../../views/src/place-index.ts";
 
 /** Input of parcels.search (apps/api/src/routers/parcels.ts; the API applies its own defaults and bounds). */
 export interface SearchInput {
@@ -25,6 +26,8 @@ export interface SearchInput {
   lon: number;
   radius_miles?: number;
   threshold_years?: number;
+  /** The ownership filter's basis; absent: no ownership filter. */
+  ownership_basis?: OwnershipBasis;
   offset?: number;
   limit?: number;
 }
@@ -65,8 +68,8 @@ export interface PermitQueries {
 }
 
 /**
- * Everything the tools read: the API's procedures plus `places`, the PlaceIndex over the run's parcels
- * (place-index.ts), a candidate data API route `places.resolve`.
+ * Everything the tools read: the API's procedures, including `places` (the data API's places.resolve, or a
+ * PlaceIndex over the same Db: both are packages/views/src/place-index.ts).
  */
 export interface DataQueries extends ApiQueries {
   places: PlaceQueries;

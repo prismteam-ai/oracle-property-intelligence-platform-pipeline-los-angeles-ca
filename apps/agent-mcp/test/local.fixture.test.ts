@@ -24,9 +24,13 @@ import {
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
+  GAP_CONTRACTOR_DEFAULT,
+  GAP_CONTRACTOR_NO_WINDOW,
+  OWNERSHIP_BASES,
   STANDARD_GAPS,
   ScriptedModel,
   TOOL_NAMES,
+  systemPrompt,
   idsInText,
   lastToolResult,
   runAgent,
@@ -516,6 +520,10 @@ describe("permit tools over the real permits router (writePermitFixture)", () =>
       {
         contractors_business_name: "FIXTURE ROOFING INC",
         license_identifier: "100001",
+        // The license's identity as the API serves it (identity_permit_count is not passed on).
+        contractor_identity_key: "100001",
+        canonical_business_name: "FIXTURE ROOFING INC",
+        name_variant_count: 1,
         license_class: "C-39",
         source_license_type: "C39",
         license_class_note: null,
@@ -955,5 +963,77 @@ describe("conversation on the permit fixture: pipeline README lines 108 then 110
     const everything = JSON.stringify({ requests: model.requests, a1, a2 });
     expect(everything).not.toContain(PERMIT_WORK_DESC);
     expect(everything).not.toContain("source_status_desc");
+  });
+});
+
+describe("P19 over the real routers (fixtures)", () => {
+  test.each(OWNERSHIP_BASES)(
+    "search_aged_roofs with ownership basis %s answers as caller.parcels.search with it; the stated texts are the API's",
+    async (basis) => {
+      const direct = await data.caller.parcels.search({
+        lat: P.lat,
+        lon: P.lon,
+        radius_miles: 5,
+        threshold_years: 15,
+        ownership_basis: basis,
+        limit: 25,
+      });
+      const o = await runTool(
+        "search_aged_roofs",
+        {
+          lat: P.lat,
+          lon: P.lon,
+          limit: 25,
+          ownership_filter: true,
+          ownership_basis: basis,
+        },
+        data.queries,
+      );
+      expect(o.ok).toBe(true);
+      const c = o.content as {
+        count: number;
+        ownership: unknown;
+        items: Array<{ parcel_id: string; land_base_year: number | null }>;
+      };
+      expect(c.count).toBe(direct.count);
+      expect(c.items.map((i) => i.parcel_id)).toEqual(
+        direct.items.map((i) => i.parcel_id),
+      );
+      expect(c.items.map((i) => i.land_base_year)).toEqual(
+        direct.items.map((i) => i.land_base_year),
+      );
+      expect(c.ownership).toEqual(direct.ownership);
+    },
+  );
+  test("resolve_place goes through the data API's places.resolve (the shared module)", async () => {
+    const o = await runTool(
+      "resolve_place",
+      { name: "Test City" },
+      data.queries,
+    );
+    const direct = await data.caller.places.resolve({ name: "Test City" });
+    expect(o.content).toMatchObject({
+      status: direct.status,
+      ...(direct.status === "resolved"
+        ? { parcel_count: direct.parcel_count, raw_values: direct.raw_values }
+        : {}),
+    });
+  });
+  test("a run whose sources state no contractor window: the prompt as without one, the documented end and why", async () => {
+    const model = new ScriptedModel([textReply("No contractor data then.")]);
+    const a = await runAgent(
+      {
+        question:
+          "Which contractors are on roofing permits issued after May 2023?",
+      },
+      { model, queries: permitData.queries, settings: SETTINGS },
+    );
+    expect(model.requests[0]!.params.system).toBe(
+      systemPrompt(SETTINGS.maxToolTurns),
+    );
+    expect(a.gaps.slice(1, 3)).toEqual([
+      GAP_CONTRACTOR_DEFAULT,
+      GAP_CONTRACTOR_NO_WINDOW,
+    ]);
   });
 });

@@ -12,7 +12,7 @@ import { mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { placeIndexFor, type DataQueries } from "@oracle-la/agent";
+import type { DataQueries } from "@oracle-la/agent";
 import { appRouter } from "@oracle-la/api/router";
 // openDb is not in @oracle-la/api's package exports ("./router", "./contract"), so it is imported by relative path
 // here; the main session may add an export instead (design brief §1).
@@ -107,8 +107,8 @@ export async function openLocalData(
       parcels: caller.parcels,
       explorer: caller.explorer,
       permits: caller.permits,
-      // Candidate data API route places.resolve; until then the PlaceIndex reads the same Db.
-      places: placeIndexFor(db),
+      // The data API's places.resolve (packages/views/src/place-index.ts, its index built on the first call).
+      places: caller.places,
     },
   };
 }

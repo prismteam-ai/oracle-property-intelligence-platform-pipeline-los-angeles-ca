@@ -3,6 +3,11 @@
  * Wording: pipeline README lines 108 and 110 and the CRM README line 13, with "[city xyz]" replaced by "Van Nuys".
  */
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  OWNERSHIP_BASIS,
+  OWNERSHIP_PROXY_NOTE,
+  type Sources,
+} from "@oracle-la/api/contract";
 import { beforeAll, describe, expect, test } from "vitest";
 import {
   InvalidRequestError,
@@ -13,6 +18,12 @@ import {
   type AgentAnswer,
 } from "../src/agent.ts";
 import {
+  GAP_CONTRACTOR_NO_WINDOW,
+  GAP_CONTRACTOR_WINDOW_UNREAD,
+} from "../src/contractor-coverage.ts";
+import { ownershipRuleLine } from "../src/ownership.ts";
+import {
+  GAP_CONTRACTOR_DEFAULT,
   GAP_NO_CENTER,
   PEOPLE_REFUSAL_TEXT,
   STANDARD_GAPS,
@@ -165,6 +176,8 @@ describe("demo prompts with a center (pipeline README lines 108 and 110, [city x
     );
 
     expect(a.status).toBe("answered");
+    // The contractor window (explorer.sources) is read once, before the first model call.
+    expect(calls.shift()).toEqual({ fn: "explorer.sources", input: undefined });
     expect(calls[0]).toEqual({
       fn: "parcels.search",
       input: {
@@ -265,13 +278,14 @@ describe("demo prompts with a center (pipeline README lines 108 and 110, [city x
       { model, queries, settings: SETTINGS },
     );
     expect(a.status).toBe("answered");
-    // explorer.sources (the permit citations) is read once for the whole answer.
+    // explorer.sources (the contractor window, then the permit citations) is read once for the whole answer, before
+    // the first model call.
     expect(calls.map((c) => c.fn)).toEqual([
-      "permits.longOpen",
       "explorer.sources",
+      "permits.longOpen",
       "permits.forParcel",
     ]);
-    expect(calls[0]!.input).toEqual({
+    expect(calls[1]!.input).toEqual({
       lat: 34.199,
       lon: -118.487,
       radius_miles: 5,
@@ -466,12 +480,12 @@ describe("CRM README line 13 ([city xyz] → Van Nuys)", () => {
     );
     expect(a.status).toBe("answered");
     expect(calls.map((c) => c.fn)).toEqual([
+      "explorer.sources",
       "places.resolve",
       "permits.longOpen",
-      "explorer.sources",
     ]);
-    expect(calls[0]!.input).toEqual({ name: "Van Nuys" });
-    expect(calls[1]!.input).toEqual({
+    expect(calls[1]!.input).toEqual({ name: "Van Nuys" });
+    expect(calls[2]!.input).toEqual({
       lat: VAN_NUYS_RESOLVED.lat,
       lon: VAN_NUYS_RESOLVED.lon,
       radius_miles: 5,
@@ -536,7 +550,10 @@ describe("place statements", () => {
       { model, queries, settings: SETTINGS },
     );
     expect(a.status).toBe("answered");
-    expect(calls.map((c) => c.fn)).toEqual(["places.resolve"]);
+    expect(calls.map((c) => c.fn)).toEqual([
+      "explorer.sources",
+      "places.resolve",
+    ]);
     const [j, p] = LOS_ANGELES_CANDIDATES;
     expect([j!.center, p!.center]).toEqual([
       { lat: 34.052235, lon: -118.243683 },
@@ -633,7 +650,13 @@ describe("citations and gaps", () => {
       { question: "Which roofs are old?" },
       { model, queries, settings: SETTINGS },
     );
-    expect(a.gaps.slice(0, 5)).toEqual([...STANDARD_GAPS]);
+    // The contractor gap names the run's contractor source and its window right after the standard sentence.
+    expect(a.gaps.slice(0, 6)).toEqual([
+      STANDARD_GAPS[0],
+      STANDARD_GAPS[1],
+      "The contractor rows (LADBS Contractors) cover permits issued 2013-01-02 to 2023-05-19 (by permit_issue_date).",
+      ...STANDARD_GAPS.slice(2),
+    ]);
     expect(a.gaps).toContain(GAP_NO_CENTER);
     expect(a.reasoning).toBe("Answered without calling a tool.");
     expectSections(a);
@@ -886,7 +909,8 @@ describe("caps", () => {
       stopped_by: "time_budget",
       elapsed_ms: 24_000,
     });
-    expect(calls).toEqual([]);
+    // Only the contractor window, read before the first model call; no tool ran.
+    expect(calls).toEqual([{ fn: "explorer.sources", input: undefined }]);
     expect(a.history.at(-1)!.role).toBe("user");
   });
 
@@ -1336,5 +1360,262 @@ describe("beforeModelCall (the eval's spend limit)", () => {
     );
     expect(n).toBe(1);
     expect(a.status).toBe("answered");
+  });
+});
+
+/** The system prompt of a request (a string, as runAgent sends it). */
+const systemOf = (model: ScriptedModel, i = 0): string =>
+  model.requests[i]!.params.system as string;
+/** Queries whose explorer.sources rows are changed by `edit` (the rest as fakeQueries serves them). */
+function withSources(
+  edit: (src: Sources) => Sources | Promise<Sources>,
+): ReturnType<typeof fakeQueries> {
+  const f = fakeQueries();
+  const sources = f.queries.explorer.sources;
+  return {
+    calls: f.calls,
+    queries: {
+      ...f.queries,
+      explorer: {
+        runSummary: f.queries.explorer.runSummary,
+        sources: async () => edit(await sources()),
+      },
+    },
+  };
+}
+const CONTRACTOR_Q =
+  "Which contractors are listed on roofing permits issued after May 2023 within five miles of Van Nuys?";
+
+describe("the contractor rows' window from explorer.sources (P19)", () => {
+  test("the system prompt and the contractor gap name the source and its window; the standard sentence is unchanged", async () => {
+    const { queries, calls } = fakeQueries();
+    const model = new ScriptedModel([
+      textReply(
+        "There is no contractor data for permits issued after May 2023: contractor rows end in May 2023.",
+      ),
+    ]);
+    const a = await runAgent(
+      { question: CONTRACTOR_Q, center: VAN_NUYS },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(calls.map((c) => c.fn)).toEqual(["explorer.sources"]);
+    const system = systemOf(model);
+    expect(system).toContain(
+      "There is no contractor license data after May 2023 (the contractor rows, from LADBS Contractors, cover permits issued 2013-01-02 to 2023-05-19).",
+    );
+    // The instruction line reads as before on these dates.
+    expect(system).toContain(
+      "\n- Contractor rows end in May 2023: for permits issued after May 2023, say there is no contractor data instead of reading parcels' permits for it.\n",
+    );
+    expect(a.gaps).toContain(GAP_CONTRACTOR_DEFAULT);
+    expect(a.gaps[a.gaps.indexOf(GAP_CONTRACTOR_DEFAULT) + 1]).toBe(
+      `The contractor rows (${FAKE_SOURCES.contractor}) cover permits issued 2013-01-02 to 2023-05-19 (by permit_issue_date).`,
+    );
+    expect(a.markdown).toContain(
+      "- The contractor rows (LADBS Contractors) cover permits issued 2013-01-02 to 2023-05-19 (by permit_issue_date).",
+    );
+  });
+
+  test("another window: the month and the dates follow the data, not a fixed May 2023", async () => {
+    const { queries } = withSources((src) => ({
+      ...src,
+      sources: src.sources.map((s) =>
+        s.source_kind === "contractor"
+          ? {
+              ...s,
+              source_name: "LADBS Contractors 2024",
+              coverage: {
+                field: "permit_issue_date",
+                first: "2014-03-01",
+                last: "2024-01-10",
+              },
+            }
+          : s,
+      ),
+    }));
+    const model = new ScriptedModel([textReply("No contractor data then.")]);
+    const a = await runAgent(
+      { question: CONTRACTOR_Q, center: VAN_NUYS },
+      { model, queries, settings: SETTINGS },
+    );
+    const system = systemOf(model);
+    expect(system).toContain(
+      "There is no contractor license data after January 2024 (the contractor rows, from LADBS Contractors 2024, cover permits issued 2014-03-01 to 2024-01-10).",
+    );
+    expect(system).toContain(
+      "- Contractor rows end in January 2024: for permits issued after January 2024,",
+    );
+    expect(system).not.toContain("May 2023");
+    expect(a.gaps).toContain("No contractor license data after January 2024.");
+    expect(a.gaps).toContain(
+      "The contractor rows (LADBS Contractors 2024) cover permits issued 2014-03-01 to 2024-01-10 (by permit_issue_date).",
+    );
+    expect(a.gaps).not.toContain(GAP_CONTRACTOR_DEFAULT);
+  });
+
+  test("no window stated (runs before the field): the prompt as without a window, the documented end, and why", async () => {
+    const { queries } = withSources((src) => ({
+      ...src,
+      sources: src.sources.map((s) => ({ ...s, coverage: null })),
+    }));
+    const model = new ScriptedModel([textReply("No contractor data then.")]);
+    const a = await runAgent(
+      { question: CONTRACTOR_Q, center: VAN_NUYS },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(systemOf(model)).toBe(systemPrompt(SETTINGS.maxToolTurns));
+    expect(a.gaps.slice(1, 3)).toEqual([
+      GAP_CONTRACTOR_DEFAULT,
+      GAP_CONTRACTOR_NO_WINDOW,
+    ]);
+  });
+
+  test("explorer.sources fails: the answer still runs, with the documented end and the gap that says the window was not read", async () => {
+    const { queries } = withSources(() => {
+      throw new Error("db down");
+    });
+    const model = new ScriptedModel([textReply("No contractor data then.")]);
+    const a = await runAgent(
+      { question: CONTRACTOR_Q, center: VAN_NUYS },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    expect(systemOf(model)).toBe(systemPrompt(SETTINGS.maxToolTurns));
+    expect(a.gaps.slice(1, 3)).toEqual([
+      GAP_CONTRACTOR_DEFAULT,
+      GAP_CONTRACTOR_WINDOW_UNREAD,
+    ]);
+  });
+
+  test("a refusal reads no data and lists the standard gaps as they are", async () => {
+    const { queries, calls } = fakeQueries();
+    const a = await runAgent(
+      { question: "Who owns the parcels near Van Nuys?" },
+      { model: new ScriptedModel([]), queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("refused");
+    expect(calls).toEqual([]);
+    expect(a.gaps).toEqual([...STANDARD_GAPS]);
+  });
+});
+
+describe("the ownership filter in an answer (P19)", () => {
+  const Q =
+    "Which properties within five miles of Van Nuys with roofs older than 15 years have kept the same ownership for 10 years?";
+
+  test('the model turns it on ("both" by default); the answer states the basis, its weakness and that the bases are proxies from the County roll', async () => {
+    const { queries, calls } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      toolReply([
+        {
+          name: "search_aged_roofs",
+          input: {
+            ...VAN_NUYS_RESOLVED,
+            radius_miles: 5,
+            threshold_years: 15,
+            ownership_filter: true,
+          },
+        },
+      ]),
+      (p) => {
+        const r = lastToolResult(p, "search_aged_roofs") as {
+          ownership: { basis: string; weakness: string; proxy_note: string };
+        };
+        return textReply(
+          `17 parcels by the "${r.ownership.basis}" basis. ${r.ownership.weakness} ${r.ownership.proxy_note}`,
+        );
+      },
+    ]);
+    const a = await runAgent(
+      { question: Q },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    expect(calls.find((c) => c.fn === "parcels.search")!.input).toMatchObject({
+      ownership_basis: "both",
+    });
+    // Deterministic: the reasoning names the basis; its rule line states text, weakness and the proxy note.
+    expect(a.reasoning).toContain(
+      'searched parcels within 5 mi of Van Nuys built before 2011 (roofs older than 15 years), owner unchanged for 10 years or more by the "both" basis: 17 match, 3 listed',
+    );
+    expect(a.reasoning).toContain(ownershipRuleLine("both"));
+    expect(a.reasoning).toContain(OWNERSHIP_BASIS.both.weakness);
+    expect(a.reasoning).toContain(OWNERSHIP_PROXY_NOTE);
+    expect(a.text).toContain(OWNERSHIP_PROXY_NOTE);
+    expectSections(a);
+  });
+
+  test("without the filter nothing about ownership is stated", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([
+        {
+          name: "search_aged_roofs",
+          input: { ...VAN_NUYS_RESOLVED, radius_miles: 5, threshold_years: 15 },
+        },
+      ]),
+      textReply("3 parcels."),
+    ]);
+    const a = await runAgent(
+      { question: README_Q1, center: VAN_NUYS },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.reasoning).not.toMatch(/ownership|owner unchanged/i);
+  });
+
+  test('the people guard is unchanged: "ownership" wording reaches the model, "owner" wording is refused before any call', async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([textReply("Which basis?")]);
+    const a = await runAgent(
+      { question: Q, center: VAN_NUYS },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    const refused = await runAgent(
+      {
+        question:
+          "Which properties near Van Nuys have had the same owner for 10 years?",
+        center: VAN_NUYS,
+      },
+      { model: new ScriptedModel([]), queries, settings: SETTINGS },
+    );
+    expect(refused.status).toBe("refused");
+  });
+
+  test('the system prompt: the filter is off unless asked, "both" by default, and what to state', () => {
+    expect(systemPrompt(SETTINGS.maxToolTurns)).toContain(
+      '\n- Owner unchanged for 10 years or more is a filter of search_aged_roofs, off unless the question asks for it: then set ownership_filter, with ownership_basis "both" unless the question names recorded documents ("recording") or reassessment ("base_year"). State the basis, its weakness and that the bases are proxies from the County roll, not sales records, as the result\'s ownership gives them. It says nothing about who the owner is.\n',
+    );
+  });
+});
+
+describe("the contractor identity in an answer (P19)", () => {
+  test("parcel_permits gives the model each license's key, canonical name and variant count; the prompt says a nameless license gets no name", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([
+        { name: "parcel_permits", input: { parcel_id: FAKE_PARCELS[0] } },
+      ]),
+      textReply("ACME ROOFING, INC. (license 123456, 2 names on record)."),
+    ]);
+    const a = await runAgent(
+      {
+        question: `Who is the contractor on parcel ${FAKE_PARCELS[0]}'s permits?`,
+      },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    const r = lastToolResult(model.requests[1]!.params, "parcel_permits") as {
+      permits: Array<{ contractors: Array<Record<string, unknown>> }>;
+    };
+    expect(r.permits[0]!.contractors[0]).toMatchObject({
+      contractor_identity_key: "123456",
+      canonical_business_name: "ACME ROOFING, INC.",
+      name_variant_count: 2,
+    });
+    expect(systemOf(model)).toContain(
+      "\n- A contractor row's identity is its license: contractor_identity_key (the license number), canonical_business_name and name_variant_count (how many names the license carries: a count, never a list). Where canonical_business_name is null the license has no name: give none, never guess one.\n",
+    );
   });
 });

@@ -796,6 +796,19 @@ describe("checks: §18 prompt i option 1 and the outside-city text", () => {
     expect([c.gaps.result, c.gaps_text.result]).toEqual(["pass", "pass"]);
     expect(allPassed(c)).toBe(true);
   });
+  test("prompt i with the contractor window from explorer.sources (P19): the gap names the source and window; every check still passes", async () => {
+    const a = await ask(promptI.question, [
+      toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      textReply(NO_CONTRACTOR_DATA),
+    ]);
+    expect(a.gaps).toContain("No contractor license data after May 2023.");
+    expect(a.gaps).toContain(
+      "The contractor rows (LADBS Contractors) cover permits issued 2013-01-02 to 2023-05-19 (by permit_issue_date).",
+    );
+    const c = await checksOf(promptI, a);
+    expect([c.gaps.result, c.gaps_text.result]).toEqual(["pass", "pass"]);
+    expect(allPassed(c)).toBe(true);
+  });
   test("prompt i with a parcel_permits call fails tools, naming the forbidden tool", async () => {
     const a = await ask(
       promptI.question,

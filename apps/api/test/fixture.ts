@@ -580,7 +580,7 @@ export async function writePermitFixture(): Promise<FixtureRun> {
 }
 
 /**
- * The places run (places.resolve), the parcel set of packages/agent/test/place-index.test.ts as rows:
+ * The places run (places.resolve), the parcel set of packages/views/test/place-index.test.ts as rows:
  * [tax-rate-area city (jurisdiction), postal city, lat, lon]. Van Nuys in three stored spellings (and one row
  * without coordinates); LOS ANGELES as a jurisdiction and a postal city ~30 mi apart (ambiguous); BURBANK as
  * both within 2 mi; LA CANADA-FLINTRIDGE and WEST LAKE VILLAGE spellings; UNINCORPORATED; a postal city

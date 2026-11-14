@@ -22,6 +22,16 @@ export {
   type StoppedBy,
 } from "./agent.ts";
 export {
+  GAP_CONTRACTOR_NO_WINDOW,
+  GAP_CONTRACTOR_WINDOW_UNREAD,
+  answerStandardGaps,
+  contractorGaps,
+  contractorWindow,
+  monthYear,
+  type ContractorWindow,
+  type WindowRead,
+} from "./contractor-coverage.ts";
+export {
   ConfigError,
   EFFORTS,
   MAX_TIME_BUDGET_MS,
@@ -87,6 +97,8 @@ export {
   type PermitQueries,
   type SearchInput,
 } from "./permit-api.ts";
+// The place module is the data API's own (packages/views/src/place-index.ts, served by places.resolve), imported
+// by relative path: packages/agent does not list @oracle-la/views as a dependency.
 export {
   AMBIGUITY_MILES,
   BASIS_LABEL,
@@ -110,8 +122,19 @@ export {
   type PlaceQueries,
   type PlaceResolution,
   type RowsDb,
-} from "./place-index.ts";
+} from "../../views/src/place-index.ts";
 export {
+  DEFAULT_OWNERSHIP_BASIS,
+  OWNERSHIP_BASES,
+  OWNERSHIP_PROXY_NOTE,
+  OWNERSHIP_TEXTS,
+  ownershipRuleLine,
+  ownershipStated,
+  type OwnershipStated,
+} from "./ownership.ts";
+export {
+  DOCUMENTED_CONTRACTOR_END,
+  GAP_CONTRACTOR_DEFAULT,
   GAP_NO_CENTER,
   PEOPLE_REFUSAL_TEXT,
   STANDARD_GAPS,
