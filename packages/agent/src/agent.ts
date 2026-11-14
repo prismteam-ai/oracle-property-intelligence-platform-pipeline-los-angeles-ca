@@ -95,7 +95,8 @@ export type StoppedBy =
   | "model_refusal"
   | "max_tokens"
   | "error"
-  | "unexpected_stop";
+  | "unexpected_stop"
+  | "budget";
 
 export interface AgentUsage {
   /** Input tokens incl. cache writes and reads, summed over the answer's model calls. */
@@ -132,6 +133,13 @@ export interface AgentDeps {
   /** Injected clock (ms); defaults to Date.now. */
   now?: () => number;
   signal?: AbortSignal;
+  /**
+   * Called with the exact request before each model call (e.g. the eval's spend limit). Returning false stops the
+   * answer before that call (stopped_by "budget"); the call is not made and not counted.
+   */
+  beforeModelCall?: (
+    params: Anthropic.MessageCreateParamsNonStreaming,
+  ) => boolean | Promise<boolean>;
 }
 
 const STOP_TEXT: Record<StoppedBy, string> = {
@@ -143,6 +151,8 @@ const STOP_TEXT: Record<StoppedBy, string> = {
   max_tokens: "The answer reached the output-token limit and is incomplete.",
   error: "The model call failed; no answer was produced.",
   unexpected_stop: "The model stopped unexpectedly; no answer was produced.",
+  budget:
+    "The spending limit would have been exceeded by the next model call, so it was not made.",
 };
 
 const SEARCH_TOOLS = new Set(["search_aged_roofs", "long_open_permits"]);
@@ -257,8 +267,26 @@ function durationAssumption(question: string, minDays: number): string {
   return `Long-open means at least ${fmt(minDays)} days open${isDefault ? " (5 × 365.25, rounded; the default minimum)" : ""}${phrase ? `; the question says "${phrase}"` : ""}.`;
 }
 
+/**
+ * The long-open rule as every long-open answer states it (design brief §15.3), with the searched minimum (and
+ * maximum, when one was given).
+ */
+export function longOpenRuleLine(
+  minOpenDays: number,
+  maxOpenDays: number | null,
+): string {
+  const range = `at least ${fmt(minOpenDays)} days${maxOpenDays !== null ? ` and at most ${fmt(maxOpenDays)} days` : ""}`;
+  return `Rule: long-open permits are ${LONG_OPEN_SCOPE} (the data API's rule: an issued permit for roofing work, open ${range}; a roof-coating-only permit counts and is flagged).`;
+}
+
+/** The gap of a place or parcel whose jurisdiction no permit source covers (design brief §15.1 d). */
+export const outsideCityGap = (place: string): string =>
+  `${place} is outside the City of Los Angeles: no permit data there.`;
+
 interface Explained {
   reasoning: string[];
+  /** Rule lines, each its own sentence after the reasoning. */
+  rules: string[];
   assumptions: string[];
   gaps: string[];
   session: SessionState;
@@ -272,6 +300,7 @@ function explain(
   outcomes: readonly ToolOutcome[],
 ): Explained {
   const reasoning: string[] = [];
+  const rules: string[] = [];
   const assumptions: string[] = [];
   const gaps: string[] = [];
   const places: Array<{
@@ -382,12 +411,16 @@ function explain(
             ? `Roof age is the assessor year-built proxy: older than ${f.threshold_years} years means built before ${f.built_before_year} (roll year ${f.roll_year} − ${f.threshold_years}).`
             : `Roof age counts from the effective roof year: a finaled roofing permit's year where the basis is PERMIT, else the assessor year-built proxy; older than ${f.threshold_years} years means an effective roof year before ${f.built_before_year}.`,
         );
+        // Every listed parcel lies where no permit source reaches.
+        if (f.returned > 0 && f.no_permit_data === f.returned)
+          gaps.push(outsideCityGap(label));
         break;
       case "long_open_permits":
         reasoning.push(
           `searched long-open permits, ${LONG_OPEN_SCOPE}, within ${f.radius_miles} mi of ${label} open at least ${fmt(f.min_open_days)} days${f.max_open_days !== null ? ` and at most ${fmt(f.max_open_days)}` : ""}: ${fmt(f.count)} match, ${f.returned} listed`,
         );
         assumptions.push(durationAssumption(req.question, f.min_open_days));
+        rules.push(longOpenRuleLine(f.min_open_days, f.max_open_days));
         break;
       case "parcel_detail":
         reasoning.push(
@@ -398,6 +431,12 @@ function explain(
         reasoning.push(
           `read the permits of parcel ${f.parcel_id} (${plural(f.permits, "permit")}, ${plural(f.contractor_rows, "contractor row")}${f.permit_data_available ? "" : ", no permit data for its jurisdiction"})`,
         );
+        if (!f.permit_data_available)
+          gaps.push(
+            outsideCityGap(
+              `Parcel ${f.parcel_id}${f.jurisdiction ? ` (jurisdiction ${f.jurisdiction})` : ""}`,
+            ),
+          );
         break;
       case "run_summary":
         reasoning.push("read the run summary and its sources");
@@ -408,6 +447,7 @@ function explain(
   }
   return {
     reasoning: uniq(reasoning),
+    rules: uniq(rules),
     assumptions: uniq(assumptions),
     gaps: uniq(gaps),
     session: area ? { area } : {},
@@ -504,21 +544,26 @@ export async function runAgent(
       break;
     }
     const lastTurn = toolRounds >= s.maxToolTurns;
+    const params: Anthropic.MessageCreateParamsNonStreaming = {
+      model: s.modelId,
+      max_tokens: Math.min(s.maxOutputTokens, s.maxTokens - used),
+      system,
+      messages,
+      tools,
+      tool_choice: lastTurn ? { type: "none" } : { type: "auto" },
+      output_config: { effort: s.effort },
+    };
+    if (deps.beforeModelCall && !(await deps.beforeModelCall(params))) {
+      stoppedBy = "budget";
+      break;
+    }
     let res: Anthropic.Message;
     try {
       usage.model_calls++;
-      res = await deps.model.create(
-        {
-          model: s.modelId,
-          max_tokens: Math.min(s.maxOutputTokens, s.maxTokens - used),
-          system,
-          messages,
-          tools,
-          tool_choice: lastTurn ? { type: "none" } : { type: "auto" },
-          output_config: { effort: s.effort },
-        },
-        { timeoutMs: remaining, signal: deps.signal },
-      );
+      res = await deps.model.create(params, {
+        timeoutMs: remaining,
+        signal: deps.signal,
+      });
     } catch (err) {
       stoppedBy = "error";
       error = modelErrorName(err);
@@ -604,6 +649,7 @@ export async function runAgent(
   const reasoning = [
     sentence(ex.reasoning) ||
       (stoppedBy ? "No tool was called." : "Answered without calling a tool."),
+    ...ex.rules,
     stoppedBy ? `The answer stopped early (${stoppedBy}).` : "",
   ]
     .filter(Boolean)

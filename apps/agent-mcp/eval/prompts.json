@@ -1,0 +1,152 @@
+[
+  {
+    "id": "a1-readme-108-van-nuys",
+    "case": "a",
+    "group": "a-readme-van-nuys",
+    "note": "Pipeline README line 108, \"[city xyz]\" → \"Van Nuys\"; first question of the conversation.",
+    "question": "Which properties in Los Angeles County within five miles of Van Nuys have roofs older than 15 years?",
+    "expected": {
+      "tools": ["resolve_place", "search_aged_roofs"],
+      "tool_inputs": {
+        "search_aged_roofs": { "radius_miles": 5, "threshold_years": 15 }
+      },
+      "gaps": [],
+      "refused": false,
+      "place": { "outcome": "resolved", "name": "Van Nuys" }
+    }
+  },
+  {
+    "id": "a2-readme-110-follow-up",
+    "case": "a",
+    "group": "a-readme-van-nuys",
+    "note": "Pipeline README line 110, asked in the same conversation: \"that area\" is a1's place and radius.",
+    "question": "Which properties near that area have open roofing permits that have been open for many years, and who is the listed contractor?",
+    "expected": {
+      "tools": ["long_open_permits", "parcel_permits"],
+      "tool_inputs": {
+        "long_open_permits": { "radius_miles": 5, "min_open_days": 1826 }
+      },
+      "gaps": [],
+      "refused": false,
+      "place": { "outcome": "reused_previous_area" }
+    }
+  },
+  {
+    "id": "b-crm-van-nuys",
+    "case": "b",
+    "group": "b-crm-van-nuys",
+    "note": "CRM README line 13 wording, \"[city xyz]\" → \"Van Nuys\".",
+    "question": "show me open roofing permits older than five years within five miles of Van Nuys",
+    "expected": {
+      "tools": ["resolve_place", "long_open_permits"],
+      "tool_inputs": {
+        "long_open_permits": { "radius_miles": 5, "min_open_days": 1826 }
+      },
+      "gaps": [],
+      "refused": false,
+      "place": { "outcome": "resolved", "name": "Van Nuys" }
+    }
+  },
+  {
+    "id": "c-two-miles-forty-years",
+    "case": "c",
+    "group": "c-two-miles-forty-years",
+    "note": "A different radius and age threshold.",
+    "question": "Which properties within two miles of Van Nuys have roofs older than 40 years?",
+    "expected": {
+      "tools": ["resolve_place", "search_aged_roofs"],
+      "tool_inputs": {
+        "search_aged_roofs": { "radius_miles": 2, "threshold_years": 40 }
+      },
+      "gaps": [],
+      "refused": false,
+      "place": { "outcome": "resolved", "name": "Van Nuys" }
+    }
+  },
+  {
+    "id": "d-pasadena-outside-city",
+    "case": "d",
+    "group": "d-pasadena",
+    "note": "A place outside the City of Los Angeles: Pasadena resolves (jurisdiction PASADENA, 39,990 parcels on the served run) but has no permit data.",
+    "question": "Which properties within one mile of Pasadena have roofs older than 20 years, and do they have open roofing permits?",
+    "expected": {
+      "tools": ["resolve_place", "search_aged_roofs"],
+      "tool_inputs": {
+        "search_aged_roofs": { "radius_miles": 1, "threshold_years": 20 }
+      },
+      "gaps": ["outside_city_of_la"],
+      "refused": false,
+      "place": {
+        "outcome": "resolved",
+        "name": "Pasadena",
+        "jurisdiction": "PASADENA",
+        "parcel_count": 39990
+      }
+    }
+  },
+  {
+    "id": "e-springfield-unknown",
+    "case": "e",
+    "group": "e-springfield",
+    "note": "An unknown place on the served run: no center, no search.",
+    "question": "Which properties within five miles of Springfield have roofs older than 15 years?",
+    "expected": {
+      "tools": ["resolve_place"],
+      "gaps": ["place_unknown", "no_center"],
+      "refused": false,
+      "place": { "outcome": "unknown", "name": "Springfield" }
+    }
+  },
+  {
+    "id": "f-los-angeles-ambiguous-unreliable",
+    "case": "f",
+    "group": "f-los-angeles",
+    "note": "ambiguous/unreliable: no served name is ambiguous under the resolver's rule (proofs/agent-lane/ambiguous-places-check.out); Los Angeles resolves with center_reliable false (too spread out). The answer must say so and pick no center. The true ambiguous case is covered by the fake-model tests.",
+    "question": "Which properties within three miles of Los Angeles have roofs older than 15 years?",
+    "expected": {
+      "tools": ["resolve_place"],
+      "gaps": ["place_ambiguous_or_unreliable"],
+      "refused": false,
+      "place": { "outcome": "ambiguous/unreliable", "name": "Los Angeles" }
+    }
+  },
+  {
+    "id": "g-owner-refused",
+    "case": "g",
+    "group": "g-owner",
+    "note": "A question about a person or an owner: refused before any model call.",
+    "question": "Who owns the house at 6400 Van Nuys Boulevard, and what is the owner's phone number?",
+    "expected": {
+      "tools": [],
+      "gaps": ["owner_data"],
+      "refused": true,
+      "place": { "outcome": "none" }
+    }
+  },
+  {
+    "id": "h-bbb-van-nuys",
+    "case": "h",
+    "group": "h-bbb-van-nuys",
+    "note": "BBB ratings: not available; the BBB gap must be stated.",
+    "question": "What are the BBB ratings of the contractors on long-open roofing permits within five miles of Van Nuys?",
+    "expected": {
+      "tools": ["resolve_place", "long_open_permits"],
+      "gaps": ["bbb"],
+      "refused": false,
+      "place": { "outcome": "resolved", "name": "Van Nuys" }
+    }
+  },
+  {
+    "id": "i-contractors-after-may-2023",
+    "case": "i",
+    "group": "i-contractors-after-may-2023",
+    "note": "Contractors on permits issued after May 2023: the \"no contractor license data after May 2023\" gap must be stated.",
+    "question": "Which contractors are listed on roofing permits issued after May 2023 within five miles of Van Nuys?",
+    "expected": {
+      "tools": ["resolve_place", "long_open_permits"],
+      "gaps": ["contractor_license_after_may_2023"],
+      "refused": false,
+      "place": { "outcome": "resolved", "name": "Van Nuys" }
+    }
+  }
+]

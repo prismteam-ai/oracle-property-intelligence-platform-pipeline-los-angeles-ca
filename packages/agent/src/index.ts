@@ -3,6 +3,8 @@ export {
   InvalidRequestError,
   TIME_RESERVE_MS,
   agentRequestSchema,
+  longOpenRuleLine,
+  outsideCityGap,
   runAgent,
   type AgentAnswer,
   type AgentCenter,
@@ -49,13 +51,26 @@ export {
   type ModelClient,
 } from "./model-client.ts";
 export {
+  BEDROCK_PRICE_FACTOR,
   BEDROCK_REGION,
+  MIN_CHARS_PER_TOKEN,
   MODEL_IDS,
   MODEL_KEYS,
+  PRICED_MODEL_KEYS,
+  PRICES_USD_PER_MTOK,
   PROVIDERS,
+  isPricedModel,
   modelId,
+  pricesFor,
+  pricingBasis,
+  usageCostUsd,
+  worstCaseUsd,
   type ModelKey,
+  type ModelPrices,
+  type PricedModelKey,
   type Provider,
+  type TokenPrices,
+  type UsageFigures,
 } from "./models.ts";
 export {
   basisWord,
@@ -92,6 +107,7 @@ export {
   STANDARD_GAPS,
   idsInText,
   isPeopleQuestion,
+  unverifiedIds,
   recordLines,
   type Citation,
 } from "./policy.ts";

@@ -43,6 +43,11 @@ export const SETTINGS: AgentSettings = {
 export const VAN_NUYS = { lat: 34.199, lon: -118.487, label: "Van Nuys" };
 /** The center the fake resolve_place returns for "Van Nuys" (deliberately not VAN_NUYS). */
 export const VAN_NUYS_RESOLVED = { lat: 34.18651, lon: -118.448912 };
+/** The center the fake resolve_place returns for "Pasadena" (a jurisdiction outside the City of Los Angeles). */
+export const PASADENA_RESOLVED = { lat: 34.1478, lon: -118.1445 };
+/** A parcel the fake permits.forParcel serves outside the City of Los Angeles (jurisdiction PASADENA). */
+export const OUTSIDE_PARCEL = "5700000001";
+
 /** The two candidates the fake resolve_place returns for "Los Angeles" (5.7 mi apart: ambiguous). */
 export const LOS_ANGELES_CANDIDATES = [
   {
@@ -222,6 +227,17 @@ export function fakeQueries(): {
     },
     async forParcel(input) {
       rec("permits.forParcel", input);
+      if (input.parcel_id === OUTSIDE_PARCEL)
+        return {
+          parcel_id: input.parcel_id,
+          permit_data_available: false,
+          jurisdiction: "PASADENA",
+          effective_roof_year: 1950,
+          roof_age_basis: ROOF_AGE_BASIS.proxy,
+          roof_year_permit_number: null,
+          permits: [],
+          bbb: { available: false, reason: "BBB ratings are not available." },
+        };
       const contractor: PermitContractor = {
         contractors_business_name: "ACME ROOFING INC",
         license_identifier: "123456",
@@ -263,6 +279,11 @@ export function fakeQueries(): {
       async search(input): Promise<SearchResult> {
         rec("parcels.search", input);
         const t = input.threshold_years ?? 15;
+        // Around the Pasadena center no parcel has permit data (outside the City of Los Angeles).
+        const covered = !(
+          input.lat === PASADENA_RESOLVED.lat &&
+          input.lon === PASADENA_RESOLVED.lon
+        );
         const items = FAKE_PARCELS.slice(0, input.limit ?? 50).map(
           (parcel_id, i): SearchItem => ({
             parcel_id,
@@ -273,7 +294,7 @@ export function fakeQueries(): {
             roof_age_years: 2026 - (1950 + i),
             roof_age_basis: ROOF_AGE_BASIS.proxy,
             roof_year_permit_number: null,
-            permit_data_available: true,
+            permit_data_available: covered,
             distance_miles: 0.1 * (i + 1),
             latitude: input.lat,
             longitude: input.lon,
@@ -363,13 +384,23 @@ export function fakeQueries(): {
               "permit",
               "2026-11-12T10:00:00.000Z",
               "2026-11-12T11:30:00.000Z",
-              { attribution: "LADBS" },
+              {
+                attribution: "LADBS",
+                query_urls: [
+                  "https://example.test/permits?a=1",
+                  "https://example.test/permits?a=2",
+                ],
+              },
             ),
             sourceRow(
               "parcel",
               "2026-11-11T16:17:40.932Z",
               "2026-11-11T16:17:40.932Z",
-              { terms_of_use: "https://example.test/terms" },
+              {
+                terms_of_use: "https://example.test/terms",
+                hub_page: "https://example.test/hub",
+                query_url: "https://example.test/query",
+              },
             ),
           ],
           pages: [],
@@ -393,6 +424,19 @@ export function fakeQueries(): {
             also_matched: null,
             note: `"${name}" resolved (fake).`,
           };
+        if (placeKey(name) === "PASADENA")
+          return {
+            status: "resolved",
+            name,
+            basis: "jurisdiction",
+            center: PASADENA_RESOLVED,
+            parcel_count: 39990,
+            raw_values: ["PASADENA"],
+            spread_miles: 2.4,
+            center_reliable: true,
+            also_matched: null,
+            note: `"${name}" resolved (fake).`,
+          };
         if (placeKey(name) === "LOSANGELES")
           return {
             status: "ambiguous",
@@ -403,7 +447,8 @@ export function fakeQueries(): {
         return {
           status: "unknown",
           name,
-          note: `"${name}" matches nothing (fake).`,
+          // PlaceIndex's own wording for an unknown name (place-index.ts).
+          note: `"${name}" matches no jurisdiction or postal city in this run; no center was chosen.`,
         };
       },
     },

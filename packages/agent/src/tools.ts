@@ -143,14 +143,18 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "roofing_work and roof_coating_only flags and its parcel's roof year; the permit source is cited once.",
   parcel_detail:
     "One parcel's property facts (address, year built, effective roof year and basis, use type, coordinates, " +
-    "whether permit data covers it) and its source provenance. No owner fields exist.",
+    "whether permit data covers it) and its provenance: source name and collection time (the source's URLs, terms " +
+    "and license are in run_summary; page files and hashes stay in the data API, explorer.sources pages and " +
+    "explorer.records). No owner fields exist.",
   parcel_permits:
     "One parcel's roof-year facts and whether permit data covers it, then its permits (status class, LADBS status " +
     "text, dates, open days, roofing flags) with contractor businesses (business name, license number, license " +
     "class). BBB ratings are not available. Permit descriptions are never returned.",
   run_summary:
-    "The served data run: run ID, timestamps, row counts, limitations, and each source with its kind, retrieval " +
-    "window, terms of use, license and attribution.",
+    "The served data run: run ID, timestamps, row counts, limitations, and each source once: kind, name, query " +
+    "URL(s), hub page, terms of use, license, attribution, record and page counts and retrieval window. Records " +
+    "carry only their source name and collection time; page-level files and hashes stay in the data API " +
+    "(explorer.sources pages, explorer.records).",
 };
 
 /** What a tool call did, for the deterministic reasoning and assumptions (agent.ts). */
@@ -167,6 +171,8 @@ export type ToolFact =
       count: number;
       returned: number;
       proxy_count: number;
+      /** Listed parcels with permit_data_available false. */
+      no_permit_data: number;
     }
   | {
       tool: "long_open_permits";
@@ -185,6 +191,7 @@ export type ToolFact =
       permits: number;
       contractor_rows: number;
       permit_data_available: boolean;
+      jurisdiction: string | null;
     }
   | { tool: "run_summary"; run_id: string | null };
 
@@ -345,13 +352,12 @@ const PROPERTY_FIELDS: Record<string, string> = {
   use_label: "use_description",
   ...fields("roll_year", "latitude", "longitude"),
 };
-const PROVENANCE_FIELDS = fields(
-  "source_name",
-  "source_request_url",
-  "source_retrieved_at",
-  "source_page_file",
-  "source_page_sha256",
-);
+/**
+ * Per record, the source name and collection time only (design brief §15.2). The request URL, page file and
+ * sha256 are not repeated per record: run_summary states each source's URLs once, and the page-level files and
+ * hashes stay in the data API (explorer.sources pages, explorer.records).
+ */
+const PROVENANCE_FIELDS = fields("source_name", "source_retrieved_at");
 
 const asRecord = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" ? (v as Record<string, unknown>) : {};
@@ -480,6 +486,9 @@ const run = {
         count: res.count,
         returned: items.length,
         proxy_count: proxy,
+        no_permit_data: res.items.filter(
+          (it) => it.permit_data_available === false,
+        ).length,
       },
     };
   },
@@ -646,6 +655,7 @@ const run = {
         permits: permits.length,
         contractor_rows: contractorRows,
         permit_data_available: r.permit_data_available === true,
+        jurisdiction: str(r.jurisdiction),
       },
     };
   },
@@ -685,8 +695,9 @@ const run = {
           ...project(h, fields("run_id", "finished_at", "published")),
           row_counts: numbers(h.row_counts),
         })),
-        sources: src.sources.map((x) =>
-          project(
+        // Each source once, with what records no longer repeat (its URLs); no page-level rows.
+        sources: src.sources.map((x) => ({
+          ...project(
             x as unknown as Record<string, unknown>,
             fields(
               "source_kind",
@@ -696,13 +707,18 @@ const run = {
               "first_retrieved_at",
               "last_retrieved_at",
               "role",
-              "terms_of_use",
-              "license",
-              "attribution",
-              "access",
+              "hub_page",
+              "query_url",
             ),
           ),
-        ),
+          query_urls: Array.isArray(x.query_urls)
+            ? x.query_urls.filter((u): u is string => typeof u === "string")
+            : null,
+          ...project(
+            x as unknown as Record<string, unknown>,
+            fields("terms_of_use", "license", "attribution", "access"),
+          ),
+        })),
       },
       fact: { tool: "run_summary", run_id: str(run.run_id) },
     };

@@ -6,6 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { beforeAll, describe, expect, test } from "vitest";
 import {
   InvalidRequestError,
+  longOpenRuleLine,
   runAgent,
   type AgentAnswer,
 } from "../src/agent.ts";
@@ -29,6 +30,8 @@ import {
   FAKE_PERMITS,
   FAKE_SOURCES,
   LOS_ANGELES_CANDIDATES,
+  OUTSIDE_PARCEL,
+  PASADENA_RESOLVED,
   PERMIT_RETRIEVED,
   SECRET_DESCRIPTION,
   SETTINGS,
@@ -282,7 +285,7 @@ describe("demo prompts with a center (pipeline README lines 108 and 110, [city x
       "contractor:16010-10000-00001",
     ]);
     expect(a.reasoning).toBe(
-      "Searched long-open permits, roofing work only, within 5 mi of Van Nuys open at least 1,826 days: 57 match, 2 listed; read the permits of parcel 1000000001 (2 permits, 1 contractor row).",
+      "Searched long-open permits, roofing work only, within 5 mi of Van Nuys open at least 1,826 days: 57 match, 2 listed; read the permits of parcel 1000000001 (2 permits, 1 contractor row). Rule: long-open permits are roofing work only (the data API's rule: an issued permit for roofing work, open at least 1,826 days; a roof-coating-only permit counts and is flagged).",
     );
     // The permit source is stated once, with the permit numbers listed under it.
     const cited = a.markdown.slice(
@@ -495,6 +498,12 @@ describe("CRM README line 13 ([city xyz] → Van Nuys)", () => {
     expect(a.assumptions).toContain(
       '"five years" read as at least 1,826 days open (Math.round(5 × 365.25)).',
     );
+    // §15.3: the rule, stated in the reasoning (its own sentence after the tool steps).
+    const RULE =
+      "Rule: long-open permits are roofing work only (the data API's rule: an issued permit for roofing work, open at least 1,826 days; a roof-coating-only permit counts and is flagged).";
+    expect(a.reasoning).toContain(` ${RULE}`);
+    expect(a.reasoning.endsWith(RULE)).toBe(true);
+    expect(a.markdown).toContain(RULE);
     // The server's roofing filter (68c697b) is a fact of the route, not an assumption.
     expect(a.assumptions.filter((x) => /roofing/i.test(x))).toEqual([]);
     expect(a.records.map((r) => r.id)).toEqual([
@@ -901,5 +910,153 @@ describe("request contract", () => {
       ),
     ).rejects.toThrow(InvalidRequestError);
     expect(model.requests).toHaveLength(0);
+  });
+});
+
+describe("long-open rule line (§15.3)", () => {
+  test("states the searched minimum, and the maximum when one was given", () => {
+    expect(longOpenRuleLine(1826, null)).toBe(
+      "Rule: long-open permits are roofing work only (the data API's rule: an issued permit for roofing work, open at least 1,826 days; a roof-coating-only permit counts and is flagged).",
+    );
+    expect(longOpenRuleLine(365, 3653)).toBe(
+      "Rule: long-open permits are roofing work only (the data API's rule: an issued permit for roofing work, open at least 365 days and at most 3,653 days; a roof-coating-only permit counts and is flagged).",
+    );
+  });
+  test("not stated when no long-open search ran", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([
+        {
+          name: "search_aged_roofs",
+          input: { lat: VAN_NUYS.lat, lon: VAN_NUYS.lon },
+        },
+      ]),
+      textReply("Done."),
+    ]);
+    const a = await runAgent(
+      { question: "Old roofs near the pin?", center: VAN_NUYS },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.reasoning).not.toContain("Rule:");
+  });
+});
+
+describe("outside the City of Los Angeles (§15.1 d)", () => {
+  test("a search whose items all lack permit data adds the place's gap", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([{ name: "resolve_place", input: { name: "Pasadena" } }]),
+      (p) => {
+        const c = resolvedCenter(p);
+        return toolReply([
+          {
+            name: "search_aged_roofs",
+            input: {
+              lat: c.lat,
+              lon: c.lon,
+              radius_miles: 1,
+              threshold_years: 20,
+            },
+          },
+        ]);
+      },
+      textReply("Pasadena is outside the City of Los Angeles: no permit data."),
+    ]);
+    const a = await runAgent(
+      {
+        question:
+          "Which properties within one mile of Pasadena have roofs older than 20 years?",
+      },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    expect(a.gaps).toContain(
+      "Pasadena is outside the City of Los Angeles: no permit data there.",
+    );
+    expect(a.session.area).toMatchObject({
+      label: "Pasadena",
+      lat: PASADENA_RESOLVED.lat,
+      lon: PASADENA_RESOLVED.lon,
+    });
+  });
+  test("a search with permit data adds no such gap", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([
+        {
+          name: "search_aged_roofs",
+          input: { lat: VAN_NUYS.lat, lon: VAN_NUYS.lon },
+        },
+      ]),
+      textReply("Done."),
+    ]);
+    const a = await runAgent(
+      { question: "Old roofs near the pin?", center: VAN_NUYS },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.gaps.some((g) => g.includes("outside the City"))).toBe(false);
+  });
+  test("parcel_permits with permit_data_available false adds the parcel's gap", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([
+        { name: "parcel_permits", input: { parcel_id: OUTSIDE_PARCEL } },
+      ]),
+      textReply("No permit data there."),
+    ]);
+    const a = await runAgent(
+      { question: `Permits of parcel ${OUTSIDE_PARCEL}?` },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.gaps).toContain(
+      `Parcel ${OUTSIDE_PARCEL} (jurisdiction PASADENA) is outside the City of Los Angeles: no permit data there.`,
+    );
+  });
+});
+
+describe("beforeModelCall (the eval's spend limit)", () => {
+  test("sees the exact request before each call; false stops the answer before the call (stopped_by budget)", async () => {
+    const { queries } = fakeQueries();
+    const seen: Anthropic.MessageCreateParamsNonStreaming[] = [];
+    const model = new ScriptedModel([
+      toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      textReply("never reached"),
+    ]);
+    const a = await runAgent(
+      { question: CRM_Q },
+      {
+        model,
+        queries,
+        settings: SETTINGS,
+        beforeModelCall: (params) => {
+          seen.push(structuredClone(params));
+          return seen.length < 2;
+        },
+      },
+    );
+    expect(model.requests).toHaveLength(1);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toEqual(model.requests[0]!.params);
+    expect(a.status).toBe("stopped");
+    expect(a.stopped_by).toBe("budget");
+    expect(a.usage.model_calls).toBe(1);
+    expect(a.markdown).toContain("Stopped before a full answer (budget)");
+    expect(a.reasoning).toContain("The answer stopped early (budget).");
+  });
+  test("an async hook is awaited; true lets every call through", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([textReply("ok")]);
+    let n = 0;
+    const a = await runAgent(
+      { question: "What does the run contain?" },
+      {
+        model,
+        queries,
+        settings: SETTINGS,
+        beforeModelCall: async () => (n++, true),
+      },
+    );
+    expect(n).toBe(1);
+    expect(a.status).toBe("answered");
   });
 });

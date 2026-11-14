@@ -208,7 +208,19 @@ describe("runTool", () => {
       jurisdiction: "LOS ANGELES",
       permit_data_available: true,
     });
-    expect(keys).toContain("source_page_sha256");
+    // §15.2: per record, the source name and collection time only; URLs once per source in run_summary, page
+    // files and hashes in the data API.
+    expect((o.content as { provenance: unknown }).provenance).toEqual({
+      source_name: FAKE_SOURCES.parcel,
+      source_retrieved_at: "2026-11-11T16:17:40.932Z",
+    });
+    for (const dropped of [
+      "source_request_url",
+      "source_page_file",
+      "source_page_sha256",
+      "source_request_method",
+    ])
+      expect(keys).not.toContain(dropped);
     expect(o.records).toEqual([
       {
         kind: "parcel",
@@ -242,11 +254,14 @@ describe("runTool", () => {
       { fn: "explorer.sources", input: undefined },
     ]);
     const c = o.content as {
+      rule: string;
       scope: string;
       source: unknown;
       items: Array<Record<string, unknown>>;
       truncated: boolean;
     };
+    // The route's rule.text, unchanged (§15.3).
+    expect(c.rule).toBe("Open at least min_open_days days (fake rule).");
     expect(c.scope).toBe("roofing work only");
     expect(c.source).toEqual({
       source_name: FAKE_SOURCES.permit,
@@ -507,6 +522,50 @@ describe("runTool", () => {
         },
       ],
     });
+  });
+  test("run_summary: each source once with its URLs, terms, license, attribution, page count and window (§15.2)", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool("run_summary", {}, queries);
+    const sources = (o.content as { sources: Array<Record<string, unknown>> })
+      .sources;
+    expect(sources.map((x) => Object.keys(x))).toEqual(
+      sources.map(() => [
+        "source_kind",
+        "source_name",
+        "record_count",
+        "page_count",
+        "first_retrieved_at",
+        "last_retrieved_at",
+        "role",
+        "hub_page",
+        "query_url",
+        "query_urls",
+        "terms_of_use",
+        "license",
+        "attribution",
+        "access",
+      ]),
+    );
+    expect(sources[1]).toMatchObject({
+      source_kind: "permit",
+      page_count: 1,
+      first_retrieved_at: "2026-11-12T10:00:00.000Z",
+      last_retrieved_at: "2026-11-12T11:30:00.000Z",
+      query_url: null,
+      query_urls: [
+        "https://example.test/permits?a=1",
+        "https://example.test/permits?a=2",
+      ],
+    });
+    expect(sources[2]).toMatchObject({
+      source_kind: "parcel",
+      hub_page: "https://example.test/hub",
+      query_url: "https://example.test/query",
+      query_urls: null,
+    });
+    // No page-level rows: they stay in the data API.
+    expect(keysDeep(o.content)).not.toContain("source_page_sha256");
+    expect(keysDeep(o.content)).not.toContain("pages");
   });
 });
 

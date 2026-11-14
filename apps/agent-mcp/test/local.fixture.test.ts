@@ -6,13 +6,16 @@
  */
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   ROOF_AGE_BASIS,
   type LongOpenResult,
@@ -48,7 +51,11 @@ import {
   type FixtureRun,
 } from "../../api/test/fixture.ts";
 import { createMcpServer } from "../src/create-server.ts";
-import { openLocalData, type LocalData } from "../src/local-data.ts";
+import {
+  RunFilesMissingError,
+  openLocalData,
+  type LocalData,
+} from "../src/local-data.ts";
 
 const P = FIXTURE.point;
 const N = PERMIT_FIXTURE.p;
@@ -131,8 +138,14 @@ beforeAll(async () => {
     repoRoot: await fixtureRepo(await writePermitFixture()),
   });
 });
+/** Scratch checkouts for the missing-data case, inside this test folder; removed afterwards. */
+const SCRATCH = join(
+  fileURLToPath(new URL("./", import.meta.url)),
+  `.local-scratch-${process.pid}`,
+);
 afterAll(() => {
   vi.unstubAllGlobals();
+  rmSync(SCRATCH, { recursive: true, force: true });
 });
 
 describe("local wiring", () => {
@@ -181,6 +194,42 @@ describe("local wiring", () => {
         limit: 1,
       }),
     ).resolves.toMatchObject({ source_kind: "permit" });
+  });
+});
+
+describe("openLocalData on a checkout without the run's data files (a worktree: runs/ but no data/)", () => {
+  test("a clear error naming the first missing file, the count and ORACLE_REPO_DIR; nothing staged", async () => {
+    const repo = join(SCRATCH, "worktree");
+    mkdirSync(join(repo, "runs"), { recursive: true });
+    const row = {
+      run_id: FIXTURE.runId,
+      parquet_sha256: "0".repeat(64),
+      parquet_path: `data/out/${FIXTURE.runId}/${FIXTURE.parquetFile}`,
+      manifest_path: `runs/${FIXTURE.runId}/run_manifest.json`,
+      permit_files: [1, 2, 3].map((i) => ({
+        role: `role-${i}`,
+        path: `data/out/${FIXTURE.runId}/permits-${i}.parquet`,
+        sha256: "0".repeat(64),
+      })),
+    };
+    writeFileSync(
+      join(repo, "runs/run_history.jsonl"),
+      JSON.stringify(row) + "\n",
+    );
+    const stageDir = join(SCRATCH, "stage-never-created");
+    const tmpDir = join(SCRATCH, "tmp-never-created");
+    const opening = openLocalData({ repoRoot: repo, stageDir, tmpDir });
+    await expect(opening).rejects.toBeInstanceOf(RunFilesMissingError);
+    await expect(opening).rejects.toThrow(
+      `the run's data files are missing under ${repo} (first missing: ${row.parquet_path}; 5 missing). Point at a checkout that has them: ORACLE_REPO_DIR=<checkout>.`,
+    );
+    await expect(opening).rejects.not.toThrow(/ENOENT/);
+    expect(existsSync(stageDir)).toBe(false);
+    expect(existsSync(tmpDir)).toBe(false);
+    // No history at all: the history is the one missing file.
+    await expect(
+      openLocalData({ repoRoot: join(SCRATCH, "no-runs"), stageDir, tmpDir }),
+    ).rejects.toThrow("(first missing: runs/run_history.jsonl; 1 missing)");
   });
 });
 
@@ -260,11 +309,13 @@ describe("tools over the real appRouter", () => {
         roof_age_basis: "PROXY",
         roof_age_basis_label: ROOF_AGE_BASIS.proxy,
       },
-      provenance: {
-        source_name: FIXTURE.source,
-        source_page_file: "page-0000.json",
-      },
     });
+    // §15.2: the source name and collection time only; page file, request URL and sha256 stay in the data API.
+    const prov = (o.content as { provenance: Record<string, unknown> })
+      .provenance;
+    expect(Object.keys(prov)).toEqual(["source_name", "source_retrieved_at"]);
+    expect(prov.source_name).toBe(FIXTURE.source);
+    expect(typeof prov.source_retrieved_at).toBe("string");
   });
   test("run_summary over the real views", async () => {
     const o = await runTool("run_summary", {}, data.queries);
@@ -278,6 +329,10 @@ describe("tools over the real appRouter", () => {
         {
           source_name: FIXTURE.source,
           terms_of_use: "https://example.test/terms",
+          // Each source's URLs, once (§15.2).
+          hub_page: "https://example.test/hub",
+          query_url: "https://example.test/query",
+          query_urls: null,
         },
       ],
     });
@@ -853,7 +908,7 @@ describe("conversation on the permit fixture: pipeline README lines 108 then 110
       },
     ]);
     expect(a2.reasoning).toBe(
-      "Searched long-open permits, roofing work only, within 5 mi of Test City open at least 1,826 days: 5 match, 5 listed; read the permits of parcel 0000000022 (1 permit, 1 contractor row).",
+      "Searched long-open permits, roofing work only, within 5 mi of Test City open at least 1,826 days: 5 match, 5 listed; read the permits of parcel 0000000022 (1 permit, 1 contractor row). Rule: long-open permits are roofing work only (the data API's rule: an issued permit for roofing work, open at least 1,826 days; a roof-coating-only permit counts and is flagged).",
     );
     expect(a2.assumptions).toContain(
       "Radius and center reused from the previous question (Test City, 5 mi).",
