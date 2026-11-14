@@ -19,7 +19,11 @@ export const DEFAULT_PROMPTS_FILE = fileURLToPath(
   new URL("../../eval/prompts.json", import.meta.url),
 );
 
-/** The cases of design brief §15.1 a–i. */
+/**
+ * The cases of design brief §15.1 a–i, then the scope and abuse cases of approvals §3e.75 d: j off-topic, k a
+ * writing task, l an instruction to ignore the rules (each refused by the no-tool-call rule), m who is the owner
+ * (refused by the people guard), n how long without an ownership change (answered through the ownership filter).
+ */
 export const PROMPT_CASES = [
   "a",
   "b",
@@ -30,7 +34,18 @@ export const PROMPT_CASES = [
   "g",
   "h",
   "i",
+  "j",
+  "k",
+  "l",
+  "m",
+  "n",
 ] as const;
+
+/**
+ * How a refused answer must be refused: by the people guard (before any model call; the default) or by the
+ * no-tool-call rule (the model replied with no tool call behind it; the fixed text is shown).
+ */
+export const REFUSAL_KINDS = ["people_guard", "no_tool_call"] as const;
 
 const standard = (start: string): string => {
   const g = STANDARD_GAPS.find((x) => x.startsWith(start));
@@ -161,6 +176,13 @@ export const promptSchema = z.strictObject({
       .optional(),
     gaps: z.array(z.enum(GAP_IDS)),
     refused: z.boolean(),
+    /** With refused true: which refusal (default people_guard). */
+    refusal: z.enum(REFUSAL_KINDS).optional(),
+    /**
+     * True: answered through the ownership filter, its basis and weakness stated in the text, the owner never
+     * implied known (check "ownership").
+     */
+    ownership: z.literal(true).optional(),
     place: placeSchema,
   }),
 });
@@ -186,6 +208,21 @@ export const promptsFileSchema = z
             path: [i, "expected", "tool_inputs", t],
             message: `tool_inputs names ${t}, which is not in tools`,
           });
+      if (p.expected.refusal !== undefined && !p.expected.refused)
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "expected", "refusal"],
+          message: "refusal applies only with refused true",
+        });
+      if (
+        p.expected.ownership &&
+        !p.expected.tools.includes("search_aged_roofs")
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "expected", "ownership"],
+          message: "ownership needs search_aged_roofs in tools",
+        });
       for (const t of p.expected.forbidden_tools ?? [])
         if (p.expected.tools.includes(t))
           ctx.addIssue({

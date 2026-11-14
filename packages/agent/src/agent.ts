@@ -24,6 +24,7 @@ import {
 } from "../../views/src/place-index.ts";
 import {
   GAP_NO_CENTER,
+  NO_TOOL_CALL_TEXT,
   PEOPLE_REFUSAL_TEXT,
   STANDARD_GAPS,
   buildMarkdown,
@@ -113,8 +114,16 @@ export interface AgentUsage {
   tool_calls: number;
 }
 
+/**
+ * Why an answer was refused: the people guard (before any model call), or the no-tool-call rule (the model replied
+ * with no tool result in this answer or the conversation; its reply is replaced by NO_TOOL_CALL_TEXT).
+ */
+export type RefusedBy = "people_guard" | "no_tool_call";
+
 export interface AgentAnswer {
   status: "answered" | "refused" | "stopped";
+  /** Set when status is "refused". */
+  refused_by?: RefusedBy;
   stopped_by?: StoppedBy;
   /** The SDK's typed error class name when stopped_by is "error". */
   error?: string;
@@ -254,6 +263,30 @@ function idsInHistory(history: readonly Anthropic.MessageParam[]): string[] {
         );
   }
   return out;
+}
+
+const toolResultText = (b: Anthropic.ToolResultBlockParam): string =>
+  typeof b.content === "string"
+    ? b.content
+    : (b.content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("");
+
+/**
+ * True when the history holds the result of a tool call that ran in an earlier answer (its data, or its error). A
+ * tool call the answer closed without running it (its result starts with NOT_RUN_PREFIX) does not count.
+ */
+export function historyHasToolResult(
+  history: readonly Anthropic.MessageParam[],
+): boolean {
+  return history.some(
+    (m) =>
+      m.role === "user" &&
+      typeof m.content !== "string" &&
+      m.content.some(
+        (b) =>
+          b.type === "tool_result" &&
+          !toolResultText(b).startsWith(NOT_RUN_PREFIX),
+      ),
+  );
 }
 
 /** If the last message asks for tools that never ran, answer them as not run (keeps the history valid). */
@@ -543,6 +576,7 @@ export async function runAgent(
     const gaps = [...STANDARD_GAPS];
     return {
       status: "refused",
+      refused_by: "people_guard",
       text: PEOPLE_REFUSAL_TEXT,
       reasoning,
       assumptions: [],
@@ -707,6 +741,38 @@ export async function runAgent(
     break;
   }
   closeDanglingToolUse(messages, stoppedBy ?? "end");
+
+  // The no-tool-call rule (approvals §3e.75 b): a reply of the model with no tool call behind it, in this answer (no
+  // tool call ran, whether it returned data or an error) or in the conversation (no earlier tool result), is never
+  // shown. The fixed text replaces it, the answer is refused, and the turn is not added to the history (the history
+  // goes back as it came). A stopped answer counts too when the model wrote text (e.g. a long reply cut at
+  // max_tokens); a stop with no model text keeps its stop text.
+  if (finalText && !outcomes.length && !historyHasToolResult(history)) {
+    const reasoning = `Withheld: the model replied without any tool result in this answer or the conversation, so its reply is replaced by the fixed scope text${stoppedBy ? ` (the reply had stopped early: ${stoppedBy})` : ""}.`;
+    const gaps = [...answerStandardGaps(windowRead)];
+    return {
+      status: "refused",
+      refused_by: "no_tool_call",
+      text: NO_TOOL_CALL_TEXT,
+      reasoning,
+      assumptions: [],
+      records: [],
+      gaps,
+      unverified_ids: [],
+      usage,
+      elapsed_ms: now() - start,
+      markdown: buildMarkdown({
+        text: NO_TOOL_CALL_TEXT,
+        status: "refused",
+        reasoning,
+        assumptions: [],
+        records: [],
+        gaps,
+      }),
+      history,
+      session: request.session ?? {},
+    };
+  }
 
   const text = stoppedBy && !finalText ? STOP_TEXT[stoppedBy] : finalText;
   const records = dedupeCitations(outcomes.flatMap((o) => o.records));

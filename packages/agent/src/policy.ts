@@ -51,11 +51,56 @@ export const PEOPLE_REFUSAL_TEXT =
 /** Business terms that contain a people word but are about contractors, removed before matching. */
 const BUSINESS_TERMS = /\bowner[\s-]?builders?\b/gi;
 
+const OWNER = String.raw`owner(?:s|ship)?`;
+const NOT = String.raw`(?:(?:has|have|had|is|was|were|did|does|do)(?:n['’]t|\s+not|\s+never)|never)`;
+/**
+ * How long a property has gone without an ownership change, in the wordings people use (approvals §3e.75 c): about
+ * the property, answered through the ownership filter, never about who the owner is. Each phrase is removed before
+ * matching, so a question stays refused when a people word or pattern is left outside it ("same owner for 10 years,
+ * and who is the owner?" is refused by "the owner").
+ */
+export const OWNERSHIP_DURATION_TERMS: readonly RegExp[] = [
+  // "same owner(s)", "the same ownership", "unchanged owner", "stable ownership"
+  new RegExp(
+    String.raw`\b(?:the\s+)?(?:same|unchanged|stable|constant)\s+${OWNER}\b`,
+    "gi",
+  ),
+  // "owner hasn't changed", "owners that have not changed", "ownership never changed", "owner did not change"
+  new RegExp(
+    String.raw`\b${OWNER}\s+(?:(?:that|which|who)\s+)?${NOT}\s+(?:been\s+)?chang(?:e|ed)\b`,
+    "gi",
+  ),
+  // "owner unchanged", "ownership stayed the same"
+  new RegExp(
+    String.raw`\b${OWNER}\s+(?:(?:is|was|has been|have been|stayed|remained)\s+)?(?:unchanged|the same)\b`,
+    "gi",
+  ),
+  // "no change of owner", "without an ownership change", "no owner changes", "any change in ownership"
+  new RegExp(
+    String.raw`\b(?:no|without(?:\s+an?)?|any)\s+(?:change\s+(?:of|in)\s+${OWNER}|${OWNER}\s+changes?)\b`,
+    "gi",
+  ),
+  // "changed owners", "change of ownership", "changing owners"
+  new RegExp(
+    String.raw`\bchang(?:e|ed|es|ing)\s+(?:(?:of|in)\s+)?${OWNER}\b`,
+    "gi",
+  ),
+  // "long-time owners", "long-term ownership", "longstanding owner"
+  new RegExp(String.raw`\blong[\s-]?(?:time|term|standing)\s+${OWNER}\b`, "gi"),
+  // "owned by the same family", "held by the same owner"
+  new RegExp(
+    String.raw`\b(?:owned|held)\s+by\s+the\s+same\s+(?:${OWNER}|person|people|family|party)\b`,
+    "gi",
+  ),
+];
+
 const PEOPLE_PATTERNS: readonly RegExp[] = [
   // owners, residents, occupants, tenants and the like
   /\b(?:owners?|owned by|homeowners?|landlords?|landlady|residents?|occupants?|tenants?|renters?|lessees?|inhabitants?|neighbou?rs?)\b/i,
   // "who lives at", "who owns", "who rents"
   /\bwho\s+(?:lives?|lived|resides?|resided|owns?|owned|rents?|rented|occupies|occupied|stays?)\b/i,
+  // someone living, residing or staying at a place: "the person living at", "anyone residing in"
+  /\b(?:living|residing|staying)\s+(?:at|in|on)\b/i,
   // a person's phone, email or contact
   /\b(?:phone|telephone|cell(?:phone)?|mobile number|e-?mail|contact (?:info|information|details)|home address|mailing address)\b/i,
   // where someone lives
@@ -63,13 +108,36 @@ const PEOPLE_PATTERNS: readonly RegExp[] = [
   // a named individual (titles only; "Dr" is left out because it is also a street suffix)
   /\b(?:[Mm]r|[Mm]rs|[Mm]s|[Mm]iss)\.?\s+[A-Z][a-z]/,
   /\b(?:person|man|woman|someone|somebody|individual|people|family)\s+(?:named|called)\b/i,
+  // people's names, and which person or family: "the names of the people", "which family has owned"
+  /\bnames?\s+of\s+(?:the\s+|a\s+|any\s+)?(?:persons?|people|individuals?|famil(?:y|ies)|households?)\b/i,
+  // ("individual" is left out here: "which individual parcels" is about parcels)
+  /\b(?:which|what)\s+(?:persons?|people|famil(?:y|ies)|households?)\b/i,
 ];
 
-/** True when the question is about people rather than parcels, permits or contractor businesses. */
+/**
+ * True when the question is about people rather than parcels, permits or contractor businesses. Contractor terms
+ * (owner-builder) and ownership-duration phrases (OWNERSHIP_DURATION_TERMS) are removed first; every people
+ * pattern is then matched on what is left.
+ */
 export function isPeopleQuestion(question: string): boolean {
-  const q = question.replace(BUSINESS_TERMS, " ");
+  let q = question.replace(BUSINESS_TERMS, " ");
+  for (const t of OWNERSHIP_DURATION_TERMS) q = q.replace(t, " ");
   return PEOPLE_PATTERNS.some((p) => p.test(q));
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// No-tool-call rule (approvals §3e.75 b): runs after the model's last call.
+
+/**
+ * The fixed text of an answer whose reply used no tool result, in this turn or in the conversation: the model's
+ * own text is never shown then (general knowledge, writing tasks, an instruction to ignore the rules, or a data
+ * question answered from memory).
+ */
+export const NO_TOOL_CALL_TEXT =
+  "I only answer questions about the properties, permits and contractors in this data (Los Angeles County parcels " +
+  "and their roof age, City of Los Angeles building permits, contractor businesses), and only from what my tools " +
+  "read from it. This reply used no data from the tools, so it is not shown. For an area, name a place in the data " +
+  'or give a point, e.g. "Which properties within five miles of Van Nuys have roofs older than 15 years?"';
 
 // ---------------------------------------------------------------------------------------------------------------
 // Projection and the description guard.

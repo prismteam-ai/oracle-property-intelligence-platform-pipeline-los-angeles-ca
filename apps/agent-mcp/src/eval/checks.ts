@@ -5,12 +5,20 @@
  * - cited: unverified_ids is empty and every parcel ID or permit number in the answer text is cited: among its
  *   records, or a parcel ID a cited permit record links to (linkedParcels);
  * - gaps / gaps_text: each expected gap ID is in the answer's gaps list / mentioned in the answer text;
- * - elapsed: elapsed_ms < 30,000 (the API Gateway integration timeout, docs/sources.md §3);
- * - tools, refusal, place: the prompt's expected tools (and input values), refusal and place outcome.
+ * - elapsed: elapsed_ms < 30,000 (the API Gateway HTTP API's maximum integration timeout);
+ * - tools, refusal, place: the prompt's expected tools (and input values), refusal (and which: the people guard
+ *   or the no-tool-call rule) and place outcome;
+ * - ownership: an answer through the ownership filter states its basis and weakness and never implies the owner
+ *   is known.
  */
+import type { OwnershipBasis } from "@oracle-la/api/contract";
 import {
+  DEFAULT_OWNERSHIP_BASIS,
   NOT_RUN_PREFIX,
+  NO_TOOL_CALL_TEXT,
+  OWNERSHIP_BASES,
   idsInText,
+  ownershipRuleLine,
   placeKey,
   toolSchemas,
   type AgentAnswer,
@@ -21,7 +29,11 @@ import {
 } from "@oracle-la/agent";
 import { GAPS, type EvalPrompt, type GapSpec } from "./prompts.ts";
 
-/** The API Gateway HTTP API's maximum integration timeout (docs/sources.md §3), in ms. */
+/**
+ * The API Gateway HTTP API's maximum integration timeout, in ms: "Maximum integration timeout | 30 seconds | No"
+ * (AWS, "Quotas for configuring and running an HTTP API in API Gateway",
+ * https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-quotas.html, read 2026-11-13).
+ */
 export const ELAPSED_LIMIT_MS = 30_000;
 
 export const CHECK_NAMES = [
@@ -33,6 +45,7 @@ export const CHECK_NAMES = [
   "tools",
   "refusal",
   "place",
+  "ownership",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 
@@ -179,11 +192,19 @@ async function compareDirect(
       break;
     case "search_aged_roofs":
       direct = async () => {
+        // With the ownership filter on, the basis the tool sends ("both" unless one is named; tools.ts).
         const d = await q.parcels.search({
           lat: n("lat"),
           lon: n("lon"),
           radius_miles: n("radius_miles"),
           threshold_years: n("threshold_years"),
+          ...(input.ownership_filter === true
+            ? {
+                ownership_basis:
+                  (input.ownership_basis as OwnershipBasis | undefined) ??
+                  DEFAULT_OWNERSHIP_BASIS,
+              }
+            : {}),
           offset: 0,
           limit: n("limit"),
         });
@@ -487,17 +508,89 @@ export function checkTools(
   return check(details, ok);
 }
 
-/** Refused (zero model calls) when expected; answered otherwise. */
+/**
+ * Refused when expected, answered otherwise. A people-guard refusal (the default) makes zero model calls; a
+ * no-tool-call refusal shows the fixed text (NO_TOOL_CALL_TEXT), whatever the model wrote.
+ */
 export function checkRefusal(
   answer: AgentAnswer,
-  refused: boolean,
+  expected: Pick<EvalPrompt["expected"], "refused" | "refusal">,
 ): CheckResult {
-  const detail = `status ${answer.status}${answer.stopped_by ? ` (${answer.stopped_by})` : ""}, ${answer.usage.model_calls} model call(s)`;
+  const detail = `status ${answer.status}${answer.refused_by ? ` (${answer.refused_by})` : ""}${answer.stopped_by ? ` (${answer.stopped_by})` : ""}, ${answer.usage.model_calls} model call(s)`;
+  if (!expected.refused) return check([detail], answer.status === "answered");
+  const kind = expected.refusal ?? "people_guard";
   return check(
-    [detail],
-    refused
-      ? answer.status === "refused" && answer.usage.model_calls === 0
-      : answer.status === "answered",
+    [`${detail}; want refused by ${kind}`],
+    answer.status === "refused" &&
+      answer.refused_by === kind &&
+      (kind === "people_guard"
+        ? answer.usage.model_calls === 0
+        : answer.text === NO_TOOL_CALL_TEXT),
+  );
+}
+
+/**
+ * What an answer's text must say for each ownership basis (ownership.ts OWNERSHIP_TEXTS): the basis (recorded
+ * documents, reassessment, or both) and its weakness (a refinance or a lien resets "recording" and "both"; a
+ * transfer that does not reassess escapes "base_year"), in the model's own words.
+ */
+const RECORDING =
+  /\brecord(?:ed|ing|s)?\b[^.!?\n]{0,60}\b(?:documents?|deeds?|transfers?)\b|\b(?:documents?|deeds?)\b[^.!?\n]{0,60}\brecord(?:ed|ing)\b/i;
+const REASSESSMENT = /\breassess|\bbase[\s-]year/i;
+export const OWNERSHIP_TEXT_CHECKS: Record<
+  (typeof OWNERSHIP_BASES)[number],
+  { basis: readonly RegExp[]; weakness: RegExp }
+> = {
+  recording: { basis: [RECORDING], weakness: /refinanc|\blien/i },
+  base_year: {
+    basis: [REASSESSMENT],
+    weakness:
+      /spouse|parent|child|(?:do|does|did)(?:n['’]t| not) (?:trigger (?:a )?)?reassess|without (?:a )?reassess/i,
+  },
+  both: { basis: [RECORDING, REASSESSMENT], weakness: /refinanc|\blien/i },
+};
+/** Text that names an owner: "owned by Jane Doe", "the owner is Smith Trust", "owner's name is ...". */
+export const OWNER_NAMED =
+  /\b(?:[Oo]wned by|[Oo]wners? (?:is|are)|[Oo]wner['’]?s? names? (?:is|are))\s+(?!The same\b|Not\b|Unknown\b)[A-Z][a-z]/;
+
+/**
+ * (v) With expected.ownership: a search_aged_roofs call with the ownership filter that returned its basis; the
+ * reasoning states that basis's rule line (deterministic); the text states the basis and its weakness; and no text
+ * names an owner. n/a without the expectation.
+ */
+export function checkOwnership(
+  answer: AgentAnswer,
+  calls: readonly ToolCallRecord[],
+  expected: EvalPrompt["expected"],
+): CheckResult {
+  if (!expected.ownership) return check(["no ownership expected"], null);
+  const filtered = calls
+    .filter((c) => c.name === "search_aged_roofs" && !c.is_error)
+    .filter((c) => parsedInput(c)?.ownership_filter === true)
+    .map((c) => rec(rec(c.result).ownership).basis)
+    .filter((b): b is (typeof OWNERSHIP_BASES)[number] =>
+      (OWNERSHIP_BASES as readonly unknown[]).includes(b),
+    );
+  const basis = filtered[0];
+  if (basis === undefined)
+    return check(
+      ["no search_aged_roofs call with the ownership filter"],
+      false,
+    );
+  const want = OWNERSHIP_TEXT_CHECKS[basis];
+  const ruleLine = answer.reasoning.includes(ownershipRuleLine(basis));
+  const basisSaid = want.basis.every((re) => re.test(answer.text));
+  const weaknessSaid = want.weakness.test(answer.text);
+  const named = OWNER_NAMED.exec(answer.text)?.[0];
+  return check(
+    [
+      `basis ${basis}`,
+      `rule line ${ruleLine ? "in the reasoning" : "NOT in the reasoning"}`,
+      `basis ${basisSaid ? "stated" : "NOT stated"} in the text`,
+      `weakness ${weaknessSaid ? "stated" : "NOT stated"} in the text`,
+      named ? `the text names an owner: "${named}"` : "no owner named",
+    ],
+    ruleLine && basisSaid && weaknessSaid && !named,
   );
 }
 
@@ -635,8 +728,9 @@ export async function checkAnswer(args: {
       gaps_text: gaps.gaps_text,
       elapsed: checkElapsed(answer),
       tools: checkTools(calls, prompt.expected),
-      refusal: checkRefusal(answer, prompt.expected.refused),
+      refusal: checkRefusal(answer, prompt.expected),
       place: checkPlace(calls, prompt.expected.place, args.previousArea),
+      ownership: checkOwnership(answer, calls, prompt.expected),
     },
   };
 }

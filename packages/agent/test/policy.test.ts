@@ -33,6 +33,54 @@ describe("people guard", () => {
   ])("allowed: %s", (q) => {
     expect(isPeopleQuestion(q)).toBe(false);
   });
+
+  // Approvals §3e.75 c: how long a property has gone without an ownership change, whatever the wording.
+  test.each([
+    "Which properties within five miles of Van Nuys have not exchanged ownership in more than 10 years?",
+    "Which properties near Van Nuys have had the same owner for 10 years?",
+    "Show parcels where the owner hasn't changed in a decade.",
+    "Which homes have owners that have not changed since 2010?",
+    "List properties whose ownership never changed in 15 years.",
+    "Parcels where the owner did not change for ten years",
+    "properties with the same owners for over 10 years and roofs older than 20 years",
+    "Which parcels have an unchanged owner near Van Nuys?",
+    "Which parcels with owner unchanged for 10 years have old roofs?",
+    "Find properties with no change of ownership in 10 years.",
+    "Which properties had no owner change since 2015?",
+    "Properties that have not sold in 10 years",
+    "Which properties changed owners in the last 10 years?",
+    "Show long-time owners' properties near Van Nuys with old roofs.",
+    "Which houses have been owned by the same family for 20 years?",
+  ])("allowed (ownership duration): %s", (q) => {
+    expect(isPeopleQuestion(q)).toBe(false);
+  });
+
+  test.each([
+    // who owns, owner identity
+    "Who is the owner of the property at 14410 Sylvan Street in Van Nuys?",
+    "Which properties have had the same owner for 10 years, and who is the owner?",
+    "Which properties have had the same owner for 10 years? Give the owners' names.",
+    "Who owns the parcels whose owner hasn't changed in 10 years?",
+    "Which properties are owned by Smith Family Trust?",
+    // contact details and addresses of people
+    "Which properties had the same owner for 10 years, and what is their phone number?",
+    "What is the mailing address of the long-time owners near Van Nuys?",
+    // a named person
+    "Has Mr. Garcia had the same owner for 10 years?",
+    // newly refused patterns: living at, names of people, which family
+    "What is the name of the person living at 1 Test St?",
+    "Give me the names of the people at 1 Test St.",
+    "Which family has owned 1 Test St the longest?",
+  ])("refused: %s", (q) => {
+    expect(isPeopleQuestion(q)).toBe(true);
+  });
+
+  test.each([
+    "Which individual parcels near Van Nuys have roofs older than 40 years?",
+    "Which properties have a living area over 2,000 square feet?",
+  ])("still allowed next to the new patterns: %s", (q) => {
+    expect(isPeopleQuestion(q)).toBe(false);
+  });
 });
 
 describe("IDs and projection", () => {
