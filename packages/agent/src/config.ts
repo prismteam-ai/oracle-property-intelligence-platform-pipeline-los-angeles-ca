@@ -14,8 +14,10 @@ import {
 } from "./models.ts";
 
 /**
- * Upper bound of the time budget. The API Gateway HTTP API "Maximum integration timeout | 30 seconds | No"
- * (sources.md §3) leaves 2 s for Lambda start and tool overhead.
+ * Upper bound of the time budget. The API Gateway HTTP API "Maximum integration timeout | 30 seconds | No" (AWS,
+ * "Quotas for configuring and running an HTTP API in API Gateway",
+ * https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-quotas.html, read 2026-11-13) leaves 2 s
+ * for Lambda start and tool overhead.
  */
 export const MAX_TIME_BUDGET_MS = 28_000;
 /** Lower bound: the loop keeps a 1,500 ms reserve before every model call, so a smaller budget never calls it. */

@@ -150,7 +150,7 @@ export function parseCliArgs(
   const model = values.model;
   if (model === "opus-5.5")
     throw new UsageError(
-      "opus-5.5 is not priced for the eval (no cache prices are recorded for it in docs/sources.md §5); use haiku-5.5 or sonnet-5.5",
+      "opus-5.5 is not priced for the eval (no cache prices are recorded for it); use haiku-5.5 or sonnet-5.5",
     );
   if (!model || !isPricedModel(model))
     throw new UsageError(

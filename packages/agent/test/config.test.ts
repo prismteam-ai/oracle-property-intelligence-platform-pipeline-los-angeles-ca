@@ -90,7 +90,7 @@ describe("model-ID map", () => {
         `anthropic.${MODEL_IDS[key].anthropic}`,
       );
   });
-  test("exact IDs from docs/sources.md §1", () => {
+  test('exact IDs from the "Models overview" page (rows "Claude API ID" and "Amazon Bedrock ID")', () => {
     expect(MODEL_IDS).toEqual({
       "opus-5.5": {
         anthropic: "claude-opus-5-5",

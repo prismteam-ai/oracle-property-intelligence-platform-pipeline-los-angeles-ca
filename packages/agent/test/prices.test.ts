@@ -1,4 +1,7 @@
-/** The eval's price table (models.ts, design brief §15.1; docs/sources.md §5). Pure arithmetic, no network. */
+/**
+ * The eval's price table (models.ts, design brief §15.1; Anthropic, "Pricing",
+ * https://platform.claude.com/docs/en/about-claude/pricing.md, read 2026-11-13). Pure arithmetic, no network.
+ */
 import { describe, expect, test } from "vitest";
 import {
   BEDROCK_PRICE_FACTOR,

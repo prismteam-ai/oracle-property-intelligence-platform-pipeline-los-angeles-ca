@@ -32,7 +32,10 @@ export const MODEL_IDS: Readonly<
   },
 };
 
-/** Bedrock region (sources.md §2: "eu-north-1 | Global, EU, In-region only"). A constant, not configuration. */
+/**
+ * Bedrock region (Anthropic, "Claude in Amazon Bedrock (bedrock-mantle)", cited above: "eu-north-1 | Europe
+ * (Stockholm) | Global, EU, In-region only"). A constant, not configuration.
+ */
 export const BEDROCK_REGION = "eu-north-1";
 
 export function modelId(provider: Provider, key: ModelKey): string {
@@ -87,7 +90,10 @@ export const PRICES_USD_PER_MTOK: Readonly<
   },
 };
 
-/** Bedrock's regional endpoint premium over the Anthropic list prices (sources.md §5). */
+/**
+ * Bedrock's regional endpoint premium over the Anthropic list prices (Anthropic, "Pricing", cited above: "Regional
+ * and multi-region endpoints include a 10 percent premium over global endpoints").
+ */
 export const BEDROCK_PRICE_FACTOR = 1.1;
 
 /** How a provider's spend is priced, for labels: Bedrock's is an estimate. */
