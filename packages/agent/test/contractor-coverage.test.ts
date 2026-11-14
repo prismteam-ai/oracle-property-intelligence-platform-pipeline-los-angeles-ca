@@ -21,7 +21,7 @@ const contractorRow = async (
   ...(await fakeSources()).sources.find((s) => s.source_kind === "contractor")!,
   ...extra,
 });
-const only = (...rows: SourceRow[]): Sources => ({ sources: rows, pages: [] });
+const only = (...rows: SourceRow[]): Sources => ({ sources: rows });
 
 describe("monthYear", () => {
   test("a YYYY-MM-DD date to its month and year; anything else null", () => {

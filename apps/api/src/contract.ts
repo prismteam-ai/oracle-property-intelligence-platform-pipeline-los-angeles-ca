@@ -160,6 +160,7 @@ export interface SourceRow {
   /** The contractor view's permit_issue_date window; null for the roll and the permit datasets. */
   coverage: SourceCoverage | null;
 }
+/** One page a source's records came from: the exact request, its retrieval time and the page's sha256. */
 export interface SourcePageRow {
   source_kind: SourceKind;
   source_name: string;
@@ -169,9 +170,26 @@ export interface SourcePageRow {
   source_page_sha256: string;
   record_count: number;
 }
+/**
+ * explorer.sources: the run's sources with their record and page counts, no page list (the county roll alone
+ * has 2,429 pages); one source's pages are served by explorer.sourcePages.
+ */
 export interface Sources {
   sources: SourceRow[];
-  pages: SourcePageRow[];
+}
+/** Most pages per explorer.sourcePages call. */
+export const MAX_SOURCE_PAGES_LIMIT = 100;
+/** Largest offset explorer.sourcePages accepts (far above any source's page count). */
+export const MAX_SOURCE_PAGES_OFFSET = 1_000_000;
+/**
+ * explorer.sourcePages: one source's pages in page-file order, from `offset`. total is the source's page count
+ * (its page_count in explorer.sources; 0 when no source has that name).
+ */
+export interface SourcePages {
+  total: number;
+  items: SourcePageRow[];
+  /** The offset of the next page of results; null on the last one. */
+  next_offset: number | null;
 }
 
 /** Where one record came from (every record row carries it). */

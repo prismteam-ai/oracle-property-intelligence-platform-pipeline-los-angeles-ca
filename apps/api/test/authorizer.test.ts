@@ -39,7 +39,7 @@ test("loads one hash per client from SSM and ignores malformed values", async ()
   ssm.restore();
 });
 
-test("the handler returns the matched client in the context, and no context when denied", async () => {
+test("the handler returns the matched client in the context (crm, explorer and the MCP server's mcp), and no context when denied", async () => {
   const ssm = mockClient(SSMClient);
   ssm.on(GetParametersByPathCommand).resolves({
     Parameters: [
@@ -48,6 +48,7 @@ test("the handler returns the matched client in the context, and no context when
         Name: "/oracle-la/api/clients/explorer/token-sha256",
         Value: hash("t-exp"),
       },
+      { Name: "/oracle-la/api/clients/mcp/token-sha256", Value: hash("t-mcp") },
     ],
   });
   process.env.TOKEN_HASH_PATH = "/oracle-la/api/clients/";
@@ -64,6 +65,11 @@ test("the handler returns the matched client in the context, and no context when
   expect(await call("Bearer t-exp")).toEqual({
     isAuthorized: true,
     context: { client: "explorer" },
+  });
+  // The mcp token is accepted like the others; the data API ignores the name, the CRM leads API refuses it.
+  expect(await call("Bearer t-mcp")).toEqual({
+    isAuthorized: true,
+    context: { client: "mcp" },
   });
   expect(await call("Bearer wrong")).toEqual({ isAuthorized: false });
   expect(await call()).toEqual({ isAuthorized: false });

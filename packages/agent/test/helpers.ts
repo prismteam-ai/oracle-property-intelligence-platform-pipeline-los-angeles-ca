@@ -449,7 +449,6 @@ export function fakeQueries(): {
               },
             ),
           ],
-          pages: [],
         };
       },
     },

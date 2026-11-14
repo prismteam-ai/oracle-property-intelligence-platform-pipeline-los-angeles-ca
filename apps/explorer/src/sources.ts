@@ -6,8 +6,9 @@ import type {
 } from "@oracle-la/api-client";
 
 /**
- * explorer.sources, fetched at most once per session (about 1.4 MB with the roll's pages) and shared by
- * the Sources, Records and Long-open tabs. A failed fetch is not kept, so the next tab visit retries.
+ * explorer.sources (the sources with their page counts, about 2.4 KB; the pages are explorer.sourcePages),
+ * fetched at most once per session and shared by the Sources, Records and Long-open tabs. A failed fetch is not
+ * kept, so the next tab visit retries.
  */
 export type LoadSources = () => Promise<Sources>;
 export function sourcesLoader(api: ApiClient): LoadSources {

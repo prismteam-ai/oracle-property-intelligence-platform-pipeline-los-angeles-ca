@@ -11,6 +11,8 @@ import {
   MAX_PLACE_NAME_LENGTH,
   MAX_POINTS,
   MAX_RESPONSE_BYTES,
+  MAX_SOURCE_PAGES_LIMIT,
+  MAX_SOURCE_PAGES_OFFSET,
   OWNERSHIP_BASIS,
   OWNERSHIP_PROXY_NOTE,
   ROOF_AGE_BASIS,
@@ -91,7 +93,7 @@ describe("routers on the synthetic fixture", () => {
     );
     expect(s.history.map((h) => h.run_id)).toEqual([FIXTURE.runId]);
   });
-  test("sources and pages with provenance", async () => {
+  test("sources with their page counts and no page list; the pages with provenance from sourcePages", async () => {
     const s = await caller.explorer.sources();
     expect(s.sources).toEqual([
       expect.objectContaining({
@@ -101,16 +103,52 @@ describe("routers on the synthetic fixture", () => {
         terms_of_use: "https://example.test/terms",
       }),
     ]);
+    expect(Object.keys(s)).toEqual(["sources"]);
+    const pg = await caller.explorer.sourcePages({
+      source_name: FIXTURE.source,
+    });
+    expect(pg.total).toBe(2);
+    expect(pg.next_offset).toBeNull();
     expect(
-      s.pages.map((p) => [
+      pg.items.map((p) => [
+        p.source_kind,
+        p.source_name,
         p.source_page_file,
         p.record_count,
         p.source_retrieved_at,
       ]),
     ).toEqual([
-      ["page-0000.json", 4, "2026-11-11T16:17:40.932Z"],
-      ["page-0001.json", 3, "2026-11-11T16:17:40.932Z"],
+      [
+        "parcel",
+        FIXTURE.source,
+        "page-0000.json",
+        4,
+        "2026-11-11T16:17:40.932Z",
+      ],
+      [
+        "parcel",
+        FIXTURE.source,
+        "page-0001.json",
+        3,
+        "2026-11-11T16:17:40.932Z",
+      ],
     ]);
+    for (const p of pg.items) {
+      expect(Object.keys(p).sort()).toEqual([
+        "record_count",
+        "source_kind",
+        "source_name",
+        "source_page_file",
+        "source_page_sha256",
+        "source_request_url",
+        "source_retrieved_at",
+      ]);
+      // The fixture's request URL and page hash (fixture.ts), as the records carry them.
+      expect(p.source_page_sha256).toBe(`sha-${p.source_page_file}`);
+      expect(p.source_request_url).toBe(
+        `https://example.test/query?page=${p.source_page_file}`,
+      );
+    }
   });
   test("records page by parcel id", async () => {
     const a = await caller.explorer.records({
@@ -879,14 +917,105 @@ describe("permit routes on the synthetic permit run", () => {
       query_urls: ["https://example.test/contractors"],
     });
     expect(s.sources[2]).toMatchObject({ license: null, query_urls: null });
-    expect(s.pages.map((p) => [p.source_kind, p.source_page_file])).toEqual([
+    expect(Object.keys(s)).toEqual(["sources"]);
+  });
+  test("sourcePages: each source's pages in page-file order; the totals equal the sources' page counts", async () => {
+    const s = keep(await caller.explorer.sources());
+    const pages = async (source_name: string) =>
+      keep(await caller.explorer.sourcePages({ source_name, limit: 100 }));
+    const got: Array<[string, string]> = [];
+    for (const src of s.sources) {
+      const r = await pages(src.source_name);
+      expect(r.total, src.source_name).toBe(src.page_count);
+      expect(r.next_offset).toBeNull();
+      expect(r.items.every((p) => p.source_name === src.source_name)).toBe(
+        true,
+      );
+      expect(r.items.reduce((n, p) => n + p.record_count, 0)).toBe(
+        src.record_count,
+      );
+      got.push(
+        ...r.items.map((p): [string, string] => [
+          p.source_kind,
+          p.source_page_file,
+        ]),
+      );
+    }
+    expect(got).toEqual([
       ["contractor", "pages/8guu-8f5m_p000.json.gz"],
       ["permit", "pages/gwh9-jnip_p000.json.gz"],
-      ["parcel", "pages/page-00000.json.gz"],
-      ["parcel", "pages/page-00001.json.gz"],
       ["permit", "pages/pi9x-tg5x_p000.json.gz"],
       ["permit", "pages/pi9x-tg5x_p001.json.gz"],
+      ["parcel", "pages/page-00000.json.gz"],
+      ["parcel", "pages/page-00001.json.gz"],
     ]);
+    // Every page file served passes the records route's page_file pattern.
+    for (const [, f] of got) expect(PAGE_FILE.test(f), f).toBe(true);
+  });
+  test("sourcePages pages with offset and limit; next_offset until the last page; unknown source and offsets past the end are empty", async () => {
+    const page = async (offset: number, limit: number) =>
+      keep(
+        await caller.explorer.sourcePages({
+          source_name: PERMIT_FIXTURE.permitSource,
+          offset,
+          limit,
+        }),
+      );
+    const a = await page(0, 2);
+    expect(a.total).toBe(3);
+    expect(a.items.map((p) => p.source_page_file)).toEqual([
+      "pages/gwh9-jnip_p000.json.gz",
+      "pages/pi9x-tg5x_p000.json.gz",
+    ]);
+    expect(a.next_offset).toBe(2);
+    const b = await page(a.next_offset!, 2);
+    expect(b.items.map((p) => p.source_page_file)).toEqual([
+      "pages/pi9x-tg5x_p001.json.gz",
+    ]);
+    expect(b).toMatchObject({ total: 3, next_offset: null });
+    expect(await page(1, 1)).toMatchObject({
+      total: 3,
+      items: [{ source_page_file: "pages/pi9x-tg5x_p000.json.gz" }],
+      next_offset: 2,
+    });
+    expect(await page(3, 2)).toEqual({
+      total: 3,
+      items: [],
+      next_offset: null,
+    });
+    expect(
+      keep(
+        await caller.explorer.sourcePages({ source_name: "no such source" }),
+      ),
+    ).toEqual({ total: 0, items: [], next_offset: null });
+    // Default: offset 0, 50 pages.
+    expect(
+      (
+        await caller.explorer.sourcePages({
+          source_name: PERMIT_FIXTURE.permitSource,
+        })
+      ).items,
+    ).toHaveLength(3);
+  });
+  test("sourcePages rejects a limit over 100 (MAX_SOURCE_PAGES_LIMIT), a limit under 1, a negative or fractional offset and an empty source name", async () => {
+    expect(MAX_SOURCE_PAGES_LIMIT).toBe(100);
+    const q = (i: Record<string, unknown>) =>
+      caller.explorer.sourcePages({
+        source_name: PERMIT_FIXTURE.permitSource,
+        ...i,
+      } as Parameters<typeof caller.explorer.sourcePages>[0]);
+    await expect(q({ limit: 100 })).resolves.toMatchObject({ total: 3 });
+    for (const bad of [
+      { limit: 101 },
+      { limit: 0 },
+      { offset: -1 },
+      { offset: 1.5 },
+      { offset: MAX_SOURCE_PAGES_OFFSET + 1 },
+      { source_name: "" },
+    ])
+      await expect(q(bad), JSON.stringify(bad)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
   });
   test("records per source: permits by permit number, contractor rows by (permit number, row), each with its cursor", async () => {
     const a = keep(

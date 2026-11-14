@@ -45,11 +45,12 @@ const REQUIRE_REAL_DATA = process.env.REQUIRE_REAL_DATA === "1";
 let realChecks = 0;
 /**
  * Vitest's test, counting each real-data check (every test in this file except the REQUIRE_REAL_DATA one).
- * Each check gets 30 s: alone, none takes 2 s, but the full suite runs every test file in parallel.
+ * Each check gets 30 s: alone, none takes 2 s, but the full suite runs every test file in parallel. The one
+ * that pages through every page of the roll (25 calls, about 6 s alone) gets 120 s.
  */
-const test = (name: string, fn: () => Promise<void>) => {
+const test = (name: string, fn: () => Promise<void>, timeout = 30_000) => {
   realChecks++;
-  vitestTest(name, fn, 30_000);
+  vitestTest(name, fn, timeout);
 };
 
 describe.skipIf(!hasRealData)("routers on the real latest run", () => {
@@ -103,7 +104,7 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       },
     });
   });
-  test("explorer.sources: three sources; 2,429 roll, 10 permit and 3 contractor pages, each with request URL, time and sha256", async () => {
+  test("explorer.sources: three sources with their page counts (2,429 roll, 10 permit, 3 contractor pages), no page list, under 3,000 bytes", async () => {
     const s = await caller.explorer.sources();
     expect(
       s.sources.map((x) => [
@@ -121,8 +122,42 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       license: "CC BY 4.0",
       attribution: "LADBS",
     });
-    expect(s.pages).toHaveLength(PAGES + 13);
-    for (const p of s.pages) {
+    expect(Object.keys(s)).toEqual(["sources"]);
+    // Measured on this run: 2,396 bytes as JSON (with the page list it was about 1.4 MB).
+    expect(Buffer.byteLength(JSON.stringify(s))).toBeLessThan(3_000);
+  });
+  test("explorer.sourcePages: every page of the three sources (2,429 + 10 + 3), each with request URL, time and sha256; every 100-page response under 64,000 bytes", async () => {
+    const all: Array<
+      Awaited<ReturnType<typeof caller.explorer.sourcePages>>["items"][number]
+    > = [];
+    for (const [name, n] of [
+      [SOURCE, PAGES],
+      [PERMIT_SOURCE, 10],
+      [CONTRACTOR_SOURCE, 3],
+    ] as const) {
+      let offset: number | null = 0;
+      let calls = 0;
+      while (offset !== null) {
+        const r = await caller.explorer.sourcePages({
+          source_name: name,
+          offset,
+          limit: 100,
+        });
+        expect(r.total).toBe(n);
+        expect(r.items.length).toBe(Math.min(100, n - offset));
+        // Measured on this run: 58,910 bytes as JSON for the roll's first 100 pages, 59,143 at most.
+        expect(Buffer.byteLength(JSON.stringify(r))).toBeLessThan(64_000);
+        all.push(...r.items);
+        offset = r.next_offset;
+        calls++;
+      }
+      expect(calls).toBe(Math.ceil(n / 100));
+    }
+    expect(all).toHaveLength(PAGES + 13);
+    expect(
+      new Set(all.map((p) => `${p.source_name}/${p.source_page_file}`)).size,
+    ).toBe(PAGES + 13);
+    for (const p of all) {
       expect(p.source_request_url).toMatch(
         p.source_kind === "parcel"
           ? /^https:\/\/services\.arcgis\.com\/.+\/FeatureServer\/0\/query\?/
@@ -132,8 +167,15 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
         /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/,
       );
       expect(p.source_page_sha256).toMatch(/^[0-9a-f]{64}$/);
+      // Every page file of the run passes the records route's page_file pattern.
+      expect(PAGE_FILE.test(p.source_page_file), p.source_page_file).toBe(true);
     }
-  });
+    // In page-file order within each source.
+    const roll = all
+      .filter((p) => p.source_name === SOURCE)
+      .map((p) => p.source_page_file);
+    expect(roll).toEqual([...roll].sort());
+  }, 120_000);
   test("explorer.records pages permits and contractor rows with their cursors; page files filter", async () => {
     const p = await caller.explorer.records({
       source_name: PERMIT_SOURCE,
@@ -163,14 +205,18 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     expect(
       new Set([...c.items, ...c2.items].map((i) => i.record_key)).size,
     ).toBe(200);
-    // Every page file of the run passes the page_file pattern; one page per kind filters to its own records.
-    const s = await caller.explorer.sources();
-    for (const pg of s.pages)
-      expect(PAGE_FILE.test(pg.source_page_file), pg.source_page_file).toBe(
-        true,
-      );
+    // One page per kind (each source's first) filters to its own records.
+    const pages = (
+      await Promise.all(
+        [SOURCE, PERMIT_SOURCE, CONTRACTOR_SOURCE].map(
+          async (source_name) =>
+            (await caller.explorer.sourcePages({ source_name, limit: 1 }))
+              .items,
+        ),
+      )
+    ).flat();
     for (const kind of ["parcel", "permit", "contractor"]) {
-      const pg = s.pages.find((x) => x.source_kind === kind)!;
+      const pg = pages.find((x) => x.source_kind === kind)!;
       const r = await caller.explorer.records({
         source_name: pg.source_name,
         page_file: pg.source_page_file,

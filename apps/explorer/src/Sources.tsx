@@ -1,3 +1,5 @@
+import { useState } from "react";
+import type { ApiClient, SourceRow } from "@oracle-la/api-client";
 import {
   CHANGES_MADE,
   coverageText,
@@ -6,18 +8,31 @@ import {
 } from "./sources.ts";
 import { useQuery } from "./useQuery.ts";
 
-/** Every source of the run (the roll, the LADBS permits, the LADBS contractor view) with its terms and pages. */
-export function Sources({ loadSources }: { loadSources: LoadSources }) {
+/** Pages per explorer.sourcePages call (the API's most). */
+export const PAGES_PER_CALL = 100;
+
+/**
+ * Every source of the run (the roll, the LADBS permits, the LADBS contractor view) with its terms, then one
+ * source's pages, paged through explorer.sourcePages.
+ */
+export function Sources({
+  api,
+  loadSources,
+}: {
+  api: ApiClient;
+  loadSources: LoadSources;
+}) {
   const { data, error } = useQuery(loadSources, "sources");
+  // The offset belongs to one source: choosing another source starts again at its first pages.
+  const [sel, setSel] = useState<{ name?: string; offset: number }>({
+    offset: 0,
+  });
   if (error) return <p className="error">{error}</p>;
   if (!data) return <p>Loading sources…</p>;
-  // Pages grouped by source, in the sources' order, then by page file (the API orders by page file only).
-  const rank = new Map(data.sources.map((s, i) => [s.source_name, i]));
-  const pages = [...data.pages].sort(
-    (a, b) =>
-      (rank.get(a.source_name) ?? 0) - (rank.get(b.source_name) ?? 0) ||
-      a.source_page_file.localeCompare(b.source_page_file),
-  );
+  const source =
+    data.sources.find((s) => s.source_name === sel.name) ??
+    data.sources.find((s) => s.source_kind === "parcel") ??
+    data.sources[0];
   return (
     <section>
       <h2>Records by source</h2>
@@ -64,7 +79,82 @@ export function Sources({ loadSources }: { loadSources: LoadSources }) {
         </tbody>
       </table>
       <h3>Pages (exact request, retrieval time, page hash)</h3>
-      <table data-testid="pages">
+      {source && (
+        <>
+          <label>
+            Source{" "}
+            <select
+              data-testid="pages-source"
+              value={source.source_name}
+              onChange={(e) => setSel({ name: e.target.value, offset: 0 })}
+            >
+              {data.sources.map((s) => (
+                <option key={s.source_name} value={s.source_name}>
+                  {s.source_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <SourcePages
+            key={source.source_name}
+            api={api}
+            source={source}
+            offset={sel.offset}
+            setOffset={(offset) => setSel({ name: source.source_name, offset })}
+          />
+        </>
+      )}
+    </section>
+  );
+}
+
+/** One source's pages, PAGES_PER_CALL at a time, in page-file order. */
+function SourcePages({
+  api,
+  source,
+  offset,
+  setOffset,
+}: {
+  api: ApiClient;
+  source: SourceRow;
+  offset: number;
+  setOffset: (o: number) => void;
+}) {
+  const { data, error, loading } = useQuery(
+    () =>
+      api.explorer.sourcePages.query({
+        source_name: source.source_name,
+        offset,
+        limit: PAGES_PER_CALL,
+      }),
+    `pages:${source.source_name}:${offset}`,
+  );
+  if (error) return <p className="error">{error}</p>;
+  return (
+    <>
+      <p data-testid="pages-total">
+        {data
+          ? data.items.length
+            ? `${data.total.toLocaleString("en-US")} pages · ${(offset + 1).toLocaleString("en-US")}–${(offset + data.items.length).toLocaleString("en-US")}`
+            : `${data.total.toLocaleString("en-US")} pages`
+          : "…"}
+      </p>
+      <p>
+        <button
+          disabled={offset === 0 || loading}
+          onClick={() => setOffset(Math.max(0, offset - PAGES_PER_CALL))}
+        >
+          Previous
+        </button>{" "}
+        <button
+          data-testid="pages-next"
+          disabled={data?.next_offset == null || loading}
+          onClick={() => setOffset(data!.next_offset!)}
+        >
+          Next
+        </button>
+      </p>
+      <table data-testid="pages" data-kind={source.source_kind}>
         <thead>
           <tr>
             <th>Page</th>
@@ -76,7 +166,7 @@ export function Sources({ loadSources }: { loadSources: LoadSources }) {
           </tr>
         </thead>
         <tbody>
-          {pages.map((p) => (
+          {data?.items.map((p) => (
             <tr key={`${p.source_name}/${p.source_page_file}`}>
               <td>{p.source_page_file}</td>
               <td>{p.record_count}</td>
@@ -88,6 +178,6 @@ export function Sources({ loadSources }: { loadSources: LoadSources }) {
           ))}
         </tbody>
       </table>
-    </section>
+    </>
   );
 }

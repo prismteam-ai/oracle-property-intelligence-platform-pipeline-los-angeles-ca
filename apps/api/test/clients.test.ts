@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import {
   type ClientsFile,
   clientOrigin,
+  corsOrigins,
   parseClients,
 } from "../cdk/lib/clients.ts";
 
@@ -13,12 +14,18 @@ const committed = JSON.parse(
 ) as ClientsFile;
 
 describe("API clients (clients.json)", () => {
-  test("the committed list: crm and explorer as branches of the app in the SSM parameter, no app ID or literal origin", () => {
+  test("the committed list: crm and explorer as branches of the app in the SSM parameter, mcp with no browser origin; no app ID or literal origin", () => {
     const f = parseClients(committed);
     expect(f.amplifyAppIdParameter).toBe("/roofing-crm/web/app-id");
     expect(f.clients).toEqual([
       { name: "crm", amplifyBranch: "main" },
       { name: "explorer", amplifyBranch: "explorer" },
+      { name: "mcp", browser: false },
+    ]);
+    // CORS: the two browser clients only, in list order.
+    expect(corsOrigins(f.clients, "dexample123456")).toEqual([
+      "https://main.dexample123456.amplifyapp.com",
+      "https://explorer.dexample123456.amplifyapp.com",
     ]);
     expect(JSON.stringify(committed)).not.toMatch(
       /amplifyapp\.com|\bd[a-z0-9]{12,14}\b/,
@@ -48,6 +55,25 @@ describe("API clients (clients.json)", () => {
     ).toBe("https://site.example.org");
   });
 
+  test("a client with browser: false has no CORS origin and needs no Amplify app ID", () => {
+    expect(clientOrigin({ name: "mcp", browser: false })).toBeUndefined();
+    const f = parseClients({
+      clients: [
+        { name: "web", origin: "https://site.example.org" },
+        { name: "mcp", browser: false },
+      ],
+    });
+    expect(corsOrigins(f.clients)).toEqual(["https://site.example.org"]);
+    expect(corsOrigins([{ name: "mcp", browser: false }])).toEqual([]);
+    // At synth the branch origins stay deploy-time tokens; the mcp client adds none.
+    const stack = new cdk.Stack(new cdk.App(), "S");
+    const appId = ssm.StringParameter.valueForStringParameter(
+      stack,
+      "/roofing-crm/web/app-id",
+    );
+    expect(corsOrigins(parseClients(committed).clients, appId)).toHaveLength(2);
+  });
+
   test("invalid lists are refused", () => {
     const bad = (f: ClientsFile) => () => parseClients(f);
     expect(bad({ clients: [{ name: "x", amplifyBranch: "main" }] })).toThrow(
@@ -62,6 +88,20 @@ describe("API clients (clients.json)", () => {
       }),
     ).toThrow(/exactly one/);
     expect(bad({ clients: [{ name: "x" }] })).toThrow(/exactly one/);
+    expect(
+      bad({
+        clients: [{ name: "x", origin: "https://a.example", browser: false }],
+      }),
+    ).toThrow(/exactly one/);
+    expect(
+      bad({
+        amplifyAppIdParameter: "/p",
+        clients: [{ name: "x", amplifyBranch: "main", browser: false }],
+      }),
+    ).toThrow(/exactly one/);
+    expect(
+      bad({ clients: [{ name: "x", browser: true as unknown as false }] }),
+    ).toThrow(/browser may only be false/);
     expect(
       bad({ clients: [{ name: "x", origin: "http://a.example" }] }),
     ).toThrow(/bad origin/);

@@ -72,7 +72,7 @@ export function App() {
           <RunSummary api={conn.api} loadSources={conn.loadSources} />
         )}
         {conn && tab === "Sources & pages" && (
-          <Sources loadSources={conn.loadSources} />
+          <Sources api={conn.api} loadSources={conn.loadSources} />
         )}
         {conn && tab === "Records" && (
           <Records api={conn.api} loadSources={conn.loadSources} />

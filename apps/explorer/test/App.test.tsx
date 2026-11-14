@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   search: vi.fn(),
   runSummary: vi.fn(),
   sources: vi.fn(),
+  sourcePages: vi.fn(),
   records: vi.fn(),
   longOpen: vi.fn(),
   forParcel: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock("@oracle-la/api-client", () => ({
       explorer: {
         runSummary: { query: h.runSummary },
         sources: { query: h.sources },
+        sourcePages: { query: h.sourcePages },
         records: { query: h.records },
       },
       parcels: { search: { query: h.search } },
@@ -244,22 +246,44 @@ const SOURCES = {
       coverage: WINDOW,
     }),
   ],
-  pages: [
-    ["parcel", ROLL, "pages/page-00001.json.gz"],
-    ["permit", PERMITS, "pages/aaaa-0001_p000.json.gz"],
-    ["contractor", CONTRACTORS, "pages/8guu-8f5m_p000.json.gz"],
-    ["parcel", ROLL, "pages/page-00000.json.gz"],
-    ["permit", PERMITS, "pages/aaaa-0002_p000.json.gz"],
-  ].map(([source_kind, source_name, source_page_file]) => ({
-    source_kind,
-    source_name,
-    source_page_file,
-    source_request_url: `https://example.test/${source_page_file}?q`,
-    source_retrieved_at: "2026-11-12T13:00:00.000Z",
-    source_page_sha256: "a".repeat(64),
-    record_count: 2,
-  })),
 };
+/** The pages explorer.sourcePages serves (in no particular order here; the fake sorts them by page file). */
+const pageRow = (
+  source_kind: string,
+  source_name: string,
+  source_page_file: string,
+) => ({
+  source_kind,
+  source_name,
+  source_page_file,
+  source_request_url: `https://example.test/${source_page_file}?q`,
+  source_retrieved_at: "2026-11-12T13:00:00.000Z",
+  source_page_sha256: "a".repeat(64),
+  record_count: 2,
+});
+const PAGES = [
+  ["parcel", ROLL, "pages/page-00001.json.gz"],
+  ["permit", PERMITS, "pages/aaaa-0001_p000.json.gz"],
+  ["contractor", CONTRACTORS, "pages/8guu-8f5m_p000.json.gz"],
+  ["parcel", ROLL, "pages/page-00000.json.gz"],
+  ["permit", PERMITS, "pages/aaaa-0002_p000.json.gz"],
+].map(([k, n, f]) => pageRow(k!, n!, f!));
+/** explorer.sourcePages over a page list: one source, page-file order, offset and limit, total and next offset. */
+const servePages =
+  (pages: ReturnType<typeof pageRow>[]) =>
+  async (i: { source_name: string; offset?: number; limit?: number }) => {
+    const all = pages
+      .filter((p) => p.source_name === i.source_name)
+      .sort((a, b) => a.source_page_file.localeCompare(b.source_page_file));
+    const offset = i.offset ?? 0;
+    const items = all.slice(offset, offset + (i.limit ?? 50));
+    const next = offset + items.length;
+    return {
+      total: all.length,
+      items,
+      next_offset: items.length && next < all.length ? next : null,
+    };
+  };
 const prov = (name: string) => ({
   source_name: name,
   source_request_url: "https://example.test/page?q",
@@ -473,6 +497,7 @@ describe("Explorer sources, records and long-open permits", () => {
       history: [],
     });
     h.sources.mockReset().mockResolvedValue(SOURCES);
+    h.sourcePages.mockReset().mockImplementation(servePages(PAGES));
     h.records
       .mockReset()
       .mockImplementation(
@@ -487,7 +512,7 @@ describe("Explorer sources, records and long-open permits", () => {
   });
   afterEach(() => cleanup());
 
-  test("the sources tab lists the three sources with their license, attribution and changes made, and every page grouped by source", async () => {
+  test("the sources tab lists the three sources with their license, attribution and changes made, and each source's pages from explorer.sourcePages", async () => {
     render(<App />);
     fireEvent.click(
       await screen.findByRole("tab", { name: "Sources & pages" }),
@@ -513,15 +538,123 @@ describe("Explorer sources, records and long-open permits", () => {
     expect(rows[1]![7]).toContain('reads "TSB"');
     expect(rows[1]![5]).toContain("aaaa-0001.json");
     expect(rows[1]![5]).toContain("aaaa-0002.json");
-    // Every page, grouped in the sources' order, then by page file.
-    expect(tbodyText("pages").map((r) => [r[0], r[5]])).toEqual([
-      ["pages/page-00000.json.gz", "parcel"],
-      ["pages/page-00001.json.gz", "parcel"],
-      ["pages/aaaa-0001_p000.json.gz", "permit"],
-      ["pages/aaaa-0002_p000.json.gz", "permit"],
-      ["pages/8guu-8f5m_p000.json.gz", "contractor"],
+    // The roll's pages first, in page-file order, with the same six columns as before.
+    expect(
+      [...screen.getByTestId("pages").querySelectorAll("th")].map(
+        (th) => th.textContent,
+      ),
+    ).toEqual([
+      "Page",
+      "Records",
+      "Retrieved at (UTC)",
+      "Request URL",
+      "Page sha256",
+      "Source",
     ]);
+    await screen.findByText("pages/page-00000.json.gz");
+    expect(tbodyText("pages")).toEqual([
+      [
+        "pages/page-00000.json.gz",
+        "2",
+        "2026-11-12T13:00:00.000Z",
+        "https://example.test/pages/page-00000.json.gz?q",
+        "a".repeat(64),
+        "parcel",
+      ],
+      [
+        "pages/page-00001.json.gz",
+        "2",
+        "2026-11-12T13:00:00.000Z",
+        "https://example.test/pages/page-00001.json.gz?q",
+        "a".repeat(64),
+        "parcel",
+      ],
+    ]);
+    expect(screen.getByTestId("pages-total").textContent).toBe("2 pages · 1–2");
+    expect(h.sourcePages).toHaveBeenLastCalledWith({
+      source_name: ROLL,
+      offset: 0,
+      limit: 100,
+    });
+    // Each other source from the selector, its own pages only.
+    for (const [name, files, kind] of [
+      [
+        PERMITS,
+        ["pages/aaaa-0001_p000.json.gz", "pages/aaaa-0002_p000.json.gz"],
+        "permit",
+      ],
+      [CONTRACTORS, ["pages/8guu-8f5m_p000.json.gz"], "contractor"],
+    ] as const) {
+      fireEvent.change(screen.getByTestId("pages-source"), {
+        target: { value: name },
+      });
+      await screen.findByText(files[0]);
+      expect(tbodyText("pages").map((r) => [r[0], r[5]])).toEqual(
+        files.map((f) => [f, kind]),
+      );
+    }
     expect(document.body.textContent).not.toMatch(/licen[^s]/i); // the British spelling: "license" throughout
+  });
+
+  test("the pages table pages 100 at a time: Next and Previous move the offset, the last page disables Next, another source starts at its first pages", async () => {
+    const many = Array.from({ length: 205 }, (_, i) =>
+      pageRow(
+        "parcel",
+        ROLL,
+        `pages/page-${String(i).padStart(5, "0")}.json.gz`,
+      ),
+    );
+    h.sourcePages
+      .mockReset()
+      .mockImplementation(
+        servePages([...many, ...PAGES.filter((p) => p.source_name !== ROLL)]),
+      );
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("tab", { name: "Sources & pages" }),
+    );
+    await screen.findByText("pages/page-00000.json.gz");
+    const files = () => tbodyText("pages").map((r) => r[0]);
+    expect(files()).toHaveLength(100);
+    expect(screen.getByTestId("pages-total").textContent).toBe(
+      "205 pages · 1–100",
+    );
+    const next = screen.getByTestId("pages-next");
+    fireEvent.click(next);
+    await screen.findByText("pages/page-00100.json.gz");
+    expect(files()).toEqual(
+      many.slice(100, 200).map((p) => p.source_page_file),
+    );
+    expect(screen.getByTestId("pages-total").textContent).toBe(
+      "205 pages · 101–200",
+    );
+    fireEvent.click(screen.getByTestId("pages-next"));
+    await screen.findByText("pages/page-00204.json.gz");
+    expect(files()).toHaveLength(5);
+    expect(screen.getByTestId("pages-total").textContent).toBe(
+      "205 pages · 201–205",
+    );
+    expect(screen.getByTestId("pages-next")).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    await screen.findByText("pages/page-00100.json.gz");
+    expect(h.sourcePages.mock.calls.map((c) => c[0].offset)).toEqual([
+      0, 100, 200, 100,
+    ]);
+    for (const c of h.sourcePages.mock.calls) expect(c[0].limit).toBe(100);
+    // Another source: back to offset 0.
+    fireEvent.change(screen.getByTestId("pages-source"), {
+      target: { value: PERMITS },
+    });
+    await screen.findByText("pages/aaaa-0001_p000.json.gz");
+    expect(h.sourcePages).toHaveBeenLastCalledWith({
+      source_name: PERMITS,
+      offset: 0,
+      limit: 100,
+    });
+    expect(screen.getByRole("button", { name: "Previous" })).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 
   test("the records tab pages each source chosen from the selector, with counts from the API and the attribution for permit and contractor rows; sources are fetched once", async () => {
@@ -630,7 +763,7 @@ describe("Explorer sources, records and long-open permits", () => {
       CONTRACTOR_NOTE,
     );
     expect(document.body.textContent).not.toMatch(/licen[^s]|work_desc/i);
-    // explorer.sources (about 1.4 MB on the county run) is fetched once for every tab that shows it.
+    // explorer.sources is fetched once for every tab that shows it.
     fireEvent.click(screen.getByRole("tab", { name: "Sources & pages" }));
     await screen.findByTestId("sources");
     fireEvent.click(screen.getByRole("tab", { name: "Long-open permits" }));

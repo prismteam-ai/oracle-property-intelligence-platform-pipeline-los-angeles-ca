@@ -1,13 +1,16 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import type {
-  RecordRow,
-  Records,
-  RunSummary,
-  SourceKind,
-  SourcePageRow,
-  SourceRow,
-  Sources,
+import {
+  MAX_SOURCE_PAGES_LIMIT,
+  MAX_SOURCE_PAGES_OFFSET,
+  type RecordRow,
+  type Records,
+  type RunSummary,
+  type SourceKind,
+  type SourcePageRow,
+  type SourcePages,
+  type SourceRow,
+  type Sources,
 } from "../contract.ts";
 import { procedure, router } from "../trpc.ts";
 
@@ -37,6 +40,7 @@ export const explorerRouter = router({
       history: history as RunSummary["history"],
     };
   }),
+  /** The sources with their record and page counts; the page list is explorer.sourcePages. */
   sources: procedure.query(async ({ ctx }): Promise<Sources> => {
     const db = await ctx.db();
     const sources = (
@@ -46,16 +50,60 @@ export const explorerRouter = router({
       record_count: Number(r.record_count),
       page_count: Number(r.page_count),
     })) as unknown as SourceRow[];
-    const pages = (
-      await db.rows(
-        "select * from oracle.v_source_page order by source_page_file",
-      )
-    ).map((r) => ({
-      ...r,
-      record_count: Number(r.record_count),
-    })) as unknown as SourcePageRow[];
-    return { sources, pages };
+    return { sources };
   }),
+  /**
+   * One source's pages (request URL, retrieval time, page sha256, record count) in page-file order, `limit`
+   * from `offset`, with the source's page count.
+   */
+  sourcePages: procedure
+    .input(
+      z.object({
+        source_name: z.string().min(1).max(200),
+        offset: z.number().int().min(0).max(MAX_SOURCE_PAGES_OFFSET).default(0),
+        limit: z.number().int().min(1).max(MAX_SOURCE_PAGES_LIMIT).default(50),
+      }),
+    )
+    .query(async ({ ctx, input }): Promise<SourcePages> => {
+      const db = await ctx.db();
+      // One pass over the source's pages: the window count is the source's page count, taken before the limit.
+      // offset and limit are integers checked above. The page file orders the pages; the other columns only
+      // break ties, so the order is total.
+      const rows = await db.rows(
+        `select source_kind, source_name, source_page_file, source_request_url, source_retrieved_at,
+           source_page_sha256, record_count, count(*) over () as total
+         from oracle.v_source_page where source_name = $1
+         order by source_page_file, source_request_url, source_retrieved_at, source_page_sha256
+         limit ${input.limit} offset ${input.offset}`,
+        [input.source_name],
+      );
+      // No row: an unknown source, or an offset past the end (then the count alone says how many there are).
+      const total = rows.length
+        ? Number(rows[0]!.total)
+        : Number(
+            (
+              await db.rows(
+                "select count(*)::integer as n from oracle.v_source_page where source_name = $1",
+                [input.source_name],
+              )
+            )[0]?.n ?? 0,
+          );
+      const items: SourcePageRow[] = rows.map((r) => ({
+        source_kind: r.source_kind as SourceKind,
+        source_name: String(r.source_name),
+        source_page_file: String(r.source_page_file),
+        source_request_url: String(r.source_request_url),
+        source_retrieved_at: String(r.source_retrieved_at),
+        source_page_sha256: String(r.source_page_sha256),
+        record_count: Number(r.record_count),
+      }));
+      const next = input.offset + items.length;
+      return {
+        total,
+        items,
+        next_offset: items.length && next < total ? next : null,
+      };
+    }),
   /**
    * One source's records in key order, with their provenance: parcels by parcel ID, permits by permit
    * number, contractor rows by (permit number, contractor row). Optionally one page file only.

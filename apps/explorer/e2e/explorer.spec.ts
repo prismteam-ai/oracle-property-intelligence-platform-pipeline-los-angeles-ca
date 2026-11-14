@@ -2,6 +2,7 @@ import { expect, request, test } from "@playwright/test";
 import type {
   OwnershipBasis,
   SourceKind,
+  SourcePages,
   SourceRow,
   Sources,
 } from "@oracle-la/api-client";
@@ -254,41 +255,89 @@ test.describe("with credentials", () => {
         .locator('tbody tr[data-kind="contractor"]')
         .getByTestId("source-changes"),
     ).toHaveText("license classes normalized");
-    const rows = page.getByTestId("pages").locator("tbody tr");
-    await expect(rows).toHaveCount(sources.pages.length);
-    // Every row's cells in one browser call: the county run has 2,429 pages, too many for a round trip each.
-    const cells = await rows.evaluateAll((trs) =>
-      trs.map((tr) =>
-        [...tr.querySelectorAll("td")].map((td) => td.textContent ?? ""),
-      ),
-    );
-    expect(cells).toHaveLength(sources.pages.length);
+    // Each source's pages from the selector, 100 at a time through explorer.sourcePages: the rows exactly as the
+    // API serves them, then (for a source with more than 100 pages: the roll) the next 100 after Next.
     const PAGE_FILE: Record<SourceKind, RegExp> = {
       parcel: /^(page-\d{4}\.json|pages\/page-\d{5}\.json\.gz)$/,
       permit: /^pages\/[a-z0-9]{4}-[a-z0-9]{4}_p\d{3}\.json\.gz$/,
       contractor: /^pages\/[a-z0-9]{4}-[a-z0-9]{4}_p\d{3}\.json\.gz$/,
     };
-    const perKind: Record<string, number> = {};
-    for (const c of cells) {
-      const kind = c[5] as SourceKind;
-      const s = byKind.get(kind)!;
-      perKind[kind] = (perKind[kind] ?? 0) + 1;
-      expect(c[0]).toMatch(PAGE_FILE[kind]);
-      expect(c[2]).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
-      // The exact request: the source's own query URL (the roll's ArcGIS query, or one of the LADBS datasets).
-      if (kind === "parcel") {
-        expect(c[3]).toMatch(/^https:\/\/services\.arcgis\.com\/.+\/query\?/);
-        expect(c[3]!.startsWith(`${s.query_url}?`)).toBe(true);
-      } else {
-        expect(c[3]).toMatch(
-          /^https:\/\/data\.lacity\.org\/resource\/[a-z0-9]{4}-[a-z0-9]{4}\.json\?/,
-        );
-        expect(s.query_urls!.some((u) => c[3]!.startsWith(`${u}?`))).toBe(true);
+    const rows = page.getByTestId("pages").locator("tbody tr");
+    // Every row's cells in one browser call (100 rows; too many for a round trip each).
+    const shownCells = () =>
+      rows.evaluateAll((trs) =>
+        trs.map((tr) =>
+          [...tr.querySelectorAll("td")].map((td) => td.textContent ?? ""),
+        ),
+      );
+    const asCells = (r: SourcePages) =>
+      r.items.map((p) => [
+        p.source_page_file,
+        String(p.record_count),
+        p.source_retrieved_at,
+        p.source_request_url,
+        p.source_page_sha256,
+        p.source_kind,
+      ]);
+    const checkCells = (s: SourceRow, cells: string[][]) => {
+      for (const c of cells) {
+        expect(c[5]).toBe(s.source_kind);
+        expect(c[0]).toMatch(PAGE_FILE[s.source_kind]);
+        expect(c[2]).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
+        // The exact request: the source's own query URL (the roll's ArcGIS query, or one of the LADBS datasets).
+        if (s.source_kind === "parcel") {
+          expect(c[3]).toMatch(/^https:\/\/services\.arcgis\.com\/.+\/query\?/);
+          expect(c[3]!.startsWith(`${s.query_url}?`)).toBe(true);
+        } else {
+          expect(c[3]).toMatch(
+            /^https:\/\/data\.lacity\.org\/resource\/[a-z0-9]{4}-[a-z0-9]{4}\.json\?/,
+          );
+          expect(s.query_urls!.some((u) => c[3]!.startsWith(`${u}?`))).toBe(
+            true,
+          );
+        }
+        expect(c[4]).toMatch(/^[0-9a-f]{64}$/);
       }
-      expect(c[4]).toMatch(/^[0-9a-f]{64}$/);
+    };
+    for (const s of sources.sources) {
+      const first = (await apiGet("explorer.sourcePages", {
+        source_name: s.source_name,
+        offset: 0,
+        limit: 100,
+      })) as SourcePages;
+      expect(first.total).toBe(s.page_count);
+      await page.getByTestId("pages-source").selectOption(s.source_name);
+      await expect(page.getByTestId("pages")).toHaveAttribute(
+        "data-kind",
+        s.source_kind,
+      );
+      await expect(rows).toHaveCount(first.items.length);
+      await expect(rows.first().locator("td").first()).toHaveText(
+        first.items[0]!.source_page_file,
+      );
+      await expect(page.getByTestId("pages-total")).toHaveText(
+        `${fmt(first.total)} pages · 1–${fmt(first.items.length)}`,
+      );
+      const cells = await shownCells();
+      expect(cells).toEqual(asCells(first));
+      checkCells(s, cells);
+      if (first.next_offset === null) {
+        await expect(page.getByTestId("pages-next")).toBeDisabled();
+        continue;
+      }
+      const second = (await apiGet("explorer.sourcePages", {
+        source_name: s.source_name,
+        offset: first.next_offset,
+        limit: 100,
+      })) as SourcePages;
+      await page.getByTestId("pages-next").click();
+      await expect(rows.first().locator("td").first()).toHaveText(
+        second.items[0]!.source_page_file,
+      );
+      const cells2 = await shownCells();
+      expect(cells2).toEqual(asCells(second));
+      checkCells(s, cells2);
     }
-    for (const s of sources.sources)
-      expect(perKind[s.source_kind]).toBe(s.page_count);
 
     await page.getByRole("tab", { name: "Records" }).click();
     // The roll first, as before; then every source from the selector, each with the API's own total.

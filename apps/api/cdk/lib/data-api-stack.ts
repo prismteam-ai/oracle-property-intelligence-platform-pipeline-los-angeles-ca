@@ -16,7 +16,7 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import type { Construct } from "constructs";
-import { type ClientEntry, clientOrigin } from "./clients.ts";
+import { type ClientEntry, corsOrigins } from "./clients.ts";
 import { ALERT_TOPIC_PARAM } from "./guards-stack.ts";
 import { LAYER_EXCLUDE } from "./layer.ts";
 
@@ -40,7 +40,10 @@ export interface DataApiStackProps extends cdk.StackProps {
   parquetFile: string;
   /** The run's permit Parquet files under DATA_PREFIX (from the latest row's permit_files). */
   permitFiles: PermitFileEnv[];
-  /** One entry per frontend: drives CORS origins and the token-hash SSM parameter the authorizer reads. */
+  /**
+   * One entry per API client: each gets the token-hash SSM parameter the authorizer reads; each browser client
+   * also gets a CORS origin.
+   */
   clients: Array<ClientEntry & { tokenSha256: string }>;
   /** SSM parameter with the Amplify app ID for clients given as `amplifyBranch` (read at deploy time). */
   amplifyAppIdParameter?: string;
@@ -179,7 +182,7 @@ export class DataApiStack extends cdk.Stack {
       apiName: "oracle-la-data-api",
       createDefaultStage: false,
       corsPreflight: {
-        allowOrigins: props.clients.map((c) => clientOrigin(c, hostAppId)),
+        allowOrigins: corsOrigins(props.clients, hostAppId),
         allowHeaders: ["authorization", "content-type"],
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,

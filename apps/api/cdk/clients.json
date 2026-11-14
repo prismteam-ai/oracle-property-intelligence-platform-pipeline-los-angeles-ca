@@ -1,5 +1,5 @@
 {
-  "_comment": "API clients (not secret). Drives the HTTP API CORS allowed origins and the per-client token-hash SSM parameters. A client's origin is a literal `origin` or `amplifyBranch`: that branch of the Amplify app whose ID is in the SSM parameter `amplifyAppIdParameter` (published by the CRM's RoofingCrmWeb, read at deploy time), so no app ID is kept here. Each client's token SHA-256 is read from the gitignored .secrets/api-clients.json at synth time. Adding a client is a change to this list plus its hash.",
+  "_comment": "API clients (not secret). Drives the HTTP API CORS allowed origins and the per-client token-hash SSM parameters. A browser client's origin is a literal `origin` or `amplifyBranch`: that branch of the Amplify app whose ID is in the SSM parameter `amplifyAppIdParameter` (published by the CRM's RoofingCrmWeb, read at deploy time), so no app ID is kept here. A client that never runs in a browser sets `browser: false` and gets no CORS origin: `mcp` is the local MCP server, which calls the data routes with its own token (the CRM leads API accepts only `crm`). Each client's token SHA-256 is read from the gitignored .secrets/api-clients.json at synth time. Adding a client is a change to this list plus its hash.",
   "amplifyAppIdParameter": "/roofing-crm/web/app-id",
   "clients": [
     {
@@ -9,6 +9,10 @@
     {
       "name": "explorer",
       "amplifyBranch": "explorer"
+    },
+    {
+      "name": "mcp",
+      "browser": false
     }
   ]
 }
