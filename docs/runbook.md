@@ -164,6 +164,20 @@ put run_history.jsonl runs/run_history.jsonl
     Tests run in order and stop at the first failure; `PW_SERIAL=0` runs them independently. Traces and
     screenshots are kept for failed tests.
 
+- The agent eval runs the agent against a real model on the ten prompts in `apps/agent-mcp/eval/prompts.json`
+  and checks every answer. It calls a paid API, so it is not part of `pnpm test`: run it by hand, with a spend
+  limit. How to run it is in [apps/agent-mcp/README.md](../apps/agent-mcp/README.md) ("Eval"): the command and
+  its options, `--key-file` (required with `--provider anthropic`: the path of the key file, which must have mode
+  `0600`; there is no default path, and the key is never an argument or an environment variable), `--repo` (the
+  checkout that has the run's `data/` files), `--out` (outside any checkout), `--max-usd`, the outputs and the
+  exit codes. The demo model is Sonnet 5.5 (`--model sonnet-5.5`) with effort low (`AGENT_EFFORT`, default `low`)
+  and no thinking parameter:
+
+  ```
+  node apps/agent-mcp/scripts/eval-demo.ts --provider anthropic --model sonnet-5.5 --key-file <key-file> \
+    --repo <checkout> --out <folder outside any checkout> --runs 3 --max-usd 5
+  ```
+
 ## 7. Teardown (reverse order, across both repositories)
 
 | #   | Stack               | Repo     | Why this order                                                                                                                                                                                                                                                                                                     |
