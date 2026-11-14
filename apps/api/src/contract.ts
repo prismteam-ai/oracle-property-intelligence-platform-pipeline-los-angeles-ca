@@ -3,11 +3,6 @@
  * AppRouter type that clients compile against does not drag server dependencies along.
  */
 export const API_VERSION = "1";
-/*
- * Fields added with the rebuild run (ownership, land_base_year, long_open on match, the contractor identity,
- * SourceRow.coverage) are optional in these types only: the API always sends them (null where there is none).
- * Optional so that clients and test fakes written for the earlier shapes keep compiling until they adopt them.
- */
 /** Most map points returned by parcels.points before it truncates. */
 export const MAX_POINTS = 25_000;
 /**
@@ -131,8 +126,8 @@ export interface RunRelation {
 }
 /** run: v_run (the run manifest's fields, with RunRelation's); history: v_run_history, one row per run. */
 export interface RunSummary {
-  run: Record<string, unknown>;
-  history: Array<Record<string, unknown>>;
+  run: Record<string, unknown> & RunRelation;
+  history: Array<Record<string, unknown> & RunRelation>;
 }
 
 /** A source's window in the data: the first and last value of one field (dates YYYY-MM-DD). */
@@ -163,7 +158,7 @@ export interface SourceRow {
   attribution: string | null;
   access: string | null;
   /** The contractor view's permit_issue_date window; null for the roll and the permit datasets. */
-  coverage?: SourceCoverage | null;
+  coverage: SourceCoverage | null;
 }
 export interface SourcePageRow {
   source_kind: SourceKind;
@@ -225,10 +220,10 @@ export interface ContractorRecordRow extends RecordProvenance {
   license_class: string | null;
   license_class_note: string | null;
   is_owner_builder: boolean | null;
-  contractor_identity_key?: ContractorIdentity["contractor_identity_key"];
-  canonical_business_name?: ContractorIdentity["canonical_business_name"];
-  name_variant_count?: ContractorIdentity["name_variant_count"];
-  identity_permit_count?: ContractorIdentity["identity_permit_count"];
+  contractor_identity_key: ContractorIdentity["contractor_identity_key"];
+  canonical_business_name: ContractorIdentity["canonical_business_name"];
+  name_variant_count: ContractorIdentity["name_variant_count"];
+  identity_permit_count: ContractorIdentity["identity_permit_count"];
 }
 export type RecordRow = ParcelRecordRow | PermitRecordRow | ContractorRecordRow;
 export interface Records {
@@ -246,13 +241,13 @@ export interface Records {
  */
 export interface ContractorIdentity {
   /** The row's license number, trimmed; null without one. */
-  contractor_identity_key?: string | null;
+  contractor_identity_key: string | null;
   /** The license's latest non-null business name; null when no row of the license has a name (never guessed). */
-  canonical_business_name?: string | null;
+  canonical_business_name: string | null;
   /** How many distinct names the license carries (counted, never listed); 0 when none. */
-  name_variant_count?: number | null;
+  name_variant_count: number | null;
   /** How many distinct permits the license is on. */
-  identity_permit_count?: number | null;
+  identity_permit_count: number | null;
 }
 
 export interface SearchItem {
@@ -272,7 +267,7 @@ export interface SearchItem {
   /** Whether the parcel is in the City of Los Angeles, the only jurisdiction with permit data. */
   permit_data_available: boolean;
   /** The roll's land base year (a fiscal-year label); null where the roll has 0 or an out-of-range year. */
-  land_base_year?: number | null;
+  land_base_year: number | null;
   distance_miles: number;
   latitude: number;
   longitude: number;
@@ -281,7 +276,7 @@ export interface SearchResult {
   count: number;
   rule: RoofAgeRuleOut;
   /** The ownership filter applied; null: none. */
-  ownership?: OwnershipRuleOut | null;
+  ownership: OwnershipRuleOut | null;
   items: SearchItem[];
   next_offset: number | null;
 }
@@ -303,7 +298,7 @@ export interface PointsResult {
   /** The open-duration window long_open_permit uses, in days. */
   long_open: LongOpenWindow;
   /** The ownership filter applied; null: none. */
-  ownership?: OwnershipRuleOut | null;
+  ownership: OwnershipRuleOut | null;
   truncated: boolean;
   max_points: number;
 }
@@ -321,9 +316,9 @@ export interface LongOpenWindow {
 export interface MatchResult {
   parcel_ids: string[];
   /** The long-open window applied; null when long_open_permit was off. */
-  long_open?: LongOpenWindow | null;
+  long_open: LongOpenWindow | null;
   /** The ownership filter applied; null: none. */
-  ownership?: OwnershipRuleOut | null;
+  ownership: OwnershipRuleOut | null;
 }
 
 /** Permit status classes (closed covers finaled, expired and closed permits). */

@@ -396,12 +396,18 @@ export function fakeQueries(): {
             row_counts: { parquet: 3, note: "x" },
             limitations: ["fixture only"],
             secret_field: "never",
+            run_kind: null,
+            rebuild_of: null,
+            source_changes: null,
           },
           history: [
             {
               run_id: "run-1",
               finished_at: "2026-11-12T02:00:00Z",
               row_counts: { parquet: 3 },
+              run_kind: null,
+              rebuild_of: null,
+              source_changes: null,
             },
           ],
         };

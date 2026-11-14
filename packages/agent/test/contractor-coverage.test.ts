@@ -62,7 +62,8 @@ describe("contractorWindow", () => {
       contractorWindow(only(await contractorRow({ coverage: null }))),
     ).toBeNull();
     const absent = await contractorRow({});
-    delete absent.coverage;
+    // An API that predates the field: the key is absent, not null.
+    delete (absent as Partial<SourceRow>).coverage;
     expect(contractorWindow(only(absent))).toBeNull();
     expect(
       contractorWindow(

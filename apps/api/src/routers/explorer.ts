@@ -31,7 +31,11 @@ export const explorerRouter = router({
     const db = await ctx.db();
     const [run] = await db.rows("select * from oracle.v_run");
     const history = await db.rows("select * from oracle.v_run_history");
-    return { run: run ?? {}, history };
+    // v_run and v_run_history always select run_kind, rebuild_of and source_changes (null where not recorded).
+    return {
+      run: (run ?? {}) as RunSummary["run"],
+      history: history as RunSummary["history"],
+    };
   }),
   sources: procedure.query(async ({ ctx }): Promise<Sources> => {
     const db = await ctx.db();
