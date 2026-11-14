@@ -132,7 +132,9 @@ export const explorerRouter = router({
         rows = (
           await db.rows(
             `select c.permit_number, c.contractor_row, c.contractors_business_name, c.license_identifier,
-               c.source_license_type, c.license_class, c.license_class_note, c.is_owner_builder, ${PROVENANCE}
+               c.source_license_type, c.license_class, c.license_class_note, c.is_owner_builder,
+               c.contractor_identity_key, c.canonical_business_name, c.name_variant_count, c.identity_permit_count,
+               ${PROVENANCE}
              from oracle.v_permit_provenance pr
              join oracle.v_permit_contractor c using (permit_number, contractor_row)
              where pr.source_kind = 'contractor' and ${where}

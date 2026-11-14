@@ -4,13 +4,18 @@ import { createApiClient } from "../../../packages/api-client/src/index.ts";
 import { MAX_MATCH_IDS } from "../src/contract.ts";
 
 // The longest values the API accepts: 17 significant digits for the doubles, a 10-character API ID in the
-// execute-api host (eu-north-1), a 3-digit threshold and 10-digit parcel IDs.
+// execute-api host (eu-north-1), a 3-digit threshold, the longest ownership basis ("recording" and "base_year"
+// have 9 characters), the long-open toggle with a 5-digit window and 10-digit parcel IDs.
 const LONGEST = {
   lat: 34.123456789012344,
   lon: -118.12345678901235,
   radius_miles: 9.999999999999998,
   threshold_years: 120,
-};
+  ownership_basis: "base_year",
+  long_open_permit: true,
+  min_open_days: 36_525,
+  max_open_days: 36_525,
+} as const;
 const API_URL = "https://abcdefghij.execute-api.eu-north-1.amazonaws.com";
 /** HTTP API quota: "Total combined size of request line and header values: 10240 bytes" (AWS docs). */
 const HTTP_API_REQUEST_LINE_AND_HEADERS = 10_240;
@@ -23,7 +28,13 @@ async function matchUrl(n: number): Promise<string> {
   vi.stubGlobal("fetch", async (url: string | URL) => {
     urls.push(String(url));
     return new Response(
-      JSON.stringify([{ result: { data: { parcel_ids: [] } } }]),
+      JSON.stringify([
+        {
+          result: {
+            data: { parcel_ids: [], long_open: null, ownership: null },
+          },
+        },
+      ]),
       { headers: { "content-type": "application/json" } },
     );
   });
@@ -39,8 +50,8 @@ async function matchUrl(n: number): Promise<string> {
 test("a parcels.match GET with MAX_MATCH_IDS IDs and the longest filter fits the client and the HTTP API", async () => {
   const url = new URL(await matchUrl(MAX_MATCH_IDS));
   expect(url.pathname).toBe("/trpc/parcels.match");
-  // The client refuses a single call longer than its maxURLLength (2,000); 80 IDs leave about 200 characters
-  // for a longer API host.
+  // The client refuses a single call longer than its maxURLLength (2,000); 72 IDs with the longest input
+  // (1,773 characters) leave about 200 characters for a longer API host. 80 IDs would need 1,925.
   expect(url.href.length).toBeLessThanOrEqual(1800);
   // Request line "GET <path and query> HTTP/1.1" plus a generous 4 KB of headers stays under the quota.
   const requestLine = `GET ${url.pathname}${url.search} HTTP/1.1`;

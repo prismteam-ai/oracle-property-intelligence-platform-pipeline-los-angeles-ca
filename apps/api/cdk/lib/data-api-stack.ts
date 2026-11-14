@@ -92,7 +92,8 @@ export class DataApiStack extends cdk.Stack {
       ...common,
       entry: `${apiDir}src/handler.ts`,
       architecture: lambda.Architecture.X86_64, // matches the linux-x64 glibc DuckDB binding built on this x86_64 host
-      memorySize: 1024,
+      // 2,048 MB: Lambda allocates CPU in proportion to memory, which shortens the cold-start copy and load.
+      memorySize: 2048,
       timeout: cdk.Duration.seconds(15),
       reservedConcurrentExecutions: 5,
       layers: [duckdbLayer],

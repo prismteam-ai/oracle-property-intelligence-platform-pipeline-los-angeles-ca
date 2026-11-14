@@ -2,12 +2,17 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, test } from "vitest";
+import { PlaceIndex as AgentPlaceIndex } from "../../../packages/agent/src/place-index.ts";
 import {
   DEFAULT_MIN_OPEN_DAYS,
   MAX_MATCH_IDS,
+  MAX_PLACE_NAME_LENGTH,
   MAX_POINTS,
   MAX_RESPONSE_BYTES,
+  OWNERSHIP_BASIS,
+  OWNERSHIP_PROXY_NOTE,
   ROOF_AGE_BASIS,
+  type OwnershipBasis,
 } from "../src/contract.ts";
 import { openDb } from "../src/db.ts";
 import { PAGE_FILE } from "../src/routers/explorer.ts";
@@ -22,11 +27,16 @@ import {
   writeFixture,
   writeNearestFixture,
   writePermitFixture,
+  writePlacesFixture,
 } from "./fixture.ts";
 
-/** A caller over a fixture run; metrics are collected into `metrics`. */
-async function callerFor(f: FixtureRun, metrics: Array<[string, number]> = []) {
-  const db = await openDb({
+/** A caller over a fixture run; metrics are collected into `metrics`; every SQL statement run is in `queries`. */
+async function callerFor(
+  f: FixtureRun,
+  metrics: Array<[string, number]> = [],
+  queries: string[] = [],
+) {
+  const opened = await openDb({
     runId: FIXTURE.runId,
     parquetSha256: f.parquetSha256,
     parquetFile: FIXTURE.parquetFile,
@@ -34,6 +44,10 @@ async function callerFor(f: FixtureRun, metrics: Array<[string, number]> = []) {
     localDir: f.dir,
     tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
   });
+  const db: typeof opened = {
+    ...opened,
+    rows: (sql, params) => (queries.push(sql), opened.rows(sql, params)),
+  };
   const ctx: Ctx = {
     db: async () => db,
     logger: { info() {}, warn() {} },
@@ -41,6 +55,15 @@ async function callerFor(f: FixtureRun, metrics: Array<[string, number]> = []) {
   };
   return appRouter.createCaller(ctx);
 }
+
+/** The ownership rule a result states for a basis: the contract's texts, verbatim. */
+const ownershipOut = (basis: OwnershipBasis) => ({
+  basis,
+  text: OWNERSHIP_BASIS[basis].text,
+  weakness: OWNERSHIP_BASIS[basis].weakness,
+  proxy_note: OWNERSHIP_PROXY_NOTE,
+});
+const BASES = ["recording", "base_year", "both"] as const;
 
 /** Always runs: the routers over the synthetic fixture run (see fixture.ts for the rows). */
 describe("routers on the synthetic fixture", () => {
@@ -180,7 +203,11 @@ describe("routers on the synthetic fixture", () => {
         threshold_years: 15,
         parcel_ids: ids,
       }),
-    ).toEqual({ parcel_ids: ["0000000001", "0000000002", "0000000007"] });
+    ).toEqual({
+      parcel_ids: ["0000000001", "0000000002", "0000000007"],
+      long_open: null,
+      ownership: null,
+    });
     expect(
       await caller.parcels.match({
         ...P,
@@ -188,7 +215,7 @@ describe("routers on the synthetic fixture", () => {
         threshold_years: 80,
         parcel_ids: ids,
       }),
-    ).toEqual({ parcel_ids: ["0000000007"] });
+    ).toEqual({ parcel_ids: ["0000000007"], long_open: null, ownership: null });
     // The same set as search, whatever IDs are asked.
     const all = Array.from({ length: 7 }, (_, i) =>
       String(i + 1).padStart(10, "0"),
@@ -240,6 +267,69 @@ describe("routers on the synthetic fixture", () => {
         })
       ).parcel_ids,
     ).toEqual(["0000000001", "0000000002", "0000000007"]); // 1 mi, 15 years
+  });
+  test("ownership: each basis filters search, points and match to the same set; both is the intersection; a null proxy never passes", async () => {
+    const f = { ...P, radius_miles: 10, threshold_years: 15 };
+    const all = Array.from({ length: 7 }, (_, i) =>
+      String(i + 1).padStart(10, "0"),
+    );
+    const sets: Record<string, string[]> = {};
+    for (const basis of [undefined, ...BASES]) {
+      const i = basis === undefined ? f : { ...f, ownership_basis: basis };
+      const s = await caller.parcels.search(i);
+      const p = await caller.parcels.points(i);
+      const m = await caller.parcels.match({ ...i, parcel_ids: all });
+      const ids = s.items.map((x) => x.parcel_id);
+      expect(p.id, String(basis)).toEqual(ids);
+      expect(p.count).toBe(s.count);
+      expect(m.parcel_ids).toEqual([...ids].sort());
+      const rule = basis === undefined ? null : ownershipOut(basis);
+      expect(s.ownership).toEqual(rule);
+      expect(p.ownership).toEqual(rule);
+      expect(m.ownership).toEqual(rule);
+      sets[String(basis)] = ids;
+    }
+    // Nearest first: 1 (at the point), 7 (0.2 mi), 2 (0.5 mi), 6 (~9 mi). 2 was reassessed in 2020, 6 has a
+    // recent recorded document, 7 has neither proxy.
+    expect(sets).toEqual({
+      undefined: ["0000000001", "0000000007", "0000000002", "0000000006"],
+      recording: ["0000000001", "0000000002"],
+      base_year: ["0000000001", "0000000006"],
+      both: ["0000000001"],
+    });
+    expect(sets.both).toEqual(
+      sets.recording!.filter((i) => sets.base_year!.includes(i)),
+    );
+    for (const bad of ["owner", "", "BOTH"])
+      await expect(
+        caller.parcels.search({ ...f, ownership_basis: bad as "both" }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+  test("ownership: the basis texts, each weakness in plain words and the proxy note", () => {
+    expect(OWNERSHIP_BASIS.recording.weakness).toMatch(/refinance/);
+    expect(OWNERSHIP_BASIS.recording.weakness).toMatch(/lien/);
+    expect(OWNERSHIP_BASIS.base_year.weakness).toMatch(/spouses/);
+    expect(OWNERSHIP_BASIS.base_year.weakness).toMatch(/parent to child/);
+    expect(OWNERSHIP_BASIS.both.weakness).toMatch(/^The strictest/);
+    expect(OWNERSHIP_PROXY_NOTE).toMatch(
+      /^All three bases are proxies from the County assessor roll, not sales records/,
+    );
+    for (const b of BASES) expect(OWNERSHIP_BASIS[b].text).toMatch(/10 years/);
+  });
+  test("search items carry the land base year (null where the roll has none)", async () => {
+    const s = await caller.parcels.search({
+      ...P,
+      radius_miles: 10,
+      threshold_years: 15,
+    });
+    expect(
+      Object.fromEntries(s.items.map((i) => [i.parcel_id, i.land_base_year])),
+    ).toEqual({
+      "0000000001": 2000,
+      "0000000002": 2020,
+      "0000000006": 1990,
+      "0000000007": null,
+    });
   });
   test("detail, unknown parcel 404, bad input 400", async () => {
     const d = await caller.parcels.detail({ parcel_id: "0000000002" });
@@ -354,6 +444,10 @@ const CONTRACTOR_KEYS = [
   "license_expiration_date",
   "city_name",
   "state_code",
+  "contractor_identity_key",
+  "canonical_business_name",
+  "name_variant_count",
+  "identity_permit_count",
 ];
 const sorted = (a: string[]) => [...a].sort();
 
@@ -585,11 +679,20 @@ describe("permit routes on the synthetic permit run", () => {
         license_expiration_date: "2027-01-31",
         city_name: "VAN NUYS",
         state_code: "CA",
+        contractor_identity_key: "100001",
+        canonical_business_name: "FIXTURE ROOFING INC",
+        name_variant_count: 1,
+        identity_permit_count: 1,
       },
+      // No license number: no identity at all, never a guessed name.
       expect.objectContaining({
         is_owner_builder: true,
         license_class_note: "owner-builder",
         license_identifier: null,
+        contractor_identity_key: null,
+        canonical_business_name: null,
+        name_variant_count: null,
+        identity_permit_count: null,
       }),
     ]);
     for (const c of p1!.contractors)
@@ -930,6 +1033,234 @@ describe("permit routes on the synthetic permit run", () => {
       permit_data: { parcels_with_permit_data: 8 },
     });
   });
+  test("match with long_open_permit: the IDs with a long-open roofing permit under the window, with and without the search filter, the same rule as the points highlight", async () => {
+    const f = { ...P, radius_miles: 5, threshold_years: 15 };
+    const ids = [
+      "0000000011", // A: P2 long-open, but roof year 2020 (not a 15-year candidate)
+      "0000000012", // B: application-stage and not-roofing permits only
+      "0000000021",
+      "0000000022",
+      "0000000023", // the building-level P3 marks every unit
+      "0000000031", // D: outside the City, one closed permit
+      "0000000041", // E: coating-only P9 counts
+      "0000000042", // H: no permit
+      "0000000051", // F: P6 and P7
+      "0000000099", // unknown
+    ];
+    const window = {
+      min_open_days: DEFAULT_MIN_OPEN_DAYS,
+      max_open_days: null,
+    };
+    const on = keep(
+      await caller.parcels.match({
+        ...f,
+        long_open_permit: true,
+        parcel_ids: ids,
+      }),
+    );
+    expect(on).toEqual({
+      parcel_ids: [
+        "0000000021",
+        "0000000022",
+        "0000000023",
+        "0000000041",
+        "0000000051",
+      ],
+      long_open: window,
+      ownership: null,
+    });
+    // Parity with the map: the points marked long_open_permit under the same window.
+    const pts = await caller.parcels.points(f);
+    expect(on.parcel_ids).toEqual(
+      pts.id.filter((_, i) => pts.long_open_permit[i] === 1).sort(),
+    );
+    // The toggle off: the search filter alone, as before.
+    const off = await caller.parcels.match({ ...f, parcel_ids: ids });
+    expect(off.long_open).toBeNull();
+    expect(off.parcel_ids).toEqual([...pts.id].sort());
+    // Without the search filter ("leads in this search" off): every given lead with a long-open roofing
+    // permit, wherever it is and whatever its roof age (A is back).
+    const leads = keep(
+      await caller.parcels.match({ long_open_permit: true, parcel_ids: ids }),
+    );
+    expect(leads).toEqual({
+      parcel_ids: [
+        "0000000011",
+        "0000000021",
+        "0000000022",
+        "0000000023",
+        "0000000041",
+        "0000000051",
+      ],
+      long_open: window,
+      ownership: null,
+    });
+    // A window: only P3 (2,500 days) is inside 2,100-3,000; with the filter, again the points' marks.
+    const narrow = { min_open_days: 2100, max_open_days: 3000 };
+    const m = await caller.parcels.match({
+      ...f,
+      long_open_permit: true,
+      ...narrow,
+      parcel_ids: ids,
+    });
+    const np = await caller.parcels.points({ ...f, ...narrow });
+    expect(m.parcel_ids).toEqual(
+      np.id.filter((_, i) => np.long_open_permit[i] === 1).sort(),
+    );
+    expect(m).toMatchObject({
+      parcel_ids: ["0000000021", "0000000022", "0000000023"],
+      long_open: narrow,
+    });
+    expect(
+      (
+        await caller.parcels.match({
+          long_open_permit: true,
+          min_open_days: 3000,
+          parcel_ids: ids,
+        })
+      ).parcel_ids,
+    ).toEqual(["0000000011", "0000000051"]); // P2 3,237 and P7 4,000 days
+    // With the ownership basis too: the same set as search with that basis, then the long-open marks.
+    const own = await caller.parcels.match({
+      ...f,
+      ownership_basis: "both",
+      long_open_permit: true,
+      parcel_ids: ids,
+    });
+    expect(own.ownership).toEqual(ownershipOut("both"));
+    expect(own.parcel_ids).toEqual(on.parcel_ids); // every fixture parcel passes both
+  });
+  test("match inputs: the window needs the toggle, the toggle makes the filter optional, filter fields need lat and lon, max not below min", async () => {
+    const ids = ["0000000021"];
+    const ok = await caller.parcels.match({ ...P, parcel_ids: ids });
+    expect(ok.parcel_ids).toEqual(["0000000021"]);
+    for (const bad of [
+      { parcel_ids: ids }, // no filter and no toggle: refused as before
+      { long_open_permit: false, parcel_ids: ids },
+      { ...P, min_open_days: 2000, parcel_ids: ids }, // a window without the toggle
+      { ...P, max_open_days: 3000, parcel_ids: ids },
+      { lat: P.lat, long_open_permit: true, parcel_ids: ids }, // lat without lon
+      { lon: P.lon, parcel_ids: ids },
+      { long_open_permit: true, radius_miles: 5, parcel_ids: ids }, // filter fields without lat and lon
+      { long_open_permit: true, threshold_years: 15, parcel_ids: ids },
+      { long_open_permit: true, ownership_basis: "both", parcel_ids: ids },
+      {
+        ...P,
+        long_open_permit: true,
+        min_open_days: 3000,
+        max_open_days: 2000,
+        parcel_ids: ids,
+      },
+      { long_open_permit: true, max_open_days: 1000, parcel_ids: ids }, // below the default minimum
+      { long_open_permit: true, min_open_days: -1, parcel_ids: ids },
+      { long_open_permit: true, min_open_days: 36_526, parcel_ids: ids },
+      { long_open_permit: "yes", parcel_ids: ids },
+      { long_open_permit: true, parcel_ids: [] },
+      {
+        long_open_permit: true,
+        parcel_ids: Array.from({ length: MAX_MATCH_IDS + 1 }, (_, i) =>
+          String(i).padStart(10, "0"),
+        ),
+      },
+    ])
+      await expect(
+        caller.parcels.match(bad as Parameters<typeof caller.parcels.match>[0]),
+        JSON.stringify(bad),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(
+      (
+        await caller.parcels.match({
+          long_open_permit: true,
+          parcel_ids: Array.from({ length: MAX_MATCH_IDS }, (_, i) =>
+            String(i + 1).padStart(10, "0"),
+          ),
+        })
+      ).parcel_ids,
+    ).toEqual([
+      "0000000011",
+      "0000000021",
+      "0000000022",
+      "0000000023",
+      "0000000041",
+      "0000000051",
+    ]); // MAX_MATCH_IDS IDs (0000000001-0000000072): the fixture's parcels with a long-open roofing permit
+  });
+  test("contractor identity: key, canonical name and counts in records and forParcel; a license without a name has no canonical name; no name variant is ever listed", async () => {
+    const c = keep(
+      await caller.explorer.records({
+        source_name: PERMIT_FIXTURE.contractorSource,
+        limit: 10,
+      }),
+    );
+    const byKey = Object.fromEntries(c.items.map((i) => [i.record_key, i]));
+    expect(byKey["12016-10000-00099:1"]).toMatchObject({
+      contractors_business_name: null,
+      license_identifier: "100003",
+      contractor_identity_key: "100003",
+      canonical_business_name: null,
+      name_variant_count: 0,
+      identity_permit_count: 1,
+    });
+    expect(byKey[`${N.P1}:2`]).toMatchObject({
+      is_owner_builder: true,
+      contractor_identity_key: null,
+      canonical_business_name: null,
+      name_variant_count: null,
+      identity_permit_count: null,
+    });
+    expect(byKey[`${N.P3}:1`]).toMatchObject({
+      contractors_business_name: "FIXTURE BUILDERS",
+      contractor_identity_key: "100002",
+      canonical_business_name: "FIXTURE BUILDERS",
+      name_variant_count: 2,
+      identity_permit_count: 2,
+    });
+    const units = keep(
+      await caller.permits.forParcel({ parcel_id: "0000000021" }),
+    );
+    expect(units.permits[0]!.contractors).toEqual([
+      expect.objectContaining({
+        contractor_identity_key: "100002",
+        canonical_business_name: "FIXTURE BUILDERS",
+        name_variant_count: 2,
+        identity_permit_count: 2,
+      }),
+    ]);
+    // Variants are counted, never listed: no field but the count names them.
+    const keys = new Set<string>();
+    const walk = (x: unknown): void => {
+      if (Array.isArray(x)) x.forEach(walk);
+      else if (x && typeof x === "object")
+        for (const [k, v] of Object.entries(x)) {
+          keys.add(k);
+          walk(v);
+        }
+    };
+    walk([c, units]);
+    expect([...keys].filter((k) => /variant|alias|names/i.test(k))).toEqual([
+      "name_variant_count",
+    ]);
+  });
+  test("sources: the contractor source's coverage window, null for the others; runSummary run kind fields null for a manifest without them", async () => {
+    const s = keep(await caller.explorer.sources());
+    expect(
+      Object.fromEntries(s.sources.map((x) => [x.source_kind, x.coverage])),
+    ).toEqual({ contractor: null, permit: null, parcel: null });
+    const r = keep(await caller.explorer.runSummary());
+    expect(r.run).toMatchObject({
+      run_kind: null,
+      rebuild_of: null,
+      source_changes: null,
+    });
+    expect(r.history).toEqual([
+      expect.objectContaining({
+        run_id: FIXTURE.runId,
+        run_kind: null,
+        rebuild_of: null,
+        source_changes: null,
+      }),
+    ]);
+  });
   test("no work description anywhere: not in any view, not in any response", async () => {
     const db = await openDb({
       runId: FIXTURE.runId,
@@ -958,5 +1289,135 @@ describe("permit routes on the synthetic permit run", () => {
     const text = JSON.stringify(seen);
     expect(text).not.toContain(PERMIT_WORK_DESC);
     expect(text).not.toMatch(/work_?desc/i);
+  });
+});
+
+/** Always runs: places.resolve over the places run (fixture.ts PLACES), the agent's place-index cases. */
+describe("places.resolve on the synthetic places run", () => {
+  let caller: ReturnType<typeof appRouter.createCaller>;
+  let run: FixtureRun;
+  const queries: string[] = [];
+  const PLACE_VALUES = /^select 'jurisdiction' as basis/;
+  beforeAll(async () => {
+    run = await writePlacesFixture();
+    caller = await callerFor(run, [], queries);
+  });
+  const resolve = (name: string) => caller.places.resolve({ name });
+
+  test("the index is built on the first places.resolve call, not before, and once per Db; centers once per name", async () => {
+    await caller.meta.info();
+    await caller.parcels.search({ ...FIXTURE.point });
+    expect(queries.filter((q) => PLACE_VALUES.test(q))).toHaveLength(0);
+    const centers = () => queries.filter((q) => /median\(latitude\)/.test(q));
+    await resolve("Van Nuys");
+    expect(queries.filter((q) => PLACE_VALUES.test(q))).toHaveLength(1);
+    expect(centers()).toHaveLength(1);
+    await resolve("VAN NUYS, CA");
+    await resolve("Burbank");
+    expect(queries.filter((q) => PLACE_VALUES.test(q))).toHaveLength(1);
+    expect(centers()).toHaveLength(3); // Van Nuys once, Burbank's two bases
+  });
+  test("resolved: Van Nuys pools the three stored spellings; median of the parcels with coordinates, 5 decimals", async () => {
+    expect(await resolve("Van Nuys")).toEqual({
+      status: "resolved",
+      name: "Van Nuys",
+      basis: "postal_city",
+      center: { lat: 34.187, lon: -118.449 },
+      parcel_count: 5,
+      raw_values: ["VAN NUYS", "VAN NUYS CALIF", "VAN NUYS,"],
+      spread_miles: expect.any(Number),
+      center_reliable: true,
+      also_matched: null,
+      note: "Resolved 'Van Nuys' (postal city) to the median center 34.18700, -118.44900 of 5 parcels. Stored postal city names: VAN NUYS | VAN NUYS CALIF | VAN NUYS,.",
+    });
+  });
+  test("a jurisdiction and a postal city within 2 mi: the jurisdiction center, the other stated", async () => {
+    const r = await resolve("Burbank");
+    expect(r).toMatchObject({
+      status: "resolved",
+      basis: "jurisdiction",
+      also_matched: { basis: "postal_city" },
+    });
+    expect(r.note).toMatch(/also matches a postal city/);
+  });
+  test("ambiguous: a jurisdiction and a postal city more than 2 mi apart; no center", async () => {
+    const r = await resolve("Los Angeles");
+    expect(r.status).toBe("ambiguous");
+    if (r.status !== "ambiguous") return;
+    expect(r.candidates.map((c) => c.basis)).toEqual([
+      "jurisdiction",
+      "postal_city",
+    ]);
+    expect(r).not.toHaveProperty("center");
+    expect(r.note).toMatch(
+      /is ambiguous: .* mi apart; no center was chosen\.$/,
+    );
+  });
+  test("spellings with diacritics and joined words; UNINCORPORATED and a spread-out place are not reliable centers", async () => {
+    expect(await resolve("La Cañada Flintridge")).toMatchObject({
+      status: "resolved",
+      basis: "jurisdiction",
+      raw_values: ["LA CANADA-FLINTRIDGE"],
+    });
+    expect(await resolve("Westlake Village")).toMatchObject({
+      status: "resolved",
+      raw_values: ["WEST LAKE VILLAGE"],
+    });
+    expect(await resolve("Unincorporated")).toMatchObject({
+      status: "resolved",
+      center_reliable: false,
+    });
+    const s = await resolve("Spreadville");
+    expect(s).toMatchObject({ status: "resolved", center_reliable: false });
+    if (s.status === "resolved") expect(s.spread_miles).toBeGreaterThan(10);
+  });
+  test("unknown: no match and no suggestion", async () => {
+    expect(await resolve("Van Nuyz")).toEqual({
+      status: "unknown",
+      name: "Van Nuyz",
+      note: '"Van Nuyz" matches no jurisdiction or postal city in this run; no center was chosen.',
+    });
+    expect((await resolve("!!!")).status).toBe("unknown");
+  });
+  test("input bounds: 1 to MAX_PLACE_NAME_LENGTH characters", async () => {
+    expect(MAX_PLACE_NAME_LENGTH).toBe(100);
+    expect((await resolve("x".repeat(MAX_PLACE_NAME_LENGTH))).status).toBe(
+      "unknown",
+    );
+    for (const bad of [
+      { name: "" },
+      { name: "x".repeat(MAX_PLACE_NAME_LENGTH + 1) },
+      {},
+      { name: 7 },
+    ])
+      await expect(
+        caller.places.resolve(bad as { name: string }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+  test("parity: the route answers exactly as the agent's own PlaceIndex over the same Db", async () => {
+    const db = await openDb({
+      runId: FIXTURE.runId,
+      parquetSha256: run.parquetSha256,
+      parquetFile: FIXTURE.parquetFile,
+      permitFiles: run.permitFiles,
+      localDir: run.dir,
+      tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
+    });
+    const agent = new AgentPlaceIndex(db);
+    for (const name of [
+      "Van Nuys",
+      "van nuys california",
+      "Burbank",
+      "Los Angeles",
+      "North Hollywood",
+      "La Cañada Flintridge",
+      "Westlake Village",
+      "Unincorporated",
+      "Acton",
+      "Spreadville",
+      "Springfield",
+      "!!!",
+    ])
+      expect(await resolve(name), name).toEqual(await agent.resolve({ name }));
   });
 });

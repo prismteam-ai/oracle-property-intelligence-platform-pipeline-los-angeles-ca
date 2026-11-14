@@ -15,6 +15,33 @@ export {
   type LongOpenRule,
   type RoofAgeRule,
 } from "./rule.ts";
+export {
+  AMBIGUITY_MILES,
+  BASIS_LABEL,
+  candidatesPhrase,
+  centerPhrase,
+  COORD_DECIMALS,
+  coordText,
+  haversineMiles,
+  PLACE_VALUES_SQL,
+  placeCenterSql,
+  PlaceIndex,
+  placeIndexFor,
+  placeKey,
+  resolutionNote,
+  resolvedPhrase,
+  roundCenter,
+  roundCoord,
+  sameCoord,
+  UNRELIABLE_SPREAD_MILES,
+  type AmbiguousPlace,
+  type PlaceBasis,
+  type PlaceCandidate,
+  type PlaceQueries,
+  type PlaceResolution,
+  type ResolvedPlace,
+  type RowsDb,
+} from "./place-index.ts";
 
 /** Views and macros the apps may query. Nothing else is part of the contract. */
 export const CONTRACT = {
@@ -35,5 +62,6 @@ export const CONTRACT = {
     "oracle.long_open_permits",
     "oracle.long_open_parcels",
     "oracle.haversine_miles",
+    "oracle.ownership_passes",
   ],
 } as const;

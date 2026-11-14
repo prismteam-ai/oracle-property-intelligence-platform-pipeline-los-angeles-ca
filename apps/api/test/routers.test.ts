@@ -6,6 +6,8 @@ import {
   MAX_MATCH_IDS,
   MAX_POINTS,
   MAX_RESPONSE_BYTES,
+  OWNERSHIP_BASIS,
+  OWNERSHIP_PROXY_NOTE,
 } from "../src/contract.ts";
 import { openDb, type Db } from "../src/db.ts";
 import { PAGE_FILE } from "../src/routers/explorer.ts";
@@ -294,7 +296,7 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       radius_miles: 10,
       threshold_years: 15,
     });
-    // The points are ordered by distance: the first 40 are within 1 mi, the last 40 about 2.5 mi away.
+    // The points are ordered by distance: the first MAX_MATCH_IDS / 2 are within 1 mi, the last about 2.5 mi away.
     const near = p.id.slice(0, MAX_MATCH_IDS / 2);
     const far = p.id.slice(-MAX_MATCH_IDS / 2);
     const m = await caller.parcels.match({
@@ -311,6 +313,175 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       parcel_ids: [...far, ...near],
     });
     expect(all.parcel_ids).toEqual([...far, ...near].sort());
+  });
+  test("explorer.runSummary: the rebuild run's kind (a rebuild of 2026-11-12T14-00-51-383Z, no source changes); the three earlier history rows have none", async () => {
+    const s = await caller.explorer.runSummary();
+    expect(s.run).toMatchObject({
+      run_id: RUN_ID,
+      run_kind: "rebuild",
+      rebuild_of: "2026-11-12T14-00-51-383Z",
+      source_changes: "none",
+    });
+    expect(
+      s.history.map((h) => [
+        h.run_id,
+        h.run_kind,
+        h.rebuild_of,
+        h.source_changes,
+      ]),
+    ).toEqual([
+      ["2026-11-11T16-17-38-928Z", null, null, null],
+      ["2026-11-12T01-44-04-047Z", null, null, null],
+      ["2026-11-12T14-00-51-383Z", null, null, null],
+      [RUN_ID, "rebuild", "2026-11-12T14-00-51-383Z", "none"],
+    ]);
+  });
+  test("explorer.sources: the contractor source's coverage window 2013-01-02 to 2023-05-19 (min and max of its permit_issue_date); null for the roll and the permits", async () => {
+    const s = await caller.explorer.sources();
+    expect(s.sources.map((x) => [x.source_kind, x.coverage])).toEqual([
+      ["parcel", null],
+      ["permit", null],
+      [
+        "contractor",
+        { field: "permit_issue_date", first: "2013-01-02", last: "2023-05-19" },
+      ],
+    ]);
+    const [w] = await db.rows(
+      "select min(permit_issue_date) first, max(permit_issue_date) last from oracle.v_permit_contractor",
+    );
+    expect(w).toEqual({ first: "2013-01-02", last: "2023-05-19" });
+  });
+  test("ownership at 1 / 5 / 10 mi (15 years): counts per basis, both = the intersection, equal to plain SQL; the basis stated", async () => {
+    const want = {
+      1: { recording: 1966, base_year: 2897, both: 1935 },
+      5: { recording: 51586, base_year: 78833, both: 50826 },
+      10: { recording: 138731, base_year: 212683, both: 136634 },
+    } as const;
+    for (const miles of [1, 5, 10] as const) {
+      const f = { ...VAN_NUYS, radius_miles: miles, threshold_years: 15 };
+      for (const basis of ["recording", "base_year", "both"] as const) {
+        const r = await caller.parcels.search({ ...f, ownership_basis: basis });
+        expect(r.count, `${miles} mi ${basis}`).toBe(want[miles][basis]);
+        expect(r.ownership).toEqual({
+          basis,
+          ...OWNERSHIP_BASIS[basis],
+          proxy_note: OWNERSHIP_PROXY_NOTE,
+        });
+      }
+      const [plain] = await db.rows(
+        `select count(*) filter (where owner_unchanged_10y_proxy)::integer recording,
+           count(*) filter (where ownership_base_year_10y_proxy)::integer base_year,
+           count(*) filter (where owner_unchanged_10y_proxy and ownership_base_year_10y_proxy)::integer "both"
+         from oracle.v_property
+         where latitude is not null and effective_roof_year < roll_year - 15
+           and oracle.haversine_miles($1, $2, latitude, longitude) <= $3`,
+        [VAN_NUYS.lat, VAN_NUYS.lon, miles],
+      );
+      expect(plain, `${miles} mi plain`).toEqual(want[miles]);
+    }
+    // At 1 mi (not truncated) points and match keep the search's set for a basis.
+    const f = { ...VAN_NUYS, radius_miles: 1, threshold_years: 15 };
+    const p = await caller.parcels.points({ ...f, ownership_basis: "both" });
+    expect(p.id).toHaveLength(1935);
+    const all = await caller.parcels.points(f);
+    const ids = all.id.slice(0, MAX_MATCH_IDS);
+    const m = await caller.parcels.match({
+      ...f,
+      ownership_basis: "both",
+      parcel_ids: ids,
+    });
+    expect(m.parcel_ids).toEqual(ids.filter((i) => p.id.includes(i)).sort());
+  });
+  test("parcels.match with long_open_permit over every parcel of the 1 mi search: 164, the points' long-open marks, with and without the filter", async () => {
+    const f = { ...VAN_NUYS, radius_miles: 1, threshold_years: 15 };
+    const p = await caller.parcels.points(f);
+    expect(p.truncated).toBe(false);
+    const marked = p.id.filter((_, i) => p.long_open_permit[i] === 1).sort();
+    expect(marked).toHaveLength(164);
+    const on: string[] = [];
+    const leads: string[] = [];
+    for (let i = 0; i < p.id.length; i += MAX_MATCH_IDS) {
+      const chunk = p.id.slice(i, i + MAX_MATCH_IDS);
+      const a = await caller.parcels.match({
+        ...f,
+        long_open_permit: true,
+        parcel_ids: chunk,
+      });
+      expect(a.long_open).toEqual({ min_open_days: 1826, max_open_days: null });
+      on.push(...a.parcel_ids);
+      leads.push(
+        ...(
+          await caller.parcels.match({
+            long_open_permit: true,
+            parcel_ids: chunk,
+          })
+        ).parcel_ids,
+      );
+    }
+    expect(on.sort()).toEqual(marked);
+    // These IDs all match the search, so the toggle without the filter gives the same 164.
+    expect(leads.sort()).toEqual(marked);
+  });
+  test("contractor identity served: 8,240 license numbers over 101,817 of 113,642 rows; 41 licenses without any name have no canonical name; rows without a license have no identity", async () => {
+    const [n] = await db.rows(
+      `select count(*)::integer rows_, count(contractor_identity_key)::integer keyed,
+         count(distinct contractor_identity_key)::integer keys,
+         count(distinct contractor_identity_key) filter (where canonical_business_name is null)::integer no_name,
+         count(*) filter (where contractor_identity_key is null and (canonical_business_name is not null
+           or name_variant_count is not null or identity_permit_count is not null))::integer unkeyed_with_identity
+       from oracle.v_permit_contractor`,
+    );
+    expect(n).toEqual({
+      rows_: CONTRACTOR_ROWS,
+      keyed: 101817,
+      keys: 8240,
+      no_name: 41,
+      unkeyed_with_identity: 0,
+    });
+    // One of the 41 through the records route: the key and counts, and no name.
+    const r = await caller.explorer.records({
+      source_name: CONTRACTOR_SOURCE,
+      after: "17016-10000-19350:0",
+      limit: 1,
+    });
+    expect(r.items[0]).toMatchObject({
+      record_key: "17016-10000-19350:1",
+      contractor_identity_key: "1022563",
+      canonical_business_name: null,
+      name_variant_count: 0,
+      identity_permit_count: 1,
+    });
+    const [top] = await db.rows(
+      "select parcel_id from oracle.v_permit_parcel group by 1 order by count(*) desc, parcel_id limit 1",
+    );
+    const fp = await caller.permits.forParcel({
+      parcel_id: String(top!.parcel_id),
+    });
+    const cs = fp.permits.flatMap((x) => x.contractors);
+    expect(cs.length).toBeGreaterThan(0);
+    for (const c of cs) {
+      expect(c.contractor_identity_key).toBe(c.license_identifier);
+      if (c.contractor_identity_key) {
+        expect(c.name_variant_count).toBeGreaterThanOrEqual(0);
+        expect(c.identity_permit_count).toBeGreaterThan(0);
+      } else expect(c.canonical_business_name).toBeNull();
+    }
+  });
+  test("places.resolve: Van Nuys by postal city to 34.20155, -118.45361 (456 parcels); Springfield unknown", async () => {
+    expect(await caller.places.resolve({ name: "Van Nuys" })).toMatchObject({
+      status: "resolved",
+      basis: "postal_city",
+      center: { lat: 34.20155, lon: -118.45361 },
+      parcel_count: 456,
+      raw_values: ["VAN NUYS", "VAN NUYS CALIF", "VAN NUYS,"],
+      center_reliable: true,
+      also_matched: null,
+    });
+    expect(await caller.places.resolve({ name: "Springfield" })).toEqual({
+      status: "unknown",
+      name: "Springfield",
+      note: '"Springfield" matches no jurisdiction or postal city in this run; no center was chosen.',
+    });
   });
   test("parcels.detail returns property and provenance, no personal fields; unknown id is NOT_FOUND", async () => {
     const d = await caller.parcels.detail({ parcel_id: "2224012045" });

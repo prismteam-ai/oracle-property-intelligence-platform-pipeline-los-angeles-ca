@@ -69,7 +69,9 @@ select
   tax_rate_area_city                        as jurisdiction,
   try_cast(roll_year as integer)            as roll_year,
   last_recording_date,
-  owner_unchanged_10y_proxy
+  owner_unchanged_10y_proxy,
+  land_base_year,
+  ownership_base_year_10y_proxy
 from oracle.src_property_roll;
 
 create or replace view oracle.v_property_provenance as
@@ -124,6 +126,17 @@ select * from (
 )
 where distance_miles <= radius_miles
   and effective_roof_year < roll_year - threshold_years;
+
+-- Ownership filter (shared by every route that takes the search filter): true when the parcel passes the
+-- basis. basis null: no filter. 'recording': owner_unchanged_10y_proxy (no recorded document in the 10 years
+-- before the reference date); 'base_year': ownership_base_year_10y_proxy (no reassessment in those 10 years,
+-- by the roll's land base year); 'both': the two. A null proxy never passes. Any other basis is an error.
+create or replace macro oracle.ownership_passes(basis, recording_proxy, base_year_proxy) as
+  case when basis is null then true
+       when basis = 'recording' then coalesce(recording_proxy, false)
+       when basis = 'base_year' then coalesce(base_year_proxy, false)
+       when basis = 'both' then coalesce(recording_proxy and base_year_proxy, false)
+       else error('unknown ownership basis: ' || basis) end;
 `;
 }
 
@@ -216,7 +229,12 @@ select
   city_name,
   state_code,
   cast(permit_issue_date as varchar)         as permit_issue_date,
-  license_class_rule_version
+  license_class_rule_version,
+  contractor_identity_key,
+  canonical_business_name,
+  name_variant_count,
+  identity_permit_count,
+  contractor_identity_rule_version
 from oracle.src_permit_contractor;
 
 -- One row per permit record and per contractor record, with the page it came from.
@@ -302,17 +320,25 @@ select * from read_json(${lit(p.runManifest)}, format = 'auto');
 create or replace view oracle.src_run_history as
 select * from read_json(${lit(p.runHistory)}, format = 'newline_delimited');
 
+-- run_kind ("rebuild" or "new data"), rebuild_of and source_changes are read as JSON, so a manifest or
+-- history line written before them (the first three runs) gives null, never a binder error or a guess.
 create or replace view oracle.v_run as
 select run_id, run_name, generated_at, county, state, fips, roll_year, scope, readiness,
-       row_counts, coverage, delta, limitations, derived_field_reference_date
-from oracle.src_run_manifest;
+       row_counts, coverage, delta, limitations, derived_field_reference_date,
+       to_json(m)->>'run_kind' as run_kind, to_json(m)->>'rebuild_of' as rebuild_of,
+       to_json(m)->>'source_changes' as source_changes
+from oracle.src_run_manifest m;
 
 create or replace view oracle.v_run_history as
-select run_id, finished_at, row_counts, delta, parquet_sha256, manifest_sha256, published
-from oracle.src_run_history
+select run_id, finished_at, row_counts, delta, parquet_sha256, manifest_sha256, published,
+       to_json(h)->>'run_kind' as run_kind, to_json(h)->>'rebuild_of' as rebuild_of,
+       to_json(h)->>'source_changes' as source_changes
+from oracle.src_run_history h
 order by finished_at;
 
--- Source metadata read as JSON, so a key one source lacks (hub_page, query_urls, license) is null.
+-- Source metadata read as JSON, so a key one source lacks (hub_page, query_urls, license, coverage) is null.
+-- coverage is the source's window in the data ({field, first, last}: the contractor view's permit issue
+-- dates); null where the manifest records none (the roll and the permit datasets, and older manifests).
 create or replace view oracle.v_source as
 with pages as (
   select source_kind, source_name, count(*) as page_count, sum(record_count) as record_count,
@@ -322,11 +348,14 @@ with pages as (
   select s->>'name' as source_name, s->>'role' as role, s->>'hub_page' as hub_page,
          s->>'query_url' as query_url, cast(s->'query_urls' as varchar[]) as query_urls,
          s->>'terms_of_use' as terms_of_use, s->>'license' as license, s->>'attribution' as attribution,
-         s->>'access' as access
+         s->>'access' as access,
+         case when json_type(s->'coverage') = 'OBJECT'
+              then {'field': s->'coverage'->>'field', 'first': s->'coverage'->>'first', 'last': s->'coverage'->>'last'}
+         end as coverage
   from (select unnest(from_json(to_json(sources), '["json"]')) as s from oracle.src_run_manifest)
 )
 select pages.*, meta.role, meta.hub_page, meta.query_url, meta.query_urls, meta.terms_of_use, meta.license,
-       meta.attribution, meta.access
+       meta.attribution, meta.access, meta.coverage
 from pages left join meta using (source_name);
 `;
 }

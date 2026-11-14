@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileSystem } from "aws-cdk-lib";
 import { afterAll, expect, test } from "vitest";
-import { layerFingerprint } from "../cdk/lib/layer.ts";
+import { LAYER_EXCLUDE, layerFingerprint } from "../cdk/lib/layer.ts";
 import { REPO } from "./helpers.ts";
 
 const dirs: string[] = [];
@@ -37,4 +37,20 @@ test("two clean layer builds give the same layer asset hash", () => {
   expect(layerFingerprint(a)).toBe(layerFingerprint(b));
   // Without the exclude list the hashes differ (pnpm's metadata holds timestamps and the build path).
   expect(FileSystem.fingerprint(a)).not.toBe(FileSystem.fingerprint(b));
+}, 120_000);
+
+test("the layer's copy of pnpm-workspace.yaml (pnpm bookkeeping, never loaded by Node) is not part of the asset hash", () => {
+  expect(LAYER_EXCLUDE).toContain("nodejs/pnpm-workspace.yaml");
+  const a = build();
+  const file = join(a, "nodejs/pnpm-workspace.yaml");
+  expect(existsSync(file)).toBe(true);
+  const withYaml = (d: string) =>
+    FileSystem.fingerprint(d, {
+      exclude: LAYER_EXCLUDE.filter((e) => e !== "nodejs/pnpm-workspace.yaml"),
+    });
+  const before = [layerFingerprint(a), withYaml(a)];
+  appendFileSync(file, "\n# a changed pnpm setting\n");
+  // The layer's hash stays; without this exclude it would change.
+  expect(layerFingerprint(a)).toBe(before[0]);
+  expect(withYaml(a)).not.toBe(before[1]);
 }, 120_000);

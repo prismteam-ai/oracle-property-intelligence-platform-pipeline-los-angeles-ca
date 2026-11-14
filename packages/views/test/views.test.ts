@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
@@ -30,6 +30,8 @@ const q = async (sql: string, params?: unknown[]) =>
 // Property Parquet column names (src/property-sql.ts, src/permit-sql.ts). Rows:
 // A at the centre built 2010 (in at 15 y), B built 2011 (out), C no year built, D no coordinates,
 // E built 1950 but ~33 mi away, F at the centre built 1950 with a roof year 2015 from a permit (out at 15 y).
+// Ownership proxies [owner_unchanged_10y_proxy, ownership_base_year_10y_proxy] (default both true): B true/false,
+// C false/true, D null/null.
 const row = (
   id: string,
   yb: number | null,
@@ -37,6 +39,7 @@ const row = (
   lon: number | null,
   page: string,
   permitYear?: number,
+  own: [boolean | null, boolean | null] = [true, true],
 ) => `select
   ${lit(id)} as parcel_identifier, ${lit(id)} as assessor_id_formatted, ${lit(id)} as request_identifier,
   ${yb ?? "null"}::integer as property_structure_built_year, ${yb ?? "null"}::integer as property_effective_built_year,
@@ -47,7 +50,9 @@ const row = (
   null::varchar as unit_identifier, 'VAN NUYS' as city_name, '91406' as postal_code, null::varchar as plus_four_postal_code,
   'Los Angeles' as county_name, 'CA' as state_code, ${lat ?? "null"}::double as latitude, ${lon ?? "null"}::double as longitude,
   'center' as coordinate_basis, 'LOS ANGELES' as tax_rate_area_city, '2026' as roll_year, date '2010-01-01' as last_recording_date,
-  true as owner_unchanged_10y_proxy, null::boolean as out_of_area_owner,
+  ${own[0] ?? "null::boolean"} as owner_unchanged_10y_proxy, null::boolean as out_of_area_owner,
+  ${own[1] === null ? "null" : own[1] ? 2000 : 2020}::integer as land_base_year,
+  ${own[1] ?? "null::boolean"} as ownership_base_year_10y_proxy,
   'https://example.test/query?page=${page}' as source_http_request, 'GET' as source_http_method,
   timestamptz '2026-11-11 16:17:40.932+00' as source_retrieved_at, ${lit("sha-" + page)} as source_page_sha256,
   ${lit(page)} as source_page_file, 'Test Source' as source_name`;
@@ -57,9 +62,18 @@ beforeAll(async () => {
   await c.run(
     `copy (${[
       row("0000000001", 2010, 34.199, -118.487, "page-0000.json"),
-      row("0000000002", 2011, 34.199, -118.487, "page-0000.json"),
-      row("0000000003", null, 34.199, -118.487, "page-0001.json"),
-      row("0000000004", 1950, null, null, "page-0001.json"),
+      row("0000000002", 2011, 34.199, -118.487, "page-0000.json", undefined, [
+        true,
+        false,
+      ]),
+      row("0000000003", null, 34.199, -118.487, "page-0001.json", undefined, [
+        false,
+        true,
+      ]),
+      row("0000000004", 1950, null, null, "page-0001.json", undefined, [
+        null,
+        null,
+      ]),
       row("0000000005", 1950, 34.5, -118.0, "page-0001.json"),
       row("0000000006", 1950, 34.199, -118.487, "page-0001.json", 2015),
     ].join(" union all ")}) to ${lit(parquet)} (format parquet)`,
@@ -107,7 +121,9 @@ beforeAll(async () => {
          'VAN NUYS' as city_name, 'CA' as state_code, date '2020-01-01' as permit_issue_date,
          'license-classes-1' as license_class_rule_version, 'https://example.test/c' as source_http_request,
          'GET' as source_http_method, timestamptz '2026-11-12 14:00:51.383+00' as source_retrieved_at,
-         'sha-c' as source_page_sha256, 'pages/8guu-8f5m_p000.json.gz' as source_page_file, 'Contractors' as source_name))
+         'sha-c' as source_page_sha256, 'pages/8guu-8f5m_p000.json.gz' as source_page_file, 'Contractors' as source_name,
+         license_identifier as contractor_identity_key, contractors_business_name as canonical_business_name,
+         1 as name_variant_count, 1 as identity_permit_count, 'contractor-identity-1' as contractor_identity_rule_version))
      to ${lit(contractors)} (format parquet)`,
   );
   writeFileSync(
@@ -285,6 +301,160 @@ describe("contract views", () => {
       (await q("select run_id from oracle.v_run_history")).map((x) => x.run_id),
     ).toEqual(["r1"]);
   });
+  test("a manifest and history lines written before run_kind give null run kind fields; a source without coverage gives null", async () => {
+    expect(
+      await q("select run_kind, rebuild_of, source_changes from oracle.v_run"),
+    ).toEqual([{ run_kind: null, rebuild_of: null, source_changes: null }]);
+    expect(
+      await q(
+        "select run_id, run_kind, rebuild_of, source_changes from oracle.v_run_history",
+      ),
+    ).toEqual([
+      { run_id: "r1", run_kind: null, rebuild_of: null, source_changes: null },
+    ]);
+    expect(
+      (await q("select source_name, coverage from oracle.v_source")).find(
+        (r) => r.source_name === "Test Source",
+      ),
+    ).toEqual({ source_name: "Test Source", coverage: null });
+  });
+  test("a rebuild run: run kind fields from the manifest and its history line (older lines null); the contractor source's coverage", async () => {
+    const d = mkdtempSync(join(tmpdir(), "views-rebuild-"));
+    const m = join(d, "run_manifest.json");
+    const h = join(d, "run_history.jsonl");
+    const rebuild = {
+      run_kind: "rebuild",
+      rebuild_of: "r1",
+      source_changes: "none",
+    };
+    writeFileSync(
+      m,
+      JSON.stringify({
+        ...JSON.parse(readFileSync(manifest, "utf8")),
+        run_id: "r2",
+        ...rebuild,
+        sources: [
+          { name: "Test Source", role: "roll", coverage: null },
+          {
+            name: "Contractors",
+            role: "contractors",
+            coverage: {
+              field: "permit_issue_date",
+              first: "2013-01-02",
+              last: "2023-05-19",
+            },
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      h,
+      readFileSync(history, "utf8") +
+        JSON.stringify({
+          run_id: "r2",
+          finished_at: "2026-11-14T13:14:38.462Z",
+          ...rebuild,
+          published: false,
+        }) +
+        "\n",
+    );
+    const c2 = await (await DuckDBInstance.create(":memory:")).connect();
+    await c2.run(propertyViewsSql({ propertyParquet: parquet }));
+    await c2.run(
+      permitViewsSql({
+        permitsParquet: permits,
+        permitParcelsParquet: permitParcels,
+        permitContractorsParquet: contractors,
+      }),
+    );
+    await c2.run(runViewsSql({ runManifest: m, runHistory: h }));
+    const q2 = async (sql: string) =>
+      (await c2.runAndReadAll(sql)).getRowObjectsJson();
+    expect(
+      await q2("select run_kind, rebuild_of, source_changes from oracle.v_run"),
+    ).toEqual([rebuild]);
+    expect(
+      await q2(
+        "select run_id, run_kind, rebuild_of, source_changes from oracle.v_run_history",
+      ),
+    ).toEqual([
+      { run_id: "r1", run_kind: null, rebuild_of: null, source_changes: null },
+      { run_id: "r2", ...rebuild },
+    ]);
+    expect(
+      await q2(
+        "select source_name, coverage from oracle.v_source order by source_name",
+      ),
+    ).toEqual([
+      {
+        source_name: "Contractors",
+        coverage: {
+          field: "permit_issue_date",
+          first: "2013-01-02",
+          last: "2023-05-19",
+        },
+      },
+      { source_name: "Permits", coverage: null },
+      { source_name: "Test Source", coverage: null },
+    ]);
+    rmSync(d, { recursive: true, force: true });
+  });
+});
+
+describe("ownership_passes", () => {
+  const ids = async (basis: string | null) =>
+    (
+      await q(
+        `select parcel_id from oracle.v_property
+         where oracle.ownership_passes($1::varchar, owner_unchanged_10y_proxy, ownership_base_year_10y_proxy)
+         order by 1`,
+        [basis],
+      )
+    ).map((r) => r.parcel_id);
+  test("no basis: every parcel; each basis its proxy; both the intersection; a null proxy never passes", async () => {
+    const all = (
+      await q("select parcel_id from oracle.v_property order by 1")
+    ).map((r) => r.parcel_id);
+    expect(await ids(null)).toEqual(all);
+    const recording = await ids("recording");
+    const baseYear = await ids("base_year");
+    const both = await ids("both");
+    expect(recording).toEqual([
+      "0000000001",
+      "0000000002",
+      "0000000005",
+      "0000000006",
+    ]);
+    expect(baseYear).toEqual([
+      "0000000001",
+      "0000000003",
+      "0000000005",
+      "0000000006",
+    ]);
+    expect(both).toEqual(recording.filter((i) => baseYear.includes(i)));
+    expect(both).not.toContain("0000000004"); // both proxies null
+  });
+  test("an unknown basis is an error, never no filter", async () => {
+    await expect(ids("owner")).rejects.toThrow(/unknown ownership basis/);
+  });
+  test("v_property serves the land base year and its proxy", async () => {
+    expect(
+      await q(
+        "select parcel_id, land_base_year, ownership_base_year_10y_proxy from oracle.v_property where parcel_id in ('0000000002', '0000000004') order by 1",
+      ),
+    ).toEqual([
+      {
+        parcel_id: "0000000002",
+        land_base_year: 2020,
+        ownership_base_year_10y_proxy: false,
+      },
+      {
+        parcel_id: "0000000004",
+        land_base_year: null,
+        ownership_base_year_10y_proxy: null,
+      },
+    ]);
+  });
 });
 
 describe("roofAgeRule", () => {
@@ -431,6 +601,29 @@ describe("permit views", () => {
         permit_number: "16016-10000-00004",
         roofing_work: false,
         parcel_id: "0000000002",
+      },
+    ]);
+  });
+  test("contractor rows carry their identity (key, canonical name, variant and permit counts)", async () => {
+    expect(
+      await q(
+        `select contractor_identity_key, canonical_business_name, name_variant_count, identity_permit_count,
+           contractor_identity_rule_version from oracle.v_permit_contractor order by 1`,
+      ),
+    ).toEqual([
+      {
+        contractor_identity_key: "1",
+        canonical_business_name: "A CO",
+        name_variant_count: 1,
+        identity_permit_count: 1,
+        contractor_identity_rule_version: "contractor-identity-1",
+      },
+      {
+        contractor_identity_key: "2",
+        canonical_business_name: "B CO",
+        name_variant_count: 1,
+        identity_permit_count: 1,
+        contractor_identity_rule_version: "contractor-identity-1",
       },
     ]);
   });

@@ -49,8 +49,10 @@ const PERMIT_COLUMNS = `p.permit_number, p.address, p.postal_code, p.source_perm
   p.source_permit_sub_type, p.source_status_desc, p.permit_status_class, p.application_received_date,
   p.permit_issue_date, p.status_date, p.open_since, p.open_days, p.roofing_work, p.roof_coating_only,
   p.join_method, pp.building_level`;
+/** The contractor fields served, with the row's identity (one per license number; the names are counted, never listed). */
 const CONTRACTOR_COLUMNS = `contractors_business_name, license_identifier, source_license_type, license_class,
-  license_class_note, is_owner_builder, license_expiration_date, city_name, state_code`;
+  license_class_note, is_owner_builder, license_expiration_date, city_name, state_code, contractor_identity_key,
+  canonical_business_name, name_variant_count, identity_permit_count`;
 
 const BBB_REASON =
   "BBB ratings are not in this data: no BBB source is ingested.";
