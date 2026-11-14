@@ -1,7 +1,13 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, expect, test as vitestTest } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  expect,
+  test as vitestTest,
+} from "vitest";
 import {
   MAX_MATCH_IDS,
   MAX_POINTS,
@@ -21,6 +27,7 @@ import {
   PERMIT_FILES,
   RUN_ID,
   stageRealData,
+  type Staged,
 } from "./helpers.ts";
 
 const VAN_NUYS = { lat: 34.199, lon: -118.487 };
@@ -57,13 +64,17 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
   let caller: ReturnType<typeof appRouter.createCaller>;
   let db: Db;
   const metrics: Array<[string, number]> = [];
+  let staged: Staged | undefined;
+  // Runs after the last test, also when a test or the beforeAll fails, so the copy never outlives the file.
+  afterAll(() => staged?.remove());
   beforeAll(async () => {
+    staged = stageRealData();
     db = await openDb({
       runId: RUN_ID,
       parquetSha256: PARQUET_SHA256,
       parquetFile: PARQUET_FILE,
       permitFiles: PERMIT_FILES,
-      localDir: stageRealData(),
+      localDir: staged.dir,
       tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
     });
     const ctx: Ctx = {

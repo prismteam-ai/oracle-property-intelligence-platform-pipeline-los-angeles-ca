@@ -1,4 +1,10 @@
-import { copyFileSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { PermitFile, PermitRole } from "../src/db.ts";
@@ -32,19 +38,43 @@ export const hasRealData =
   existsSync(parquet) &&
   (latest.permit_files ?? []).every((f) => existsSync(join(REPO, f.path)));
 
-/** Stage the real run files (gitignored data/) the way the Lambda sees them after the S3 copy. */
-export function stageRealData(): string {
-  const dir = mkdtempSync(join(tmpdir(), "api-data-"));
-  copyFileSync(parquet, join(dir, PARQUET_FILE));
-  for (const f of latest.permit_files ?? [])
-    copyFileSync(join(REPO, f.path), join(dir, basename(f.path)));
-  copyFileSync(
-    join(REPO, latest.manifest_path),
-    join(dir, "run_manifest.json"),
-  );
-  copyFileSync(
-    join(REPO, "runs/run_history.jsonl"),
-    join(dir, "run_history.jsonl"),
-  );
-  return dir;
+/** A staged copy of run files in its own temporary folder; remove() deletes the folder and everything in it. */
+export interface Staged {
+  dir: string;
+  remove(): void;
+}
+
+/**
+ * Copy each [source path, file name] pair into a new temporary folder under parent. If a copy fails, the
+ * folder is removed before the error is rethrown, so a failed staging leaves nothing behind.
+ */
+export function stageFiles(
+  files: Array<[string, string]>,
+  parent = tmpdir(),
+): Staged {
+  const dir = mkdtempSync(join(parent, "api-data-"));
+  const remove = () => rmSync(dir, { recursive: true, force: true });
+  try {
+    for (const [src, name] of files) copyFileSync(src, join(dir, name));
+  } catch (e) {
+    remove();
+    throw e;
+  }
+  return { dir, remove };
+}
+
+/**
+ * Stage the real run files (gitignored data/) the way the Lambda sees them after the S3 copy. The copy holds
+ * the full run files, so every caller calls remove() when done, in an afterAll (it also runs when a test fails).
+ */
+export function stageRealData(): Staged {
+  return stageFiles([
+    [parquet, PARQUET_FILE],
+    ...(latest.permit_files ?? []).map((f): [string, string] => [
+      join(REPO, f.path),
+      basename(f.path),
+    ]),
+    [join(REPO, latest.manifest_path), "run_manifest.json"],
+    [join(REPO, "runs/run_history.jsonl"), "run_history.jsonl"],
+  ]);
 }
