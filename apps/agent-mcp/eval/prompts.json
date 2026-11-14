@@ -226,5 +226,18 @@
       "ownership": true,
       "place": { "outcome": "resolved", "name": "Van Nuys" }
     }
+  },
+  {
+    "id": "o-bbb-coverage",
+    "case": "o",
+    "group": "o-bbb-coverage",
+    "note": "A coverage question (approvals §3e.78.1): answered, not refused, from run_summary (called first, as the system prompt asks). The text says BBB ratings are not available and why, as the run's sources state it: no BBB source is among them (gap bbb_no_source); the standard BBB gap is listed (gap bbb).",
+    "question": "Do you have BBB ratings for the contractors?",
+    "expected": {
+      "tools": ["run_summary"],
+      "gaps": ["bbb", "bbb_no_source"],
+      "refused": false,
+      "place": { "outcome": "none" }
+    }
   }
 ]

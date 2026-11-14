@@ -22,7 +22,8 @@ export const DEFAULT_PROMPTS_FILE = fileURLToPath(
 /**
  * The cases of design brief §15.1 a–i, then the scope and abuse cases of approvals §3e.75 d: j off-topic, k a
  * writing task, l an instruction to ignore the rules (each refused by the no-tool-call rule), m who is the owner
- * (refused by the people guard), n how long without an ownership change (answered through the ownership filter).
+ * (refused by the people guard), n how long without an ownership change (answered through the ownership filter);
+ * then o, a coverage question of approvals §3e.78.1 (answered from run_summary: BBB ratings are not available, and why).
  */
 export const PROMPT_CASES = [
   "a",
@@ -39,6 +40,7 @@ export const PROMPT_CASES = [
   "l",
   "m",
   "n",
+  "o",
 ] as const;
 
 /**
@@ -63,6 +65,13 @@ export interface GapSpec {
   inText: RegExp | ((placeName: string | undefined) => RegExp);
 }
 
+/** Within one sentence: no . ! ? or line break. */
+const SENTENCE = String.raw`[^.!?\n]*?`;
+/** A negation: "not", "no", "none", "unavailable", "without", or a contraction ("don't", "aren't"). */
+const NEGATION = String.raw`(?:\b(?:not|no|none|unavailable|without)\b|n['’]t\b)`;
+/** The reason as the run's sources state it: a source, ingestion or collection, or LADBS (the contractor rows' source). */
+const SOURCE_REASON = String.raw`\b(?:sources?|ingest(?:ed|s)?|collected|LADBS)\b`;
+
 const escapeRegExp = (s: string): string =>
   s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -75,6 +84,21 @@ export const GAPS = {
   bbb: {
     inGaps: (g) => g === standard("BBB"),
     inText: /\bBBB\b/i,
+  },
+  /**
+   * BBB ratings not available, and why as the run's sources state it (approvals §3e.78.1): the BBB gap listed, and
+   * the text both says BBB is not available (a sentence naming BBB with a negation) and gives the reason through
+   * the sources (a sentence naming BBB with sources, ingestion, collection or LADBS, or "none of the ... sources").
+   */
+  bbb_no_source: {
+    inGaps: (g) => g === standard("BBB"),
+    inText: new RegExp(
+      [
+        String.raw`^(?=[\s\S]*?(?:\bBBB\b${SENTENCE}${NEGATION}|${NEGATION}${SENTENCE}\bBBB\b))`,
+        String.raw`(?=[\s\S]*?(?:\bBBB\b${SENTENCE}${SOURCE_REASON}|${SOURCE_REASON}${SENTENCE}\bBBB\b|\bnone of\b${SENTENCE}\bsources\b))`,
+      ].join(""),
+      "i",
+    ),
   },
   contractor_license_after_may_2023: {
     inGaps: (g) => g === standard("No contractor license data"),

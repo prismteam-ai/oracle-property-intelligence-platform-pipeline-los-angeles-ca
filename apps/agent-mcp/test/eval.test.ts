@@ -238,8 +238,8 @@ describe("prompts file (eval/prompts.json)", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byCase = (c: string) => prompts.filter((p) => p.case === c);
 
-  test("fifteen entries, valid: cases a–i, then j–n (approvals §3e.75 d)", () => {
-    expect(prompts.length).toBe(15);
+  test("sixteen entries, valid: cases a–i, then j–n (approvals §3e.75 d) and o (§3e.78.1)", () => {
+    expect(prompts.length).toBe(16);
     expect(new Set(prompts.map((p) => p.case))).toEqual(new Set(PROMPT_CASES));
     expect(new Set(prompts.map((p) => p.id)).size).toBe(prompts.length);
   });
@@ -1883,5 +1883,97 @@ describe("scope and abuse prompts j–n (approvals §3e.75 d), with the scripted
         },
       ]).success,
     ).toBe(false);
+  });
+});
+
+describe("coverage prompt o (approvals §3e.78.1), with the scripted model", () => {
+  const p = loadPrompts(DEFAULT_PROMPTS_FILE).find((x) => x.case === "o")!;
+  const O_TEXT =
+    "BBB ratings are not available: none of the run's sources is a BBB source. The contractor rows come from LADBS's contractor view, with business names, license numbers and license classes only.";
+  const viaSummary = (text: string) => [
+    toolReply([{ name: "run_summary", input: {} }]),
+    textReply(text),
+  ];
+
+  test("the entry as approved: the question, answered (not refused), run_summary required, the BBB gap and its reason", () => {
+    expect(p.question).toBe("Do you have BBB ratings for the contractors?");
+    expect(p.expected).toEqual({
+      tools: ["run_summary"],
+      gaps: ["bbb", "bbb_no_source"],
+      refused: false,
+      place: { outcome: "none" },
+    });
+    expect(isPeopleQuestion(p.question)).toBe(false);
+  });
+
+  test("o: run_summary, then BBB not available and why (the sources): every check passes", async () => {
+    const a = await ask(p.question, viaSummary(O_TEXT));
+    expect(a.status).toBe("answered");
+    const checks = await checksOf(p, a);
+    expect(checks.tools.result).toBe("pass");
+    expect(checks.refusal.result).toBe("pass");
+    expect(checks.gaps_text.details).toEqual([
+      "bbb: mentioned",
+      "bbb_no_source: mentioned",
+    ]);
+    expect(allPassed(checks)).toBe(true);
+  });
+
+  test("o fails when answered with no tool call (the no-tool-call rule's fixed text), and when run_summary is not called", async () => {
+    const memory = await ask(p.question, [
+      textReply("BBB ratings are not available."),
+    ]);
+    const m = await checksOf(p, memory);
+    expect(memory.refused_by).toBe("no_tool_call");
+    expect([m.tools.result, m.refusal.result, m.gaps_text.result]).toEqual([
+      "fail",
+      "fail",
+      "fail",
+    ]);
+    const other = await ask(p.question, [
+      toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      textReply(O_TEXT),
+    ]);
+    const o = await checksOf(p, other);
+    expect(o.tools.details).toContain("run_summary not called");
+    expect(o.tools.result).toBe("fail");
+  });
+
+  test("o fails the text check without the reason, or without saying BBB is not available", async () => {
+    const noWhy = await checksOf(
+      p,
+      await ask(p.question, viaSummary("BBB ratings are not available.")),
+    );
+    expect(noWhy.gaps_text.details).toEqual([
+      "bbb: mentioned",
+      "bbb_no_source: NOT mentioned in the text",
+    ]);
+    const noGap = await checksOf(
+      p,
+      await ask(
+        p.question,
+        viaSummary(
+          "The run's sources are the County roll and LADBS; BBB ratings are listed per contractor.",
+        ),
+      ),
+    );
+    expect(noGap.gaps_text.result).toBe("fail");
+  });
+
+  test("bbb_no_source: the reason in the sentence that names BBB, or 'none of the ... sources'", () => {
+    const re = GAPS.bbb_no_source.inText;
+    for (const ok of [
+      "BBB ratings are not available: no BBB source is ingested.",
+      "No, I don't have BBB ratings. None of the data's sources rates contractors.",
+      "BBB ratings aren't in this data: its sources are the County roll and LADBS.",
+      "The contractor rows come from LADBS and carry no BBB rating.",
+    ])
+      expect(re.test(ok)).toBe(true);
+    for (const bad of [
+      "BBB ratings are not available.",
+      "Sources: the County roll and LADBS. BBB ratings are not available.",
+      "BBB ratings come from the LADBS sources.",
+    ])
+      expect(re.test(bad)).toBe(false);
   });
 });
