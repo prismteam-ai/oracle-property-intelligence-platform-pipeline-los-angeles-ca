@@ -4,8 +4,8 @@
  *  - permit_raw: rows staged by src/stage-permits.ts (PERMIT_FIELDS plus provenance);
  *  - contractor_raw: rows staged by src/stage-contractors.ts;
  *  - property: the built property table (src/property-sql.ts).
- * It creates permit, permit_parcel and permit_contractor, and rebuilds property with the effective
- * roof year. work_desc is read only by the roofing flags and is in no table this leaves behind.
+ * It creates permit, permit_parcel and permit_contractor (with the contractor identity per license
+ * number, src/contractor-identity.ts), and rebuilds property with the effective roof year. work_desc is read only by the roofing flags and is in no table this leaves behind.
  *
  * Column names follow the bundled lexicon (kit use-neutral-lexicon model-c) where one fits:
  * permit_number, application_received_date, permit_issue_date, unnormalized_address, postal_code
@@ -24,6 +24,7 @@ import {
   createLicenseClassTable,
   LICENSE_CLASS_RULE_VERSION,
 } from "./license-classes.ts";
+import { addContractorIdentity } from "./contractor-identity.ts";
 import { joinPermits } from "./permit-join.ts";
 import {
   FINALED_STATUS,
@@ -185,6 +186,8 @@ export interface PermitBuildStats {
   open_since_missing_by_class: Counts;
   open_since_after_reference_date: number;
   contractors: Counts;
+  /** Contractor identity per license number (src/contractor-identity.ts). */
+  contractor_identity: Counts;
   license_classes: Counts;
   license_class_notes: Counts;
   unmapped_license_types: Counts;
@@ -222,6 +225,7 @@ export async function buildPermitTables(
     "_license_class_map",
   );
   await c.run(contractorTableSql(o));
+  const contractorIdentity = await addContractorIdentity(c);
   await c.run(roofPermitSql(o.referenceDate));
   const ignored = await pairs(
     `select ignored_reason k, count(distinct permit_number) n from _roof_permit where ignored_reason is not null group by 1 order by 1`,
@@ -273,6 +277,7 @@ export async function buildPermitTables(
         count(*) filter (where is_owner_builder) owner_builder_rows,
         count(*) filter (where license_identifier is null) rows_without_license_number
       from permit_contractor`),
+    contractor_identity: contractorIdentity,
     license_classes: await pairs(
       `select coalesce(license_class, '(none)') k, count(*) n from permit_contractor group by 1 order by 1`,
     ),

@@ -72,6 +72,13 @@ import {
 } from "./stage-contractors.ts";
 import { stageRaw } from "./stage-raw.ts";
 import {
+  CONTRACTOR_WINDOW_SQL,
+  contractorCoverage,
+  contractorIdentityLimitation,
+  contractorRowsLimitation,
+  type ContractorWindow,
+} from "./contractor-identity.ts";
+import {
   cacheRunId,
   PAGES_DIR,
   readCacheSummary,
@@ -380,7 +387,7 @@ if (notCovered.length !== 88)
 
 // Permit run facts for the manifest: Parquet row counts and the contractor rows' issue-date window.
 const permitRows: Record<string, number> = {};
-let contractorWindow: { first: string | null; last: string | null } = {
+let contractorWindow: ContractorWindow = {
   first: null,
   last: null,
 };
@@ -389,11 +396,7 @@ if (withPermits) {
     permitRows[f.role] = Number(
       (await q(`select count(*) n from read_parquet(${lit(f.path)})`))[0]!.n,
     );
-  const w = (
-    await q(
-      `select min(permit_issue_date)::varchar first, max(permit_issue_date)::varchar last from permit_contractor`,
-    )
-  )[0]!;
+  const w = (await q(CONTRACTOR_WINDOW_SQL))[0]!;
   contractorWindow = {
     first: w.first === null ? null : String(w.first),
     last: w.last === null ? null : String(w.last),
@@ -417,7 +420,8 @@ const permitLimitations = (ps: PermitBuildStats): string[] => {
     `Effective roof year: the year of the status date of the latest roofing permit with status Permit Finaled linked to the parcel (building-level links count for every unit); otherwise the year built, a PROXY (roof_age_basis says which). The status date is taken as the final date: a sample check against final inspections supports it, it is not a confirmation. Permits dated after the reference date or in a year before the year built are ignored (permits.roof_permits_ignored).`,
     `Status classes: open-issued (the only class counted as open for long-open), open-application (details only), closed, and unclear (Quality Review Completed, CofO in Progress: neither open nor closed). Unknown statuses are "unmapped" and counted. open_since is the issue date (open-issued) or the submitted date (open-application); open_days counts to the reference date ${referenceDate}, never the build date.`,
     "Permit work descriptions are not served: the free text can hold people's names. The build reads them only to set the roofing flags.",
-    `Contractor rows: business names and license numbers as LADBS publishes them; the license class is normalized to the CSLB form, and unknown values are unmapped and counted; owner-builder and N/A rows carry no license number. Contractor rows exist only for permits issued ${contractorWindow.first} to ${contractorWindow.last}.`,
+    contractorRowsLimitation(contractorWindow),
+    contractorIdentityLimitation(ps.contractor_identity),
     `${outside} permits join parcels outside the City of Los Angeles (by method in permits.joined_outside_permit_jurisdiction): border, annexation or APN-typo cases, kept and counted. Parcels outside the City of Los Angeles have no permit data (permit_data_available false).`,
     "The LADBS inspections dataset (9w5z-rg2h) is not used: it records final inspections for only part of the roofing permits, and the permit status is the more complete signal.",
     `Permit data terms: the building-permit datasets state no license (${cfg.permit_sources!.permits.terms_of_use}, May 2014); the contractor view is ${cfg.permit_sources!.contractors.license}. Attribution: ${cfg.permit_sources!.permits.attribution}.`,
@@ -678,6 +682,7 @@ const makeManifest = (rel: Awaited<ReturnType<typeof relationTo>>) => ({
         request_urls:
           "one per page in cache.pages; the source count is in cache.summary (the cache does not record the count request URL)",
       }),
+      coverage: null,
     },
     ...(withPermits
       ? (["permits", "contractors"] as const).map((k) => {
@@ -697,6 +702,9 @@ const makeManifest = (rel: Awaited<ReturnType<typeof relationTo>>) => ({
             attribution: src.attribution,
             access:
               "anonymous SoQL pages, cached locally; request URLs per page in permit_caches",
+            // The contractor rows' issue-date window, the same values as the limitations sentence.
+            coverage:
+              k === "contractors" ? contractorCoverage(contractorWindow) : null,
           };
         })
       : []),
@@ -797,7 +805,7 @@ const makeManifest = (rel: Awaited<ReturnType<typeof relationTo>>) => ({
     "Lexicon names are taken from the bundled kit catalog (use-neutral-lexicon model-c) without the live Elephant lexicon/MCP; source_* columns, roof_age_basis, coordinate_basis, *_proxy, last_recording_date, tax_rate_area_city, roll_year and assessor_id_formatted are not lexicon fields; property_usage_type/property_type enums are not mapped (raw use code kept).",
     ...(withPermits
       ? [
-          "Permit tables: permit_number, application_received_date, permit_issue_date, unnormalized_address, postal_code, parcel_identifier, license_identifier, license_expiration_date, city_name, state_code and is_owner_builder follow the bundled lexicon; raw LADBS values keep source_* names (they are not lexicon enum values); status_date, the status class, open_since/open_days, the roofing flags, join columns, license class columns, contractors_business_name, permit_data_available, effective_roof_year, roof_year_permit_number and the rule versions are not lexicon fields.",
+          "Permit tables: permit_number, application_received_date, permit_issue_date, unnormalized_address, postal_code, parcel_identifier, license_identifier, license_expiration_date, city_name, state_code and is_owner_builder follow the bundled lexicon; raw LADBS values keep source_* names (they are not lexicon enum values); status_date, the status class, open_since/open_days, the roofing flags, join columns, license class columns, contractors_business_name, the contractor identity columns (contractor_identity_key, canonical_business_name, name_variant_count, identity_permit_count), permit_data_available, effective_roof_year, roof_year_permit_number and the rule versions are not lexicon fields.",
         ]
       : []),
     countyWide

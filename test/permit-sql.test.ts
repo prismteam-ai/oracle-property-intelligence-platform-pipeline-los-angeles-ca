@@ -158,6 +158,11 @@ test("published column names", async () => {
     "permit_issue_date",
     "license_class_rule_version",
     ...PROVENANCE,
+    "contractor_identity_key",
+    "canonical_business_name",
+    "name_variant_count",
+    "identity_permit_count",
+    "contractor_identity_rule_version",
   ]);
   expect((await columns("property")).slice(-3)).toEqual([
     "effective_roof_year",
@@ -331,6 +336,54 @@ test("contractor rows: classes, owner-builder and N/A without a license number",
     permits_in_permit_table: 2,
     owner_builder_rows: 1,
     rows_without_license_number: 2,
+  });
+});
+
+test("contractor identity: one per license number; rows without one stay unlinked", async () => {
+  expect(
+    await rows(`select permit_number, contractor_identity_key k, canonical_business_name name,
+      name_variant_count variants, identity_permit_count permits, contractor_identity_rule_version v
+      from permit_contractor order by permit_number, source_license_type`),
+  ).toEqual([
+    {
+      permit_number: "P01",
+      k: "123456",
+      name: "FIXTURE ROOFING CO",
+      variants: 1,
+      permits: 2,
+      v: "contractor-identity-1",
+    },
+    {
+      permit_number: "P01",
+      k: null,
+      name: null,
+      variants: null,
+      permits: null,
+      v: "contractor-identity-1",
+    },
+    {
+      permit_number: "P02",
+      k: "123456",
+      name: "FIXTURE ROOFING CO",
+      variants: 1,
+      permits: 2,
+      v: "contractor-identity-1",
+    },
+    {
+      permit_number: "P09",
+      k: null,
+      name: null,
+      variants: null,
+      permits: null,
+      v: "contractor-identity-1",
+    },
+  ]);
+  expect(stats.contractor_identity).toMatchObject({
+    keys: 1,
+    rows_with_key: 2,
+    rows_without_key: 2,
+    rows_without_key_owner_builder: 1,
+    rows_without_key_other: 1,
   });
 });
 
