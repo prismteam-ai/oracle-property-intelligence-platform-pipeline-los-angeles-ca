@@ -538,7 +538,6 @@ describe("permit tools over the real permits router (writePermitFixture)", () =>
         source_license_type: "C39",
         license_class_note: null,
         is_owner_builder: false,
-        license_expiration_date: "2027-01-31",
         city_name: "VAN NUYS",
         state_code: "CA",
       },

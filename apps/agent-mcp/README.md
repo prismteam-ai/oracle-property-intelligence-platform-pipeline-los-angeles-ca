@@ -100,7 +100,7 @@ In `--out`:
 - `run-<n>-<prompt id>.json`: one transcript per answer: run, prompt ID, question, history, markdown, records, gaps,
   usage (per model call), spend, the checks with their details, elapsed time, and `stopped_by`.
 - `results.tsv` and `results.md`: one row per answer with run, prompt, status, each check (counts, cited, gaps,
-  gaps_text, elapsed, tools, refusal, place, ownership), token counts, USD and milliseconds. `results.md` also states the
+  gaps_text, elapsed, tools, refusal, place, ownership, license_status), token counts, USD and milliseconds. `results.md` also states the
   provider, model, data run, spend, the worst-case formula and whether the budget stopped the eval.
 
 stdout carries only the short summary: one line per run (passed, failed, spend), a total line with the limit, a

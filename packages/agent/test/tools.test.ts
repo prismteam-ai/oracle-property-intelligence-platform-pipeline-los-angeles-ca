@@ -450,10 +450,14 @@ describe("runTool", () => {
       "source_license_type",
       "license_class_note",
       "is_owner_builder",
-      "license_expiration_date",
       "city_name",
       "state_code",
     ]);
+    // The API's license_expiration_date (the date recorded with the permit, not the license's status today) is
+    // not passed to the model.
+    expect(c.permits[0]!.contractors[0]!).not.toHaveProperty(
+      "license_expiration_date",
+    );
     expect(c.permits[1]!.contractors).toEqual([]);
     expect(o.records).toEqual([
       {

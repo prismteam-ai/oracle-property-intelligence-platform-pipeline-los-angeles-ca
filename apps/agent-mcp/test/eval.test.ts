@@ -48,9 +48,11 @@ import {
 } from "../../../packages/agent/test/helpers.ts";
 import { Budget } from "../src/eval/budget.ts";
 import {
+  LICENSE_STATUS_CLAIM,
   OWNER_NAMED,
   allPassed,
   checkAnswer,
+  checkLicenseStatus,
   checkPlace,
   type AnswerChecks,
   type ToolCallRecord,
@@ -1691,13 +1693,13 @@ describe("CLI and output folder", () => {
       .trim()
       .split("\n");
     expect(tsv[0]).toBe(
-      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms",
+      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms",
     );
     expect(tsv.slice(1)).toEqual([
-      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\t0\t0\t0\t0\t0.000000\t0",
-      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\t200\t0\t0\t100\t0.001400\t0",
-      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\t0\t0\t0\t0\t0.000000\t0",
-      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\t200\t0\t0\t100\t0.001400\t0",
+      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
+      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
+      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
+      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
     ]);
     const md = readFileSync(join(out, "results.md"), "utf8");
     expect(md).toContain("data run run-1");
@@ -2118,6 +2120,10 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
     expect(c.counts.details.join(" ")).toContain(
       "permits.longOpen (within_contractor_window)",
     );
+    expect(c.license_status).toEqual({
+      result: "pass",
+      details: ["no license status stated"],
+    });
     expect(allPassed(c)).toBe(true);
   });
 
@@ -2150,6 +2156,38 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
     });
     expect(c.tools.result).toBe("fail");
     expect(c.tools.details).toContain("parcel_permits not called");
+  });
+
+  test("a2 must not state a license status: the hosted answer's expiry sentence fails, a license number and class pass; n/a without the expectation", () => {
+    const a2 = byId("a2-readme-110-follow-up");
+    expect(a2.expected.no_license_status).toBe(true);
+    const withText = (text: string) => ({ text }) as AgentAnswer;
+    const expired = "All four licenses had expired by late 2014 or earlier.";
+    expect(LICENSE_STATUS_CLAIM.test(expired)).toBe(true);
+    expect(checkLicenseStatus(withText(expired), a2.expected)).toEqual({
+      result: "fail",
+      details: ['the text states a license status: "licenses had expired"'],
+    });
+    for (const fail of [
+      "License 123456 is no longer valid: it is invalid.",
+      "ACME ROOFING, INC. holds an expired license.",
+      "The license expiration date is 2014-10-31.",
+    ])
+      expect(checkLicenseStatus(withText(fail), a2.expected).result).toBe(
+        "fail",
+      );
+    const named =
+      "Permit 1 on parcel 2 lists ACME ROOFING, INC. (license 123456, class C-39). The permit expired in 2015.";
+    expect(checkLicenseStatus(withText(named), a2.expected)).toEqual({
+      result: "pass",
+      details: ["no license status stated"],
+    });
+    expect(
+      checkLicenseStatus(
+        withText(expired),
+        byId("a1-readme-108-van-nuys").expected,
+      ).result,
+    ).toBe("n/a");
   });
 
   test("h: an area question that also asks about BBB is answered with the usual tools (resolve_place, long_open_permits), the gap stated; no run_summary needed: every check passes", async () => {

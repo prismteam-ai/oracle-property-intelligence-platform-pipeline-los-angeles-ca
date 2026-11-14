@@ -134,10 +134,10 @@ export function isPeopleQuestion(question: string): boolean {
  * question answered from memory).
  */
 export const NO_TOOL_CALL_TEXT =
-  "I only answer questions about the properties, permits and contractors in this data (Los Angeles County parcels " +
-  "and their roof age, City of Los Angeles building permits, contractor businesses), and only from what my tools " +
-  "read from it. This reply used no data from the tools, so it is not shown. For an area, name a place in the data " +
-  'or give a point, e.g. "Which properties within five miles of Van Nuys have roofs older than 15 years?"';
+  "Ask me about properties, permits or contractors in this data, with a place or a point, for example " +
+  '"Which properties within five miles of Van Nuys have roofs older than 15 years?". I answer only from what my ' +
+  "tools read from the data (Los Angeles County parcels and their roof age, City of Los Angeles building permits, " +
+  "contractor businesses). This reply used none, so it is not shown.";
 
 // ---------------------------------------------------------------------------------------------------------------
 // Projection and the description guard.

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  NO_TOOL_CALL_TEXT,
   buildMarkdown,
   idsInText,
   isPeopleQuestion,
@@ -7,6 +8,14 @@ import {
   recordLines,
   unverifiedIds,
 } from "../src/policy.ts";
+
+describe("no-tool-call text", () => {
+  test("the fixed reply: what to ask, with an example, then what the answers come from and why this one is hidden", () => {
+    expect(NO_TOOL_CALL_TEXT).toBe(
+      'Ask me about properties, permits or contractors in this data, with a place or a point, for example "Which properties within five miles of Van Nuys have roofs older than 15 years?". I answer only from what my tools read from the data (Los Angeles County parcels and their roof age, City of Los Angeles building permits, contractor businesses). This reply used none, so it is not shown.',
+    );
+  });
+});
 
 describe("people guard", () => {
   test.each([

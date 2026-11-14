@@ -9,7 +9,9 @@
  * - tools, refusal, place: the prompt's expected tools (and input values), refusal (and which: the people guard
  *   or the no-tool-call rule) and place outcome;
  * - ownership: an answer through the ownership filter states its basis and weakness and never implies the owner
- *   is known.
+ *   is known;
+ * - license_status: the answer text never says a contractor license expired or is invalid (nothing in the data
+ *   states a license's status).
  */
 import type { OwnershipBasis } from "@oracle-la/api/contract";
 import {
@@ -46,6 +48,7 @@ export const CHECK_NAMES = [
   "refusal",
   "place",
   "ownership",
+  "license_status",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 
@@ -632,6 +635,32 @@ export function checkOwnership(
   );
 }
 
+/**
+ * A license status claim: "license" and an expiry or invalidity word in one sentence (no . ! ? or line break
+ * between them), in either order. The tools return no expiration date and nothing is checked against the state
+ * license board, so no answer can know a license's status.
+ */
+export const LICENSE_STATUS_CLAIM =
+  /\blicen[cs]es?\b[^.!?\n]*?\b(?:expir\w*|invalid|lapsed|inactive|revoked|suspended)\b|\b(?:expir\w*|invalid|lapsed|inactive|revoked|suspended)\b[^.!?\n]*?\blicen[cs]es?\b/i;
+
+/** (vi) With expected.no_license_status: the text makes no license status claim. n/a without the expectation. */
+export function checkLicenseStatus(
+  answer: AgentAnswer,
+  expected: EvalPrompt["expected"],
+): CheckResult {
+  if (!expected.no_license_status)
+    return check(["no license status expectation"], null);
+  const claim = LICENSE_STATUS_CLAIM.exec(answer.text)?.[0];
+  return check(
+    [
+      claim
+        ? `the text states a license status: "${claim}"`
+        : "no license status stated",
+    ],
+    claim === undefined,
+  );
+}
+
 interface Resolution {
   status?: unknown;
   name?: unknown;
@@ -783,6 +812,7 @@ export async function checkAnswer(args: {
       refusal: checkRefusal(answer, prompt.expected),
       place: checkPlace(calls, prompt.expected.place, args.previousArea),
       ownership: checkOwnership(answer, calls, prompt.expected),
+      license_status: checkLicenseStatus(answer, prompt.expected),
     },
   };
 }

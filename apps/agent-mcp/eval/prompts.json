@@ -28,6 +28,7 @@
       },
       "gaps": [],
       "refused": false,
+      "no_license_status": true,
       "place": { "outcome": "reused_previous_area" }
     }
   },

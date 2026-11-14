@@ -395,7 +395,6 @@ const CONTRACTOR_FIELDS = fields(
   "source_license_type",
   "license_class_note",
   "is_owner_builder",
-  "license_expiration_date",
   "city_name",
   "state_code",
 );

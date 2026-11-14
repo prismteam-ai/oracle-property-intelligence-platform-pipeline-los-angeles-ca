@@ -217,6 +217,11 @@ export const promptSchema = z.strictObject({
      * implied known (check "ownership").
      */
     ownership: z.literal(true).optional(),
+    /**
+     * True: the text never says a contractor license expired or is invalid (check "license_status"): the tools
+     * return no expiration date and no license is checked against the state license board.
+     */
+    no_license_status: z.literal(true).optional(),
     place: placeSchema,
   }),
 });
