@@ -2,13 +2,14 @@
  * The HTTP DataQueries adapter (http-data.ts) against a fake data API speaking tRPC's GET format: parity with the
  * in-process queries on every route, the forwarded bearer token, at most 2 calls in flight, the one retry with
  * full jitter on a refused (429/503) or transient call or a timeout, the gap when the retry fails too, the 5 s
- * attempt cap, the answer's deadline, and that no page list reaches a tool result or the model. No network.
+ * attempt cap, the first call's 10 s attempts (a cold data API environment), the answer's deadline, and that no page list reaches a tool result or the model. No network.
  */
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { runAgent } from "../src/agent.ts";
 import {
   CALL_TIMEOUT_MS,
   DataApiUnavailableError,
+  FIRST_CALL_TIMEOUT_MS,
   MAX_IN_FLIGHT,
   guardedFetch,
   httpDataQueries,
@@ -314,16 +315,19 @@ describe("a call refused by the cap: one retry with full jitter, then a gap", ()
 describe("timeouts and the answer's deadline", () => {
   test("an attempt that does not answer within the timeout is retried once; then 'data API timeout'", async () => {
     const api = fakeDataApi(fakeQueries().queries, {
-      behaviour: () => ({ kind: "hang" }),
+      behaviour: (r) =>
+        r === "explorer.runSummary" ? { kind: "hang" } : { kind: "answer" },
     });
     const { q, waits } = adapter(api, { callTimeoutMs: 20 });
+    // The first call (answered) has the first call's limit; runSummary is a later call.
+    await q.explorer.sources();
     const err = await q.explorer.runSummary().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DataApiUnavailableError);
     expect((err as DataApiUnavailableError).reason).toBe("timeout");
     expect((err as DataApiUnavailableError).gap).toBe(
       "data API timeout: explorer.runSummary not read (no answer within 5 s, twice)",
     );
-    expect(api.requests).toHaveLength(2);
+    expect(api.requests).toHaveLength(3);
     expect(waits).toHaveLength(1);
   });
 
@@ -333,11 +337,12 @@ describe("timeouts and the answer's deadline", () => {
     });
     const res = await adapter(api, {
       callTimeoutMs: 20,
+      firstCallTimeoutMs: 20,
     }).q.explorer.runSummary();
     expect(res.run.run_id).toBe("run-1");
   });
 
-  test(`the attempt timeout is ${CALL_TIMEOUT_MS} ms at most, whatever is asked (fake timers)`, async () => {
+  test(`the attempt timeout is ${CALL_TIMEOUT_MS} ms at most, the first call's ${FIRST_CALL_TIMEOUT_MS} ms, whatever is asked (fake timers)`, async () => {
     vi.useFakeTimers();
     const api = fakeDataApi(fakeQueries().queries, {
       behaviour: () => ({ kind: "hang" }),
@@ -347,15 +352,26 @@ describe("timeouts and the answer's deadline", () => {
       apiToken: TOKEN,
       fetch: api.fetch,
       callTimeoutMs: 60_000,
+      firstCallTimeoutMs: 60_000,
       sleep: async () => {},
     });
+    const first = g
+      .fetch(`${FAKE_API_URL}/trpc/explorer.sources`)
+      .catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(FIRST_CALL_TIMEOUT_MS - 1);
+    expect(api.requests).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(api.requests).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(FIRST_CALL_TIMEOUT_MS);
+    expect(await first).toBeInstanceOf(DataApiUnavailableError);
+
     const p = g
       .fetch(`${FAKE_API_URL}/trpc/explorer.runSummary`)
       .catch((e: unknown) => e);
     await vi.advanceTimersByTimeAsync(CALL_TIMEOUT_MS - 1);
-    expect(api.requests).toHaveLength(1);
+    expect(api.requests).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(1);
-    expect(api.requests).toHaveLength(2);
+    expect(api.requests).toHaveLength(4);
     await vi.advanceTimersByTimeAsync(CALL_TIMEOUT_MS);
     expect(await p).toBeInstanceOf(DataApiUnavailableError);
   });
@@ -386,12 +402,190 @@ describe("timeouts and the answer's deadline", () => {
   });
 
   test("the gap wordings", () => {
+    expect(unavailableGap("parcels.search", "timeout")).toBe(
+      "data API timeout: parcels.search not read (no answer within 5 s, twice)",
+    );
+    expect(
+      unavailableGap(
+        "explorer.sources",
+        "timeout",
+        null,
+        FIRST_CALL_TIMEOUT_MS,
+      ),
+    ).toBe(
+      "data API timeout: explorer.sources not read (no answer within 10 s, twice)",
+    );
     expect(unavailableGap("parcels.search", "busy")).toBe(
       "data API busy: parcels.search not read",
     );
     expect(unavailableGap("parcels.search", "error", 502)).toBe(
       "data API error 502: parcels.search not read",
     );
+  });
+});
+
+describe("the first data call: 10 s per attempt (a cold data API environment), every other call 5 s", () => {
+  /** A route's attempts as the fake data API takes them: `ms` each (answered after it unless aborted first). */
+  const slow =
+    (ms: Record<string, number[]>) =>
+    (route: string, n: number): Behaviour => {
+      const d = ms[route]?.[n - 1];
+      return d === undefined ? { kind: "answer" } : { kind: "slow", ms: d };
+    };
+
+  test("a 6 s first call is answered within its 10 s attempt: no retry, no gap", async () => {
+    vi.useFakeTimers();
+    const api = fakeDataApi(fakeQueries().queries, {
+      behaviour: slow({ "explorer.sources": [6_000, 6_000] }),
+    });
+    const { q, waits } = adapter(api);
+    let done = false;
+    const p = q.explorer.sources().finally(() => (done = true));
+    await vi.advanceTimersByTimeAsync(5_999);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await p).sources).toHaveLength(3);
+    expect(api.requests).toHaveLength(1);
+    expect(waits).toEqual([]);
+  });
+
+  test("a later 6 s call still times out at 5 s and is retried (5 s again)", async () => {
+    vi.useFakeTimers();
+    const api = fakeDataApi(fakeQueries().queries, {
+      behaviour: slow({ "explorer.runSummary": [6_000] }),
+    });
+    const { q, waits } = adapter(api, { random: () => 0 });
+    await q.explorer.sources();
+    const p = q.explorer.runSummary();
+    await vi.advanceTimersByTimeAsync(CALL_TIMEOUT_MS - 1);
+    expect(api.requests).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(api.requests.map((r) => r.route)).toEqual([
+      "explorer.sources",
+      "explorer.runSummary",
+      "explorer.runSummary",
+    ]);
+    expect((await p).run.run_id).toBe("run-1");
+    expect(waits).toEqual([0]);
+  });
+
+  test("a later call slow twice: 'no answer within 5 s, twice'", async () => {
+    vi.useFakeTimers();
+    const api = fakeDataApi(fakeQueries().queries, {
+      behaviour: slow({ "explorer.runSummary": [6_000, 6_000] }),
+    });
+    const { q } = adapter(api);
+    await q.explorer.sources();
+    const p = q.explorer.runSummary().catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(2 * CALL_TIMEOUT_MS);
+    expect((await p) as DataApiUnavailableError).toMatchObject({
+      reason: "timeout",
+      gap: "data API timeout: explorer.runSummary not read (no answer within 5 s, twice)",
+    });
+  });
+
+  test("the first call's retry has 10 s too; a first call slow twice states its 10 s", async () => {
+    vi.useFakeTimers();
+    const api = fakeDataApi(fakeQueries().queries, {
+      behaviour: slow({ "explorer.sources": [11_000, 11_000] }),
+    });
+    const { q, waits } = adapter(api, { random: () => 0.5 });
+    const p = q.explorer.sources().catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(FIRST_CALL_TIMEOUT_MS - 1);
+    expect(api.requests).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(api.requests).toHaveLength(2);
+    expect(waits).toEqual([250]);
+    await vi.advanceTimersByTimeAsync(FIRST_CALL_TIMEOUT_MS - 1);
+    await Promise.resolve();
+    expect(api.requests).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await p) as DataApiUnavailableError).toMatchObject({
+      reason: "timeout",
+      gap: "data API timeout: explorer.sources not read (no answer within 10 s, twice)",
+    });
+  });
+
+  test("a first call slow then answered on its retry: the data", async () => {
+    vi.useFakeTimers();
+    const api = fakeDataApi(fakeQueries().queries, {
+      behaviour: slow({ "explorer.sources": [12_000, 6_000] }),
+    });
+    const p = adapter(api).q.explorer.sources();
+    await vi.advanceTimersByTimeAsync(FIRST_CALL_TIMEOUT_MS + 6_000);
+    expect((await p).sources).toHaveLength(3);
+    expect(api.requests).toHaveLength(2);
+  });
+
+  test("the first call by call order: of two calls started together only the first has 10 s", async () => {
+    vi.useFakeTimers();
+    const api = fakeDataApi(fakeQueries().queries, {
+      behaviour: slow({
+        "explorer.sources": [6_000],
+        "explorer.runSummary": [6_000],
+      }),
+    });
+    const { q } = adapter(api);
+    const a = q.explorer.sources();
+    const b = q.explorer.runSummary();
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect((await a).sources).toHaveLength(3);
+    expect((await b).run.run_id).toBe("run-1");
+    expect(api.requests.map((r) => r.route)).toEqual([
+      "explorer.sources",
+      "explorer.runSummary",
+      "explorer.runSummary",
+    ]);
+  });
+
+  test("the answer's deadline still cuts the first call's attempt; no retry when nothing is left", async () => {
+    vi.useFakeTimers();
+    const api = fakeDataApi(fakeQueries().queries, {
+      behaviour: slow({ "explorer.sources": [6_000, 6_000] }),
+    });
+    const { q, waits } = adapter(api, {
+      deadline: Date.now() + 3_000,
+      random: () => 0,
+    });
+    const p = q.explorer.sources().catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect((await p) as DataApiUnavailableError).toMatchObject({
+      reason: "timeout",
+    });
+    expect(api.requests).toHaveLength(1);
+    expect(waits).toEqual([]);
+  });
+
+  test("runAgent: a 6 s cold explorer.sources before the first model call is read; the contractor window is the run's", async () => {
+    vi.useFakeTimers();
+    const api = fakeDataApi(fakeQueries().queries, {
+      behaviour: slow({ "explorer.sources": [6_000, 6_000] }),
+    });
+    const script = () => [
+      toolReply([{ name: "run_summary", input: {} }]),
+      textReply("The run's sources are listed."),
+    ];
+    const model = new ScriptedModel(script());
+    const p = runAgent(
+      { question: "Which sources does the run use?" },
+      { model, queries: adapter(api).q, settings: SETTINGS },
+    );
+    await vi.advanceTimersByTimeAsync(6_000);
+    const a = await p;
+    expect(a.status).toBe("answered");
+    expect(a.gaps.join("\n")).not.toContain("could not be read");
+    // The system prompt names the run's window exactly as with the in-process queries (no fallback end).
+    const direct = new ScriptedModel(script());
+    await runAgent(
+      { question: "Which sources does the run use?" },
+      { model: direct, queries: fakeQueries().queries, settings: SETTINGS },
+    );
+    expect(model.requests[0]!.params.system).toEqual(
+      direct.requests[0]!.params.system,
+    );
+    expect(
+      api.requests.filter((r) => r.route === "explorer.sources"),
+    ).toHaveLength(1);
   });
 });
 

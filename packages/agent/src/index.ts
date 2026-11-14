@@ -47,6 +47,7 @@ export {
   BUSY_STATUSES,
   CALL_TIMEOUT_MS,
   DataApiUnavailableError,
+  FIRST_CALL_TIMEOUT_MS,
   MAX_ATTEMPTS,
   MAX_IN_FLIGHT,
   RETRY_BASE_MS,

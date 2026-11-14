@@ -13,6 +13,11 @@
  * - timeout: each attempt (response headers and body) has CALL_TIMEOUT_MS (5,000 ms) at most, cut to what is left
  *   of the answer's deadline when one is given. An attempt given up here may still run in the data API until it
  *   ends (a cold start takes 8–12 s), holding one of its 5 slots meanwhile; the bulkhead counts this side only.
+ * - first call: the adapter's first data call (the hosted agent's explorer.sources read, before the first model call)
+ *   has FIRST_CALL_TIMEOUT_MS (10,000 ms) per attempt instead, its retry too; the deadline still cuts it. It is the
+ *   call most likely to meet a cold data API environment (5.4–6.2 s measured at 2,048 MB), which a 5 s attempt cut
+ *   twice. A documented exception to the 5 s default for this one call; every other call keeps 5 s. In the MCP
+ *   server (one adapter per process) it is the process's first call. Its timeout gap names its 10 s.
  * - retry: an attempt refused by the cap (HTTP 429 or 503), another transient status (500, 502, 504) or a timeout
  *   is retried once, after a full-jitter wait of random × min(RETRY_CAP_MS, RETRY_BASE_MS × 2) = 0–500 ms, and only
  *   if the deadline leaves time for it. Any other status (400, 401, 403, 404, ...) is not retried.
@@ -29,6 +34,14 @@ import type { DataQueries } from "./permit-api.ts";
 export const MAX_IN_FLIGHT = 2;
 /** Longest one attempt may take, headers and body (the kit's synchronous exception: 5 s at most). */
 export const CALL_TIMEOUT_MS = 5_000;
+/**
+ * Longest one attempt of the adapter's first call may take (and its retry's). Worst case against the hosted answer's
+ * 25 s budget (AGENT_TIME_BUDGET_MS): 10 s + a 0–500 ms jitter wait + 10 s = 20.5 s on the data side, leaving about
+ * 25 − 20.5 − 1.5 (agent.ts TIME_RESERVE_MS) = 3 s for the model calls (5 s + 0.5 + 5 s left 13 s before). The budget
+ * logic is unchanged: each attempt is cut to the deadline, the retry starts only if the deadline leaves time for its
+ * wait, and the agent checks what is left before each model call (stopped_by "time_budget" when nothing is).
+ */
+export const FIRST_CALL_TIMEOUT_MS = 10_000;
 /** Full-jitter backoff before the one retry: random × min(RETRY_CAP_MS, RETRY_BASE_MS × 2^1) = 0–500 ms. */
 export const RETRY_BASE_MS = 250;
 export const RETRY_CAP_MS = 2_000;
@@ -56,8 +69,10 @@ export class DataApiUnavailableError extends Error {
     route: string,
     reason: UnavailableReason,
     status: number | null = null,
+    /** The call's per-attempt limit, named by the timeout gap: CALL_TIMEOUT_MS, or FIRST_CALL_TIMEOUT_MS. */
+    timeoutMs: number = CALL_TIMEOUT_MS,
   ) {
-    super(unavailableGap(route, reason, status));
+    super(unavailableGap(route, reason, status, timeoutMs));
     this.name = "DataApiUnavailableError";
     this.route = route;
     this.reason = reason;
@@ -74,12 +89,13 @@ export function unavailableGap(
   route: string,
   reason: UnavailableReason,
   status: number | null = null,
+  timeoutMs: number = CALL_TIMEOUT_MS,
 ): string {
   switch (reason) {
     case "busy":
       return `data API busy: ${route} not read`;
     case "timeout":
-      return `data API timeout: ${route} not read (no answer within ${CALL_TIMEOUT_MS / 1000} s, twice)`;
+      return `data API timeout: ${route} not read (no answer within ${timeoutMs / 1000} s, twice)`;
     case "error":
       return `data API error${status !== null ? ` ${status}` : ""}: ${route} not read`;
     case "time_budget":
@@ -139,6 +155,8 @@ export interface HttpDataQueriesOptions {
   maxInFlight?: number;
   /** Default CALL_TIMEOUT_MS; never more than it. */
   callTimeoutMs?: number;
+  /** The first call's: default FIRST_CALL_TIMEOUT_MS; never more than it. */
+  firstCallTimeoutMs?: number;
 }
 
 /** "parcels.detail" from ".../trpc/parcels.detail?input=..." (the route as the gap names it). */
@@ -170,6 +188,12 @@ export function guardedFetch(opts: HttpDataQueriesOptions): {
     opts.callTimeoutMs ?? CALL_TIMEOUT_MS,
     CALL_TIMEOUT_MS,
   );
+  const firstCallTimeout = Math.min(
+    opts.firstCallTimeoutMs ?? FIRST_CALL_TIMEOUT_MS,
+    FIRST_CALL_TIMEOUT_MS,
+  );
+  /** Calls made so far: the first one (by call order, not by finish) gets the first call's limit. */
+  let calls = 0;
   const slots = new Slots(Math.max(1, opts.maxInFlight ?? MAX_IN_FLIGHT));
   let inFlight = 0;
   let peak = 0;
@@ -206,12 +230,16 @@ export function guardedFetch(opts: HttpDataQueriesOptions): {
 
   const fetch: Fetch = async (input, init) => {
     const route = routeOf(input);
+    const first = calls++ === 0;
+    const limit = first ? firstCallTimeout : callTimeout;
+    // The limit the gap names: the nominal one, whatever a test shortens the attempts to.
+    const nominal = first ? FIRST_CALL_TIMEOUT_MS : CALL_TIMEOUT_MS;
     await slots.acquire();
     inFlight++;
     peak = Math.max(peak, inFlight);
     try {
       for (let n = 1; ; n++) {
-        const timeoutMs = Math.min(callTimeout, left());
+        const timeoutMs = Math.min(limit, left());
         if (timeoutMs <= 0)
           throw new DataApiUnavailableError(route, "time_budget");
         const res = await attempt(input, init, timeoutMs);
@@ -227,7 +255,7 @@ export function guardedFetch(opts: HttpDataQueriesOptions): {
         // Full jitter: a uniform wait from 0 to min(cap, base × 2^n) ms.
         const wait = random() * Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** n);
         if (n >= MAX_ATTEMPTS || left() - wait <= 0)
-          throw new DataApiUnavailableError(route, reason, status);
+          throw new DataApiUnavailableError(route, reason, status, nominal);
         await sleep(wait);
       }
     } finally {

@@ -14,11 +14,15 @@ export interface FakeRequest {
   authorization: string | null;
 }
 
-/** What to do with one attempt of a route: answer, refuse with a status, or hang until aborted. */
+/**
+ * What to do with one attempt of a route: answer, refuse with a status, hang until aborted, or answer after `ms`
+ * unless aborted first (a cold data API environment; with fake timers the wait is on the fake clock).
+ */
 export type Behaviour =
   | { kind: "answer" }
   | { kind: "status"; status: number; body?: string }
-  | { kind: "hang" };
+  | { kind: "hang" }
+  | { kind: "slow"; ms: number };
 
 export interface FakeDataApi {
   fetch: (
@@ -85,6 +89,19 @@ export function fakeDataApi(
           signal.addEventListener("abort", () => reject(signal.reason), {
             once: true,
           });
+        });
+      if (b.kind === "slow")
+        await new Promise<void>((resolve, reject) => {
+          const signal = init?.signal;
+          const timer = setTimeout(resolve, b.ms);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(signal.reason);
+            },
+            { once: true },
+          );
         });
       if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
       if (b.kind === "status")
