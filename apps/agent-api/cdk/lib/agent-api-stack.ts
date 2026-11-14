@@ -1,6 +1,6 @@
 /**
  * OracleLaAgentApi: the hosted agent. One Lambda (apps/agent-api/src/handler.ts, no DuckDB), its own HTTP API
- * behind the data API's shared token authorizer (imported by ARN from SSM, as RoofingCrmLeads does), and two
+ * behind the data API's shared token authorizer (imported by ARN from SSM, as RoofingCrmLeads does), and three
  * alarms on the existing alert topic. The function reads the Anthropic key and the history signing secret
  * itself, on first use, from two SecureStrings placed by hand; this stack only knows their names and grants
  * ssm:GetParameter on exactly those two ARNs. No secret value is read, created or passed here.
@@ -37,6 +37,8 @@ export const SERVICE_NAME = "oracle-la-agent";
 export const AGENT_API_CLIENTS = ["crm", "explorer"] as const;
 /** Estimated model spend per UTC day above which the alarm fires (hosting plan §4, §6). */
 export const USD_PER_DAY_THRESHOLD = 2;
+/** Estimated model spend within one 5-minute period at or above which the burst alarm fires. */
+export const USD_BURST_THRESHOLD = 1;
 /** The data API's URL as OracleLaDataApi outputs it (`ApiUrl`, the HTTP API's default endpoint). */
 const DATA_API_URL =
   /^https:\/\/[a-z0-9]+\.execute-api\.eu-north-1\.amazonaws\.com$/;
@@ -181,7 +183,7 @@ export class AgentApiStack extends cdk.Stack {
       authorizer,
     });
 
-    // Alarms on the existing alert topic (CloudWatch always-free: 10 standard alarms; 8 of 10 after this stack).
+    // Alarms on the existing alert topic (CloudWatch always-free: 10 standard alarms; 9 of 10 after this stack).
     const topic = sns.Topic.fromTopicArn(
       this,
       "Alerts",
@@ -204,20 +206,34 @@ export class AgentApiStack extends cdk.Stack {
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     }).addAlarmAction(new actions.SnsAction(topic));
     // AgentAnswerUsd: the handler's estimated spend per answer (Powertools Metrics, default "service" dimension).
-    // A 1-day period is evaluated after the UTC day closes, so the alarm fires up to ~24 h after spend passes $2.
-    new cloudwatch.Alarm(this, "UsdPerDay", {
-      alarmName: "oracle-la-agent-usd-per-day",
-      alarmDescription: `Agent estimated model spend over $${USD_PER_DAY_THRESHOLD} in a UTC day`,
-      metric: new cloudwatch.Metric({
+    const answerUsd = (period: cdk.Duration) =>
+      new cloudwatch.Metric({
         namespace: METRICS_NAMESPACE,
         metricName: "AgentAnswerUsd",
         dimensionsMap: { service: SERVICE_NAME },
         statistic: "Sum",
-        period: cdk.Duration.days(1),
-      }),
+        period,
+      });
+    // A 1-day period is evaluated after the UTC day closes, so the alarm fires up to ~24 h after spend passes $2.
+    new cloudwatch.Alarm(this, "UsdPerDay", {
+      alarmName: "oracle-la-agent-usd-per-day",
+      alarmDescription: `Agent estimated model spend over $${USD_PER_DAY_THRESHOLD} in a UTC day`,
+      metric: answerUsd(cdk.Duration.days(1)),
       threshold: USD_PER_DAY_THRESHOLD,
       evaluationPeriods: 1,
       comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new actions.SnsAction(topic));
+    // Burst: $1 or more within one 5-minute period. The period is evaluated after it closes, plus CloudWatch's
+    // evaluation delay, so the alarm fires within about 10 minutes of the spend.
+    new cloudwatch.Alarm(this, "UsdBurst", {
+      alarmName: "oracle-la-agent-usd-burst",
+      alarmDescription: `Agent estimated model spend of $${USD_BURST_THRESHOLD} or more within 5 minutes`,
+      metric: answerUsd(cdk.Duration.minutes(5)),
+      threshold: USD_BURST_THRESHOLD,
+      evaluationPeriods: 1,
+      comparisonOperator:
+        cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
       treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
     }).addAlarmAction(new actions.SnsAction(topic));
 

@@ -96,7 +96,7 @@ describe("OracleLaAgentApi", () => {
   }, 120_000);
   afterAll(() => rmSync(outdir, { recursive: true, force: true }));
 
-  test("resources: one function, its role and policy, log group, HTTP API, two routes, one authorizer, three permissions, two alarms", () => {
+  test("resources: one function, its role and policy, log group, HTTP API, two routes, one authorizer, three permissions, three alarms", () => {
     const counts: Record<string, number> = {};
     for (const r of Object.values(t.toJSON().Resources as Record<string, Res>))
       counts[r.Type] = (counts[r.Type] ?? 0) + 1;
@@ -111,7 +111,7 @@ describe("OracleLaAgentApi", () => {
       "AWS::ApiGatewayV2::Route": 2,
       "AWS::ApiGatewayV2::Authorizer": 1,
       "AWS::Lambda::Permission": 3,
-      "AWS::CloudWatch::Alarm": 2,
+      "AWS::CloudWatch::Alarm": 3,
     });
     t.hasOutput("AgentApiUrl", {});
   });
@@ -369,7 +369,7 @@ describe("OracleLaAgentApi", () => {
     ).toEqual([]);
   });
 
-  test("alarms: 5xx >= 1 in 5 min, and AgentAnswerUsd (service dimension) Sum over 1 day > 2; both to the alert topic", () => {
+  test("alarms: 5xx >= 1 in 5 min, and AgentAnswerUsd (service dimension) Sum over 1 day > 2 and over 5 min >= 1; all to the alert topic", () => {
     const topic = { Ref: paramFor(t, TOPIC_PARAM) };
     const alarms = Object.fromEntries(
       resources(t, "AWS::CloudWatch::Alarm").map((a) => [
@@ -379,6 +379,7 @@ describe("OracleLaAgentApi", () => {
     );
     expect(Object.keys(alarms).sort()).toEqual([
       "oracle-la-agent-http-api-5xx",
+      "oracle-la-agent-usd-burst",
       "oracle-la-agent-usd-per-day",
     ]);
     expect(alarms["oracle-la-agent-http-api-5xx"]).toMatchObject({
@@ -408,6 +409,18 @@ describe("OracleLaAgentApi", () => {
       EvaluationPeriods: 1,
       Threshold: 2,
       ComparisonOperator: "GreaterThanThreshold",
+      TreatMissingData: "notBreaching",
+      AlarmActions: [topic],
+    });
+    expect(alarms["oracle-la-agent-usd-burst"]).toMatchObject({
+      Namespace: "OracleLa",
+      MetricName: "AgentAnswerUsd",
+      Dimensions: [{ Name: "service", Value: "oracle-la-agent" }],
+      Statistic: "Sum",
+      Period: 300,
+      EvaluationPeriods: 1,
+      Threshold: 1,
+      ComparisonOperator: "GreaterThanOrEqualToThreshold",
       TreatMissingData: "notBreaching",
       AlarmActions: [topic],
     });
