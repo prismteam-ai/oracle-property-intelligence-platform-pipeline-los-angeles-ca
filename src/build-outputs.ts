@@ -88,6 +88,9 @@ import {
 import { fileEntry, recordedSeedFileEntries } from "./manifest-files.ts";
 import { runReadiness } from "./readiness.ts";
 import {
+  baseYearCutoff,
+  FIRST_BASE_YEAR,
+  LAND_BASE_YEAR_STATS_SQL,
   personalDataColumns,
   propertyTableSql,
   sqlLiteral as lit,
@@ -355,6 +358,8 @@ const stats = (
   count(property_effective_built_year) eyb,
   count(last_recording_date) rec,
   count(*) filter (where owner_unchanged_10y_proxy) unchanged10,
+  count(*) filter (where ownership_base_year_10y_proxy) baseyear10,
+  count(*) filter (where owner_unchanged_10y_proxy and ownership_base_year_10y_proxy) both10,
   min(property_structure_built_year) yb_min, max(property_structure_built_year) yb_max
   from property`)
 )[0]!;
@@ -366,6 +371,13 @@ const seedRows = Number(
     await q(`select count(*) n from read_csv(${lit(seedRunPath)}, header=true)`)
   )[0]!.n,
 );
+const landBaseYear = Object.fromEntries(
+  Object.entries((await q(LAND_BASE_YEAR_STATS_SQL))[0]!).map(([k, v]) => [
+    k,
+    v === null ? null : Number(v),
+  ]),
+);
+const cutoff = baseYearCutoff(referenceDate);
 const byUse = await q(
   `select source_use_type, count(*) n from property group by 1 order by 2 desc`,
 );
@@ -740,6 +752,10 @@ const makeManifest = (rel: Awaited<ReturnType<typeof relationTo>>) => ({
     with_effective_year_built_pct: share("eyb"),
     with_last_recording_date: Number(stats.rec),
     owner_unchanged_10y_proxy_true: Number(stats.unchanged10),
+    land_base_year: landBaseYear,
+    ownership_base_year_cutoff: cutoff,
+    ownership_base_year_10y_proxy_true: Number(stats.baseyear10),
+    both_10y_proxies_true: Number(stats.both10),
     year_built_min: stats.yb_min,
     year_built_max: stats.yb_max,
     by_source_use_type: byUse,
@@ -799,10 +815,11 @@ const makeManifest = (rel: Awaited<ReturnType<typeof relationTo>>) => ({
     "PUBLICATION BLOCKER: republication rights under the LA County eGIS Terms of Use ('for informational purposes') are unverified. Nothing may be published until confirmed and approved.",
     "Year built and effective year built are a roof-age PROXY, not roof installation dates. Source value 0 is treated as unknown (null).",
     "last_recording_date is the assessor's latest recorded document date, not necessarily a sale or ownership transfer. owner_unchanged_10y_proxy = last_recording_date <= reference date - 10 years; it can understate (non-transfer recordings) and is null when no date.",
+    `land_base_year is the roll's land base year (Roll_LandBaseYear): the year of the last change in ownership or new construction that reassessed the land (Prop 13). In this roll the label is a fiscal year ending 30 June: an event from July of one year to June of the next carries the later year. 0, years before ${FIRST_BASE_YEAR} and years after the roll year are null (${landBaseYear.null_zero} zero, ${landBaseYear.null_before_1975} before ${FIRST_BASE_YEAR}, ${landBaseYear.null_after_roll_year} after the roll year, ${landBaseYear.null_missing} missing). ownership_base_year_10y_proxy = land_base_year <= ${cutoff}, the latest label whose fiscal year ended at least 10 years before the reference date ${referenceDate}; null when land_base_year is null. A proxy from the County roll, not a sale date: transfers that do not reassess (between spouses, parent to child) keep the old base year, and new construction also reassesses. ${Number(stats.baseyear10)} parcels have it true; ${Number(stats.unchanged10)} have owner_unchanged_10y_proxy true; ${Number(stats.both10)} both.`,
     "out_of_area_owner is null for every row: the open roll has no owner mailing address. Owner mailing data exists only in a secured county service that is not used.",
     "No owner names, mailing addresses or contact fields exist in the source; no person entities and no private owner file were produced.",
     "Coordinates are assessor parcel center points, not rooftop or address-point geocodes; rows without them are left null (not geocoded).",
-    "Lexicon names are taken from the bundled kit catalog (use-neutral-lexicon model-c) without the live Elephant lexicon/MCP; source_* columns, roof_age_basis, coordinate_basis, *_proxy, last_recording_date, tax_rate_area_city, roll_year and assessor_id_formatted are not lexicon fields; property_usage_type/property_type enums are not mapped (raw use code kept).",
+    "Lexicon names are taken from the bundled kit catalog (use-neutral-lexicon model-c) without the live Elephant lexicon/MCP; source_* columns, roof_age_basis, coordinate_basis, *_proxy, last_recording_date, land_base_year, tax_rate_area_city, roll_year and assessor_id_formatted are not lexicon fields; property_usage_type/property_type enums are not mapped (raw use code kept).",
     ...(withPermits
       ? [
           "Permit tables: permit_number, application_received_date, permit_issue_date, unnormalized_address, postal_code, parcel_identifier, license_identifier, license_expiration_date, city_name, state_code and is_owner_builder follow the bundled lexicon; raw LADBS values keep source_* names (they are not lexicon enum values); status_date, the status class, open_since/open_days, the roofing flags, join columns, license class columns, contractors_business_name, the contractor identity columns (contractor_identity_key, canonical_business_name, name_variant_count, identity_permit_count), permit_data_available, effective_roof_year, roof_year_permit_number and the rule versions are not lexicon fields.",

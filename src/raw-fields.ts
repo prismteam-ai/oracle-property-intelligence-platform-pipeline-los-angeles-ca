@@ -31,4 +31,5 @@ export const RAW_FIELDS = [
   "TaxRateArea_CITY",
   "RollYear",
   "RecordingDate",
+  "Roll_LandBaseYear",
 ] as const;

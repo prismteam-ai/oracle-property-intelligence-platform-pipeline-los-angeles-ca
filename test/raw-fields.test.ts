@@ -66,6 +66,12 @@ test("RAW_FIELDS: no duplicates, holds the paging key and the parcel key", () =>
   expect(RAW_FIELDS).toContain("AIN");
 });
 
+test("RAW_FIELDS holds both ownership proxies' sources: the recording date and the land base year", () => {
+  expect(RAW_FIELDS).toContain("RecordingDate");
+  expect(RAW_FIELDS).toContain("Roll_LandBaseYear");
+  expect(RAW_FIELDS).toHaveLength(26);
+});
+
 test("the build SQL runs over exactly RAW_FIELDS", async () => {
   const columns = await buildWith(RAW_FIELDS);
   expect(columns).toContain("parcel_identifier");
