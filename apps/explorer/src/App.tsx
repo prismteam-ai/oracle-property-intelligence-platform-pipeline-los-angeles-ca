@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { createApiClient, type ApiClient } from "@oracle-la/api-client";
-import { loadConfig } from "./config.ts";
+import { createAgentApi, type AgentApi } from "./agent-api.ts";
+import { AskAgent } from "./AskAgent.tsx";
+import { loadConfig, type AppConfig } from "./config.ts";
 import { LongOpen } from "./LongOpen.tsx";
+import { Mcp } from "./Mcp.tsx";
 import { Placeholders } from "./Placeholders.tsx";
 import { RadiusQuery } from "./RadiusQuery.tsx";
 import { Records } from "./Records.tsx";
@@ -15,6 +18,8 @@ const TABS = [
   "Records",
   "Radius query",
   "Long-open permits",
+  "Ask the agent",
+  "MCP",
   "Coming next",
 ] as const;
 type Tab = (typeof TABS)[number];
@@ -24,6 +29,9 @@ export function App() {
   const [conn, setConn] = useState<{
     api: ApiClient;
     loadSources: LoadSources;
+    config: AppConfig;
+    /** Present only when config.json names the agent API. */
+    agent?: { api: AgentApi; warmData: () => Promise<unknown> };
   }>();
   const [error, setError] = useState<string>();
   const [tab, setTab] = useState<Tab>("Run summary");
@@ -31,11 +39,30 @@ export function App() {
     loadConfig()
       .then((c) => {
         const api = createApiClient(c);
-        setConn({ api, loadSources: sourcesLoader(api) });
+        // The warm-up's data requests are sent one HTTP request each (never batched into one).
+        const unbatched = createApiClient({ ...c, batch: false });
+        setConn({
+          api,
+          loadSources: sourcesLoader(api),
+          config: c,
+          ...(c.agentApiUrl
+            ? {
+                agent: {
+                  api: createAgentApi({
+                    agentApiUrl: c.agentApiUrl,
+                    apiToken: c.apiToken,
+                  }),
+                  warmData: () => unbatched.meta.info.query(),
+                },
+              }
+            : {}),
+        });
       })
       .catch((e: Error) => setError(e.message));
   }, []);
   const api = conn?.api;
+  // The agent tab exists only when config.json names the agent API.
+  const tabs = TABS.filter((t) => t !== "Ask the agent" || conn?.agent);
   return (
     <>
       <header>
@@ -50,7 +77,7 @@ export function App() {
         </p>
       </header>
       <nav role="tablist">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t}
             role="tab"
@@ -80,6 +107,19 @@ export function App() {
         {api && tab === "Radius query" && <RadiusQuery api={api} />}
         {conn && tab === "Long-open permits" && (
           <LongOpen api={conn.api} loadSources={conn.loadSources} />
+        )}
+        {conn?.agent && (
+          // Kept mounted (hidden) on other tabs: the conversation lives in this component's state only.
+          <div hidden={tab !== "Ask the agent"}>
+            <AskAgent
+              agent={conn.agent.api}
+              warmData={conn.agent.warmData}
+              active={tab === "Ask the agent"}
+            />
+          </div>
+        )}
+        {conn && tab === "MCP" && (
+          <Mcp apiUrl={conn.config.apiUrl} apiToken={conn.config.apiToken} />
         )}
         {tab === "Coming next" && <Placeholders />}
       </main>

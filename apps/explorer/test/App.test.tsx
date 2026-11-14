@@ -993,11 +993,11 @@ describe("Explorer sources, records and long-open permits", () => {
     ).toBeTruthy();
   });
 
-  test("permits are no longer a placeholder; the remaining placeholders are disabled", async () => {
+  test("permits, the agent and MCP are no longer placeholders; the remaining placeholders are disabled", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("tab", { name: "Coming next" }));
     const cards = screen.getAllByTestId("placeholder");
-    expect(cards).toHaveLength(8);
+    expect(cards).toHaveLength(6);
     for (const c of cards) {
       expect(c.getAttribute("aria-disabled")).toBe("true");
       expect(c.querySelector("button")!.disabled).toBe(true);
@@ -1006,6 +1006,7 @@ describe("Explorer sources, records and long-open permits", () => {
     expect(text).not.toMatch(/not harvested|LADBS later|licen[^s]/i);
     expect(text).toContain("Permits outside the City of Los Angeles");
     expect(text).toContain("BBB");
+    expect(text).not.toMatch(/Agent query|MCP interface/);
   });
 
   test("the run summary shows the permit run's permit counts", async () => {

@@ -1,4 +1,10 @@
-import { expect, request, test } from "@playwright/test";
+import {
+  expect,
+  request,
+  test,
+  type BrowserContext,
+  type Page,
+} from "@playwright/test";
 import type {
   OwnershipBasis,
   SourceKind,
@@ -6,6 +12,18 @@ import type {
   SourceRow,
   Sources,
 } from "@oracle-la/api-client";
+import { TOOL_NAMES } from "../../../packages/agent/src/tools.ts";
+import type { AnswerResponse } from "../src/agent-api.ts";
+import { EXAMPLE } from "../src/mcp-tools.ts";
+import {
+  ANSWERED,
+  FOLLOW_UP,
+  QUESTION_1,
+  QUESTION_2,
+  REFUSED,
+  STANDING_GAPS,
+  STOPPED,
+} from "./agent-fixtures.ts";
 import { BASE_URL, CREDS, ORIGIN } from "./env.ts";
 
 const VN = { lat: 34.199, lon: -118.487 };
@@ -38,6 +56,30 @@ const cell = (v: unknown) => (v === null || v === undefined ? "—" : String(v))
 // Serial by default (a failure stops the run); PW_SERIAL=0 runs tests independently (each loads its own config).
 test.describe.configure({
   mode: process.env.PW_SERIAL === "0" ? "default" : "serial",
+});
+
+/**
+ * HARD RULE: no test ever sends a real request to /agent/answer (it would be a model call). Every browser context
+ * gets this catch-all: a request to /agent/answer that no test mock answered is aborted and fails the test.
+ * (A page route of a test, page.route, takes precedence over this context route.)
+ */
+const unmockedAnswers: string[] = [];
+async function guardAgentAnswer(ctx: BrowserContext) {
+  await ctx.route("**/agent/answer", async (route) => {
+    unmockedAnswers.push(
+      `${route.request().method()} ${route.request().url()}`,
+    );
+    await route.abort("blockedbyclient");
+  });
+}
+test.beforeEach(async ({ context }) => {
+  unmockedAnswers.length = 0;
+  await guardAgentAnswer(context);
+});
+test.afterEach(() => {
+  expect(unmockedAnswers, "requests to /agent/answer without a mock").toEqual(
+    [],
+  );
 });
 type Cfg = { apiUrl: string; apiToken: string };
 let cfgP: Promise<Cfg> | undefined;
@@ -72,6 +114,7 @@ test.describe("without credentials", () => {
     browser,
   }) => {
     const ctx = await browser.newContext(); // credentials in the URL only
+    await guardAgentAnswer(ctx);
     const page = await ctx.newPage();
     const summary = await apiGet("explorer.runSummary");
     await page.goto(
@@ -501,14 +544,17 @@ test.describe("with credentials", () => {
     await page.goto("/");
     await page.getByRole("tab", { name: "Coming next" }).click();
     const cards = page.getByTestId("placeholder");
-    await expect(cards).toHaveCount(8);
+    // The agent and MCP are tabs of their own now: 6 placeholders remain.
+    await expect(cards).toHaveCount(6);
     for (const c of await cards.all()) {
       await expect(c).toHaveAttribute("aria-disabled", "true");
       await expect(c.getByRole("button")).toBeDisabled();
     }
     // Permits are delivered: no card says they are coming, and the long-open view is a tab of its own.
     for (const t of await cards.allInnerTexts())
-      expect(t).not.toMatch(/not harvested|LADBS later/i);
+      expect(t).not.toMatch(
+        /not harvested|LADBS later|Agent query|MCP interface/i,
+      );
     await expect(
       page.getByRole("tab", { name: "Long-open permits" }),
     ).toBeVisible();
@@ -646,5 +692,313 @@ test.describe("with credentials", () => {
     );
     shown.push(await firstRowContractors(changed.items[0]));
     expect(Math.max(...shown)).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Ask the agent (POST /agent/answer always mocked; the panel may call the real /agent/warm and the data API) and
+// the MCP tab.
+
+type Reply = AnswerResponse | { httpStatus: number; body: unknown };
+/** CORS headers for the mocked agent API: the Explorer origin only, as the agent stack's CORS does. */
+const AGENT_CORS = {
+  "access-control-allow-origin": ORIGIN,
+  "access-control-allow-headers": "authorization,content-type",
+  "access-control-allow-methods": "GET,POST,OPTIONS",
+};
+
+/**
+ * Mocks POST /agent/answer with the given replies in order (page route, ahead of the catch-all) and records each
+ * request body; a request with no reply left is aborted and fails the test.
+ */
+async function mockAnswers(page: Page, replies: Reply[], log?: string[]) {
+  const bodies: Array<Record<string, unknown>> = [];
+  await page.route("**/agent/answer", async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS")
+      return route.fulfill({ status: 204, headers: AGENT_CORS });
+    const next = replies.shift();
+    if (!next) {
+      unmockedAnswers.push(
+        `${req.method()} ${req.url()} (no mocked reply left)`,
+      );
+      return route.abort("blockedbyclient");
+    }
+    bodies.push(req.postDataJSON() as Record<string, unknown>);
+    log?.push("answer");
+    const [status, body] =
+      "httpStatus" in next ? [next.httpStatus, next.body] : [200, next];
+    await route.fulfill({
+      status,
+      headers: { ...AGENT_CORS, "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  });
+  return bodies;
+}
+
+/** Records the warm-up traffic in order: "warm:req", "warm:res", "data:req", "data:res" (meta.info). */
+function watchWarmup(page: Page, log: string[]) {
+  const kind = (url: string) =>
+    /\/agent\/warm$/.test(new URL(url).pathname)
+      ? "warm"
+      : /\/trpc\/meta\.info$/.test(new URL(url).pathname)
+        ? "data"
+        : null;
+  page.on("request", (r) => {
+    const k = kind(r.url());
+    if (k && r.method() === "GET") log.push(`${k}:req`);
+  });
+  page.on("response", (r) => {
+    const k = kind(r.url());
+    if (k && r.request().method() === "GET") log.push(`${k}:res`);
+  });
+}
+
+const ask = async (page: Page, q: string) => {
+  await page.getByRole("textbox", { name: /question/i }).fill(q);
+  await page.getByTestId("agent-send").click();
+};
+const count = (log: string[], e: string) => log.filter((x) => x === e).length;
+
+test.describe("Ask the agent (answers mocked) and MCP", () => {
+  test.use({ httpCredentials: CREDS });
+
+  test("10. config.json names the agent API; the tab shows; opening it warms the agent and two data API requests at once; the notice is shown", async ({
+    page,
+  }) => {
+    const cfg = (await (
+      await page.request.get(`${BASE_URL}/config.json`)
+    ).json()) as Cfg & {
+      agentApiUrl?: string;
+    };
+    expect(cfg.agentApiUrl).toMatch(
+      /^https:\/\/[a-z0-9]+\.execute-api\.eu-north-1\.amazonaws\.com$/,
+    );
+    const log: string[] = [];
+    watchWarmup(page, log);
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Ask the agent" }).click();
+    await expect
+      .poll(() => [count(log, "warm:res"), count(log, "data:res")])
+      .toEqual([1, 2]);
+    // Both data requests went out before either answered (sent at once).
+    const data = log.filter((x) => x.startsWith("data:"));
+    expect(data.slice(0, 2)).toEqual(["data:req", "data:req"]);
+    await expect(page.getByTestId("agent-notice")).toHaveText(
+      "Your question, the center and the data the agent reads are sent to Anthropic to answer it.",
+    );
+    await expect(page.getByTestId("agent-send")).toBeEnabled();
+  });
+
+  test("11. an answered reply: markdown text, How I got this collapsed, Sources by kind, Gaps with Always true, unverified ID flagged", async ({
+    page,
+  }) => {
+    const bodies = await mockAnswers(page, [ANSWERED]);
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Ask the agent" }).click();
+    await ask(page, QUESTION_1);
+    const a = page.getByTestId("agent-answer");
+    await expect(a).toHaveAttribute("data-status", "answered");
+    expect(bodies).toEqual([{ question: QUESTION_1 }]);
+    await expect(
+      a.getByTestId("agent-text").locator("strong").first(),
+    ).toHaveText(
+      "115,373 parcels within 5 miles of Van Nuys have roofs older than 15 years.",
+    );
+    await expect(a.getByTestId("agent-text").locator("tbody tr")).toHaveCount(
+      2,
+    );
+    await expect(a.getByTestId("unverified-id")).toHaveText([
+      "2218099999 (unverified)",
+    ]);
+    const how = a.getByTestId("agent-how");
+    await expect(how).not.toHaveAttribute("open", /.*/);
+    await expect(how.getByText(ANSWERED.reasoning)).toBeHidden();
+    await how.locator("summary").click();
+    await expect(how.getByText(ANSWERED.reasoning)).toBeVisible();
+    await expect(a.getByTestId("agent-sources")).toHaveCount(3);
+    for (const r of ANSWERED.records) {
+      const row = a.locator(
+        `[data-testid="agent-sources"][data-kind="${r.kind}"] tbody tr`,
+      );
+      await expect(row.locator("td")).toHaveText([
+        r.id,
+        r.source_name,
+        r.license ?? "—",
+        r.attribution ?? "—",
+        r.collected_at,
+      ]);
+    }
+    await expect(a.getByTestId("agent-gaps").locator("li")).toHaveText(
+      ANSWERED.gaps.slice(STANDING_GAPS.length),
+    );
+    await expect(a.getByTestId("agent-standing-gaps").locator("li")).toHaveText(
+      STANDING_GAPS,
+    );
+    await expect(page.getByRole("textbox", { name: /question/i })).toHaveValue(
+      "",
+    );
+  });
+
+  test("12. a refused reply is a normal message with its gaps; a stopped reply is a plain message and keeps the question", async ({
+    page,
+  }) => {
+    await mockAnswers(page, [
+      REFUSED,
+      STOPPED,
+      { httpStatus: 503, body: { error: "agent not configured" } },
+    ]);
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Ask the agent" }).click();
+    await ask(page, "Who owns parcel 2218022020?");
+    const a = page.getByTestId("agent-answer");
+    await expect(a).toHaveAttribute("data-status", "refused");
+    await expect(a.getByTestId("agent-text")).toHaveText(REFUSED.text);
+    await expect(page.getByTestId("agent-message")).toHaveCount(0);
+    await expect(a.getByTestId("agent-standing-gaps").locator("li")).toHaveText(
+      STANDING_GAPS,
+    );
+
+    await ask(page, QUESTION_1);
+    await expect(page.getByTestId("agent-message")).toContainText(
+      "The answer stopped before it was complete (time_budget)",
+    );
+    await expect(page.getByRole("textbox", { name: /question/i })).toHaveValue(
+      QUESTION_1,
+    );
+    await expect(page.getByTestId("agent-answer")).toHaveCount(1);
+
+    await page.getByTestId("agent-send").click();
+    await expect(page.getByTestId("agent-message")).toContainText(
+      "not available right now (HTTP 503: agent not configured)",
+    );
+    await expect(page.getByRole("textbox", { name: /question/i })).toHaveValue(
+      QUESTION_1,
+    );
+  });
+
+  test("13. a follow-up sends the history, session and signature; New conversation clears them", async ({
+    page,
+  }) => {
+    const bodies = await mockAnswers(page, [ANSWERED, FOLLOW_UP, ANSWERED]);
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Ask the agent" }).click();
+    await ask(page, QUESTION_1);
+    await expect(page.getByTestId("agent-turn")).toHaveCount(1);
+    await ask(page, QUESTION_2);
+    await expect(page.getByTestId("agent-turn")).toHaveCount(2);
+    expect(bodies[1]).toEqual({
+      question: QUESTION_2,
+      history: ANSWERED.history,
+      session: ANSWERED.session,
+      signature: ANSWERED.signature,
+    });
+    // Nothing of the conversation is stored in the browser.
+    expect(
+      await page.evaluate(() => [localStorage.length, sessionStorage.length]),
+    ).toEqual([0, 0]);
+    await page.getByTestId("agent-new").click();
+    await expect(page.getByTestId("agent-turn")).toHaveCount(0);
+    await ask(page, QUESTION_1);
+    await expect(page.getByTestId("agent-turn")).toHaveCount(1);
+    expect(bodies[2]).toEqual({ question: QUESTION_1 });
+  });
+
+  test("14. a question asked before the warm-up answered is held with a waking-up status and sent when both answer", async ({
+    page,
+  }) => {
+    const log: string[] = [];
+    watchWarmup(page, log);
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    // The real /agent/warm, held back until the test releases it.
+    await page.route("**/agent/warm", async (route) => {
+      await released;
+      await route.continue();
+    });
+    const bodies = await mockAnswers(page, [ANSWERED], log);
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Ask the agent" }).click();
+    await ask(page, QUESTION_1);
+    await expect(page.getByTestId("agent-status")).toHaveAttribute(
+      "data-state",
+      "waking",
+    );
+    await expect(page.getByTestId("agent-status")).toContainText("Waking up");
+    await expect(page.getByTestId("agent-send")).toBeEnabled();
+    await expect.poll(() => count(log, "data:res")).toBe(2);
+    expect(bodies).toEqual([]);
+    release();
+    await expect(page.getByTestId("agent-answer")).toHaveAttribute(
+      "data-status",
+      "answered",
+    );
+    // The answer went out only after the warm-up's agent and data responses.
+    expect(log.indexOf("answer")).toBeGreaterThan(log.lastIndexOf("warm:res"));
+    expect(log.indexOf("answer")).toBeGreaterThan(log.lastIndexOf("data:res"));
+  });
+
+  test("15. re-warm: more than 4 minutes after the last data API response, the warm-up runs again before the question", async ({
+    page,
+  }) => {
+    await page.clock.install();
+    const log: string[] = [];
+    watchWarmup(page, log);
+    await mockAnswers(page, [ANSWERED, FOLLOW_UP], log);
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Ask the agent" }).click();
+    await expect.poll(() => count(log, "data:res")).toBe(2);
+    await ask(page, QUESTION_1);
+    await expect(page.getByTestId("agent-turn")).toHaveCount(1);
+    expect(count(log, "warm:req")).toBe(1);
+    await page.clock.fastForward("04:01");
+    await ask(page, QUESTION_2);
+    await expect(page.getByTestId("agent-turn")).toHaveCount(2);
+    expect(count(log, "warm:req")).toBe(2);
+    expect(count(log, "data:req")).toBe(4);
+    // The second question went out after the second warm-up had answered.
+    expect(log.lastIndexOf("answer")).toBeGreaterThan(
+      log.lastIndexOf("data:res"),
+    );
+    expect(log.lastIndexOf("answer")).toBeGreaterThan(
+      log.lastIndexOf("warm:res"),
+    );
+  });
+
+  test("16. the MCP tab lists the server's tools and runs the radius example through the data API in the tool-result shape", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByRole("tab", { name: "MCP" }).click();
+    await expect(page.getByTestId("mcp-tool-name")).toHaveText(TOOL_NAMES);
+    await page.getByTestId("mcp-example-run").click();
+    const pre = page.getByTestId("mcp-example-result");
+    await expect(pre).toBeVisible({ timeout: 30_000 });
+    const result = JSON.parse((await pre.textContent())!) as {
+      content: Array<{ type: string; text: string }>;
+      isError?: boolean;
+    };
+    expect(result.isError).toBeUndefined();
+    expect(result.content.map((c) => c.type)).toEqual(["text"]);
+    const body = JSON.parse(result.content[0]!.text) as {
+      result: { count: number; items: unknown[] };
+      records: unknown[];
+      gaps: string[];
+    };
+    expect(Object.keys(body)).toEqual(["result", "records", "gaps"]);
+    const a = EXAMPLE.arguments;
+    const expected = await apiGet("parcels.search", {
+      lat: a.lat,
+      lon: a.lon,
+      radius_miles: a.radius_miles,
+      threshold_years: a.threshold_years,
+      offset: 0,
+      limit: 1,
+    });
+    expect(body.result.count).toBe(expected.count);
+    expect(body.result.items.length).toBe(Math.min(a.limit, expected.count));
+    expect(body.records.length).toBeGreaterThan(0);
+    expect(body.gaps.length).toBeGreaterThan(0);
   });
 });

@@ -4,6 +4,8 @@ export interface AppConfig {
   apiUrl: string;
   apiToken: string;
   client: string;
+  /** The agent API (OracleLaAgentApi output AgentApiUrl); without it the "Ask the agent" tab is hidden. */
+  agentApiUrl?: string;
 }
 export async function loadConfig(): Promise<AppConfig> {
   const res = await fetch(new URL("/config.json", location.origin), {

@@ -8,8 +8,6 @@ const FUTURE = [
     "Retrieval from two public IPFS gateways",
     "Follows the manifest; nothing is published yet.",
   ],
-  ["Agent query (natural language)", "Not in this increment (no Bedrock)."],
-  ["MCP interface", "Planned over the same SQL views."],
   [
     "Permits outside the City of Los Angeles",
     "LADBS permits cover the City of Los Angeles only; the other 88 jurisdictions have no classified permit source yet.",
