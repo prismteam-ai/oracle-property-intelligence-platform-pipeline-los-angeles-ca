@@ -9,7 +9,8 @@
  *  - each page: plain file name <dataset>_pNNN.json.gz, gzip and JSON sha256 and sizes, row count;
  *  - its request URL is the dataset's resource with the manifest's query; the query selects every
  *    staged field and uses the cache's filter (submitted sets also "issue_date IS NULL");
- *  - paging (ORDER BY permit_nbr LIMIT n OFFSET page × n) and per-dataset totals against
+ *  - paging (ORDER BY permit_nbr, or ORDER BY permit_nbr, :id as the committed fetch script pages, the same
+ *    order on every page of a dataset; LIMIT n OFFSET page × n) and per-dataset totals against
  *    manifest counts[] (expected_rows = fetched_rows) and summary.json rows_per_set;
  *  - the count query's WHERE equals the pages' WHERE;
  *  - the total against summary.json, and every permit_nbr once.
@@ -60,6 +61,11 @@ export interface PermitCacheSummary {
 /** The cache's filter: every set; submitted sets add the second condition. */
 export const PERMIT_FILTER = "upper(work_desc) LIKE '%ROOF%'";
 export const SUBMITTED_FILTER = `${PERMIT_FILTER} AND issue_date IS NULL`;
+/**
+ * Paging orders a permit cache may use: the first fetch script's (permit_nbr), and the committed fetch script's
+ * (permit_nbr, :id, unique per row; scripts/ladbs-permits/fetch.mjs).
+ */
+export const PERMIT_PAGE_ORDERS = ["permit_nbr", "permit_nbr, :id"] as const;
 /** Cache files whose sha256 the run manifest records. */
 export const PERMIT_CACHE_FILES = [
   "manifest.json",
@@ -124,7 +130,12 @@ function checkPermitManifest(
       throw new Error(
         `${c.dataset}: ${rows} page rows, expected ${c.expected_rows}, fetched ${c.fetched_rows}, summary ${set.rows}`,
       );
-    checkPaging(pages, "permit_nbr", c.dataset);
+    // Every page of a dataset uses the order of its first page; any other order fails in checkPaging.
+    const order =
+      PERMIT_PAGE_ORDERS.find((o) =>
+        pages[0]!.query.includes(` ORDER BY ${o} LIMIT `),
+      ) ?? PERMIT_PAGE_ORDERS[0];
+    checkPaging(pages, order, c.dataset);
     for (const p of pages) {
       if (p.file !== `${c.dataset}_p${String(p.page).padStart(3, "0")}.json.gz`)
         throw new Error(

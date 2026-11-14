@@ -165,6 +165,57 @@ test.each(breaks)("fails on a %s mismatch", async (_n, breakIt, msg) => {
   await expect(stagePermits(dir, out)).rejects.toThrow(msg);
 });
 
+/** Page every dataset (or only the pages `which` picks) by "permit_nbr, :id", as the committed fetch script does. */
+const reorder = (
+  f: ReturnType<typeof makePermitCache>,
+  which: (p: { dataset: string; page: number }) => boolean = () => true,
+) => {
+  for (const p of f.manifest.pages.filter(which)) {
+    p.query = p.query.replace(
+      " ORDER BY permit_nbr LIMIT ",
+      " ORDER BY permit_nbr, :id LIMIT ",
+    );
+    p.url = resourceUrl(p.dataset, p.query);
+  }
+};
+
+test("stages a cache paged by permit_nbr, :id (the committed fetch script's order) like the first order", async () => {
+  await stagePermits(dir, out);
+  const before = staged().map((r) => r.permit_nbr);
+  reorder(fx);
+  fx.write();
+  expect(
+    fx.manifest.pages.every((p) =>
+      p.query.includes(" ORDER BY permit_nbr, :id LIMIT "),
+    ),
+  ).toBe(true);
+  await stagePermits(dir, out);
+  expect(staged().map((r) => r.permit_nbr)).toEqual(before);
+});
+
+test("fails when the pages of one dataset mix the two orders", async () => {
+  reorder(fx, (p) => p.dataset === "aaaa-1111" && p.page === 1);
+  fx.write();
+  await expect(stagePermits(dir, out)).rejects.toThrow(
+    // Page 0 sets the dataset's order (permit_nbr); page 1 breaks it.
+    /aaaa-1111_p001\.json\.gz: query is not ordered by permit_nbr$/,
+  );
+});
+
+test("fails on any other paging order", async () => {
+  for (const p of fx.manifest.pages) {
+    p.query = p.query.replace(
+      " ORDER BY permit_nbr LIMIT ",
+      " ORDER BY :id LIMIT ",
+    );
+    p.url = resourceUrl(p.dataset, p.query);
+  }
+  fx.write();
+  await expect(stagePermits(dir, out)).rejects.toThrow(
+    /query is not ordered by permit_nbr/,
+  );
+});
+
 test("fails when a permit_nbr appears twice", async () => {
   rewritePage(dir, fx.manifest.pages[1]!, [permitRow("10000-10000-00001")]);
   fx.write();
