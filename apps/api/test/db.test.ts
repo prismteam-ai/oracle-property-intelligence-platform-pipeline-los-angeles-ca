@@ -1,20 +1,34 @@
-import { createReadStream, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { createReadStream, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { mockClient } from "aws-sdk-client-mock";
-import { beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { openDb, parsePermitFiles, type PermitFile } from "../src/db.ts";
-import { FIXTURE, PERMIT_FILE_NAMES, writeFixture } from "./fixture.ts";
+import {
+  FIXTURE,
+  type FixtureRun,
+  PERMIT_FILE_NAMES,
+  writeFixture,
+} from "./fixture.ts";
+import { tempFolders } from "./helpers.ts";
 
 /** Always runs: S3 copy (streamed), sha256 check and DuckDB lockdown over the synthetic fixture run. */
 describe("openDb from S3", () => {
   let dir: string;
   let parquetSha256: string;
   let permitFiles: PermitFile[];
-  beforeAll(
-    async () => ({ dir, parquetSha256, permitFiles } = await writeFixture()),
-  );
+  let run: FixtureRun | undefined;
+  // The DuckDB temp folders (each S3 copy lands in one) and the fixture run; removed after the last test, also
+  // when a test or the beforeAll fails.
+  const tmp = tempFolders();
+  afterAll(() => {
+    tmp.removeAll();
+    run?.remove();
+  });
+  beforeAll(async () => {
+    run = await writeFixture();
+    ({ dir, parquetSha256, permitFiles } = run);
+  });
   // The body is a stream, as the SDK returns in Node. Buffering it whole would call transformToByteArray.
   const body = (name: string) =>
     ({
@@ -30,7 +44,7 @@ describe("openDb from S3", () => {
     s3.on(GetObjectCommand).callsFake((input: { Key: string }) =>
       body(input.Key.split("/").pop()!),
     );
-    const tmpDir = mkdtempSync(join(tmpdir(), "api-tmp-"));
+    const tmpDir = tmp.make();
     const db = await openDb(
       {
         runId: FIXTURE.runId,
@@ -102,7 +116,7 @@ describe("openDb from S3", () => {
           permitFiles,
           bucket: "b",
           prefix: "p/",
-          tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
+          tmpDir: tmp.make(),
         },
         new S3Client({}),
       ),
@@ -120,7 +134,7 @@ describe("openDb from S3", () => {
             ),
             bucket: "b",
             prefix: "p/",
-            tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
+            tmpDir: tmp.make(),
           },
           new S3Client({}),
         ),
@@ -140,7 +154,7 @@ describe("openDb from S3", () => {
             permitFiles,
             bucket: "b",
             prefix: "p/",
-            tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
+            tmpDir: tmp.make(),
           },
           new S3Client({}),
         ),
@@ -161,7 +175,7 @@ describe("openDb from S3", () => {
             permitFiles: bad,
             bucket: "b",
             prefix: "p/",
-            tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
+            tmpDir: tmp.make(),
           },
           new S3Client({}),
         ),

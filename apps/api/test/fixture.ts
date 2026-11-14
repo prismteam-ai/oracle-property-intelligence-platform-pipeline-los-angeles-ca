@@ -29,7 +29,7 @@
  * writePermitFixture() writes a third run for the permit routes (see PERMIT_FIXTURE).
  */
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DuckDBInstance } from "@duckdb/node-api";
@@ -108,11 +108,15 @@ const row = (
     x,
   );
 
-/** A fixture run: its directory, its Parquet sha256 and its permit files. */
+/**
+ * A fixture run: its directory, its Parquet sha256 and its permit files. remove() deletes the directory and
+ * everything in it; each caller calls it when done, in an afterAll (it also runs when a test fails).
+ */
 export interface FixtureRun {
   dir: string;
   parquetSha256: string;
   permitFiles: PermitFile[];
+  remove(): void;
 }
 
 /** Write the fixture files; returns the directory and the Parquet sha256. */
@@ -159,7 +163,7 @@ export async function writeNearestFixture(): Promise<FixtureRun> {
 }
 
 /** The permit tables of a run, as SELECT statements; omitted: empty tables with the stored columns. */
-interface PermitTables {
+export interface PermitTables {
   permits: string;
   permit_parcels: string;
   permit_contractors: string;
@@ -176,12 +180,35 @@ export const PERMIT_FILE_NAMES = {
   permit_contractors: "fixture_ladbs_permit_contractors.parquet",
 } as const;
 
-async function writeRun(
+/**
+ * Write a run into a new api-fixture- folder under parent. If writing fails, the folder is removed before the
+ * error is rethrown, so a failed fixture leaves nothing behind. Exported for its test (helpers.test.ts).
+ */
+export async function writeRun(
   selectSql: string,
   permitTables: PermitTables = emptyPermits(),
   manifestExtra: Record<string, unknown> = {},
+  parent = tmpdir(),
 ): Promise<FixtureRun> {
-  const dir = mkdtempSync(join(tmpdir(), "api-fixture-"));
+  const dir = mkdtempSync(join(parent, "api-fixture-"));
+  const remove = () => rmSync(dir, { recursive: true, force: true });
+  try {
+    return {
+      ...(await writeRunFiles(dir, selectSql, permitTables, manifestExtra)),
+      remove,
+    };
+  } catch (e) {
+    remove();
+    throw e;
+  }
+}
+
+async function writeRunFiles(
+  dir: string,
+  selectSql: string,
+  permitTables: PermitTables,
+  manifestExtra: Record<string, unknown>,
+): Promise<Omit<FixtureRun, "remove">> {
   const parquet = join(dir, FIXTURE.parquetFile);
   const c = await (await DuckDBInstance.create(":memory:")).connect();
   await c.run(`copy (${selectSql}) to ${lit(parquet)} (format parquet)`);

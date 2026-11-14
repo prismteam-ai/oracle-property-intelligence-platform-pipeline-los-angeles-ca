@@ -1,6 +1,3 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
   afterAll,
   beforeAll,
@@ -28,6 +25,7 @@ import {
   RUN_ID,
   stageRealData,
   type Staged,
+  tempFolders,
 } from "./helpers.ts";
 
 const VAN_NUYS = { lat: 34.199, lon: -118.487 };
@@ -65,8 +63,13 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
   let db: Db;
   const metrics: Array<[string, number]> = [];
   let staged: Staged | undefined;
-  // Runs after the last test, also when a test or the beforeAll fails, so the copy never outlives the file.
-  afterAll(() => staged?.remove());
+  const tmp = tempFolders();
+  // Runs after the last test, also when a test or the beforeAll fails, so neither the copy nor the DuckDB temp
+  // folder outlives the file.
+  afterAll(() => {
+    staged?.remove();
+    tmp.removeAll();
+  });
   beforeAll(async () => {
     staged = stageRealData();
     db = await openDb({
@@ -75,7 +78,7 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       parquetFile: PARQUET_FILE,
       permitFiles: PERMIT_FILES,
       localDir: staged.dir,
-      tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
+      tmpDir: tmp.make(),
     });
     const ctx: Ctx = {
       db: async () => db,

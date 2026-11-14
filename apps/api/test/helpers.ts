@@ -38,6 +38,34 @@ export const hasRealData =
   existsSync(parquet) &&
   (latest.permit_files ?? []).every((f) => existsSync(join(REPO, f.path)));
 
+/** The temporary folders a test file makes; removeAll() deletes each one and everything in it. */
+export interface TempFolders {
+  make(): string;
+  removeAll(): void;
+}
+
+/**
+ * New temporary folders named prefix + a random suffix under parent (the DuckDB temp folders, api-tmp-). Each
+ * caller calls removeAll() in an afterAll, which also runs when a test or a beforeAll fails.
+ */
+export function tempFolders(
+  prefix = "api-tmp-",
+  parent = tmpdir(),
+): TempFolders {
+  const dirs: string[] = [];
+  return {
+    make() {
+      const dir = mkdtempSync(join(parent, prefix));
+      dirs.push(dir);
+      return dir;
+    },
+    removeAll() {
+      for (const dir of dirs.splice(0))
+        rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
 /** A staged copy of run files in its own temporary folder; remove() deletes the folder and everything in it. */
 export interface Staged {
   dir: string;

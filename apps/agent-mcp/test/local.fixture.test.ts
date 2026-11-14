@@ -111,6 +111,16 @@ async function fixtureRepo(f: FixtureRun): Promise<string> {
   return repo;
 }
 
+/** A fixture run as a checkout; the run's own folder is removed once copied, also when the copy fails. */
+async function checkoutOf(write: () => Promise<FixtureRun>): Promise<string> {
+  const f = await write();
+  try {
+    return await fixtureRepo(f);
+  } finally {
+    f.remove();
+  }
+}
+
 /** The queries with a counter on explorer.sources (explicit members: the caller is a proxy). */
 function countingSources(q: DataQueries): {
   queries: DataQueries;
@@ -136,10 +146,10 @@ beforeAll(async () => {
     throw new Error("network is disabled in tests");
   });
   data = await openLocalData({
-    repoRoot: await fixtureRepo(await writeFixture()),
+    repoRoot: await checkoutOf(writeFixture),
   });
   permitData = await openLocalData({
-    repoRoot: await fixtureRepo(await writePermitFixture()),
+    repoRoot: await checkoutOf(writePermitFixture),
   });
 });
 /** Scratch checkouts for the missing-data case, inside this test folder; removed afterwards. */

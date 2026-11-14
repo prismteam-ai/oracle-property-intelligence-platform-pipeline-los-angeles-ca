@@ -1,7 +1,4 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { PlaceIndex as SharedPlaceIndex } from "@oracle-la/views";
 // The agent package's export, by relative path (apps/api does not depend on @oracle-la/agent).
 import { PlaceIndex as AgentPlaceIndex } from "../../../packages/agent/src/index.ts";
@@ -33,6 +30,24 @@ import {
   writePermitFixture,
   writePlacesFixture,
 } from "./fixture.ts";
+import { tempFolders } from "./helpers.ts";
+
+/**
+ * Every temporary folder this file makes: the DuckDB temp folders and the fixture runs. Removed after the last
+ * test of the file, also when a test or a beforeAll fails.
+ */
+const tmp = tempFolders();
+const runs: FixtureRun[] = [];
+afterAll(() => {
+  tmp.removeAll();
+  for (const r of runs.splice(0)) r.remove();
+});
+/** Write a fixture run that the afterAll above removes. */
+async function fixture(write: () => Promise<FixtureRun>): Promise<FixtureRun> {
+  const r = await write();
+  runs.push(r);
+  return r;
+}
 
 /** A caller over a fixture run; metrics are collected into `metrics`; every SQL statement run is in `queries`. */
 async function callerFor(
@@ -46,7 +61,7 @@ async function callerFor(
     parquetFile: FIXTURE.parquetFile,
     permitFiles: f.permitFiles,
     localDir: f.dir,
-    tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
+    tmpDir: tmp.make(),
   });
   const db: typeof opened = {
     ...opened,
@@ -74,7 +89,7 @@ describe("routers on the synthetic fixture", () => {
   let caller: ReturnType<typeof appRouter.createCaller>;
   const P = FIXTURE.point;
   beforeAll(async () => {
-    caller = await callerFor(await writeFixture());
+    caller = await callerFor(await fixture(writeFixture));
   });
 
   test("meta.info and runSummary", async () => {
@@ -404,7 +419,7 @@ describe("points cap on a generated run", () => {
   const metrics: Array<[string, number]> = [];
   const P = FIXTURE.point;
   beforeAll(async () => {
-    caller = await callerFor(await writeNearestFixture(), metrics);
+    caller = await callerFor(await fixture(writeNearestFixture), metrics);
   });
   const ids = (from: number, to: number) =>
     Array.from({ length: to - from + 1 }, (_, i) =>
@@ -500,7 +515,7 @@ describe("permit routes on the synthetic permit run", () => {
   const seen: unknown[] = [];
   const keep = <T>(x: T): T => (seen.push(x), x);
   beforeAll(async () => {
-    caller = await callerFor(await writePermitFixture());
+    caller = await callerFor(await fixture(writePermitFixture));
   });
   const longOpen = async (
     i: Partial<Parameters<typeof caller.permits.longOpen>[0]> = {},
@@ -1396,7 +1411,7 @@ describe("permit routes on the synthetic permit run", () => {
     const db = await openDb({
       runId: FIXTURE.runId,
       ...(await (async () => {
-        const f = await writePermitFixture();
+        const f = await fixture(writePermitFixture);
         return {
           parquetSha256: f.parquetSha256,
           permitFiles: f.permitFiles,
@@ -1404,7 +1419,7 @@ describe("permit routes on the synthetic permit run", () => {
         };
       })()),
       parquetFile: FIXTURE.parquetFile,
-      tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
+      tmpDir: tmp.make(),
     });
     const cols = (await db.rows(
       "select table_name, column_name from information_schema.columns where table_schema = 'oracle' and table_name like 'v_%'",
@@ -1430,7 +1445,7 @@ describe("places.resolve on the synthetic places run", () => {
   const queries: string[] = [];
   const PLACE_VALUES = /^select 'jurisdiction' as basis/;
   beforeAll(async () => {
-    run = await writePlacesFixture();
+    run = await fixture(writePlacesFixture);
     caller = await callerFor(run, [], queries);
   });
   const resolve = (name: string) => caller.places.resolve({ name });
@@ -1534,7 +1549,7 @@ describe("places.resolve on the synthetic places run", () => {
       parquetFile: FIXTURE.parquetFile,
       permitFiles: run.permitFiles,
       localDir: run.dir,
-      tmpDir: mkdtempSync(join(tmpdir(), "api-tmp-")),
+      tmpDir: tmp.make(),
     });
     const agent = new AgentPlaceIndex(db);
     for (const name of [
