@@ -2368,6 +2368,23 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
       re.test("The permitted roof is only in the City of Los Angeles."),
     ).toBe(false);
   });
+
+  test('d (§3e.88.2): "permit data doesn\'t cover <place>" (run 2 on 15f49d8) passes the outside_city_of_la text check; "doesn\'t cover every parcel in <place>" does not', () => {
+    const re = GAPS.outside_city_of_la.inText("Pasadena");
+    // run-2-d-pasadena-outside-city.json on 15f49d8, the sentence that states the gap.
+    expect(
+      re.test(
+        "None of them has an open roofing permit, because the City of Los Angeles permit data doesn't cover Pasadena.",
+      ),
+    ).toBe(true);
+    expect(re.test("The permit data doesn’t cover Pasadena.")).toBe(true);
+    expect(re.test("The permit data does not cover Pasadena.")).toBe(true);
+    expect(
+      re.test(
+        "The City of Los Angeles permit data doesn't cover every parcel in Pasadena.",
+      ),
+    ).toBe(false);
+  });
 });
 
 /** A point near Van Nuys that no resolve_place call produced (prompt i's search without a resolution). */
