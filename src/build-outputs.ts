@@ -10,11 +10,20 @@
  *
  * A permit run (config permits_harvested, input roll-cache) also stages the LADBS permit and
  * contractor caches (src/stage-permits.ts, src/stage-contractors.ts) and builds the permit tables
- * and the effective roof year (src/permit-sql.ts). Its run ID is the latest generated_at of the
- * three caches; its reference date is the permit cache's generated_at date.
+ * and the effective roof year (src/permit-sql.ts). Its reference date is the permit cache's
+ * generated_at date.
  *
- * --dry-run builds everything into data/work/<run_id>/dry-run/ and writes nothing under runs/,
- * data/out/ or data/seeds/, and no history line.
+ * Run ID <T>-b<D> (src/run-config.ts): T is the latest generated_at of the caches (the raw run
+ * directory's name for the pilot), D the first 12 hex characters of the build digest over the
+ * Parquet files and the run manifest. The build writes into data/work/<T>/build/, computes D, then
+ * moves the files to data/out/<ID>/. Parquet files identical to a run recorded before the build
+ * digest are that run: nothing is added, and its ID is named. The manifest and the history row
+ * record run_kind, rebuild_of, source_changes, build_digest and schema_changes against the
+ * previous run (src/run-history.ts).
+ *
+ * --dry-run builds the same files and computes the same ID, moves them to data/work/<ID>/dry-run/
+ * and writes nothing under runs/, data/out/ or data/seeds/, and no history line. Its run manifest
+ * is the one the recorded build would write (recorded paths), with dry_run true.
  *
  * Usage: KIT_DIR=<team kit checkout> node src/build-outputs.ts <raw-run-dir | roll-cache-dir> [run-config.json]
  *          [--permit-cache <dir> --contractor-cache <dir>] [--dry-run]
@@ -34,10 +43,15 @@ import { DuckDBInstance } from "@duckdb/node-api";
 import { parse } from "yaml";
 import { guardOrThrow } from "./scope-guard.ts";
 import {
+  buildDigest,
   isCountyWide,
+  isUnder,
   loadRunConfig,
+  manifestDigestSha256,
   referenceDateOf,
-  runIdFromCaches,
+  RUN_ID_PLACEHOLDER,
+  runIdOf,
+  runTimeFromCaches,
   whereClause,
 } from "./run-config.ts";
 import {
@@ -64,7 +78,7 @@ import {
   stageCache,
   type CachePage,
 } from "./stage-cache.ts";
-import { fileEntry, seedFileEntries } from "./manifest-files.ts";
+import { fileEntry, recordedSeedFileEntries } from "./manifest-files.ts";
 import { runReadiness } from "./readiness.ts";
 import {
   personalDataColumns,
@@ -73,9 +87,16 @@ import {
 } from "./property-sql.ts";
 import {
   appendRunHistory,
+  hasSameFiles,
+  inputCacheDigests,
   planHistory,
   readHistory,
+  rebuildFields,
+  schemaChanges,
   type HistoryFile,
+  type HistoryRow,
+  type InputManifestLike,
+  type ParquetColumn,
 } from "./run-history.ts";
 
 const USAGE =
@@ -121,16 +142,16 @@ if (
   throw new Error(
     `a permit run reads the roll cache, both --permit-cache and --contractor-cache, and config permit_sources\n${USAGE}`,
   );
-// Pilot: the raw run directory's name. Roll cache: the cache summary's generated_at. Permit run:
-// the latest generated_at of the roll, permit and contractor caches.
+// The run ID's time part. Pilot: the raw run directory's name. Roll cache: the cache summary's
+// generated_at. Permit run: the latest generated_at of the roll, permit and contractor caches.
 const cacheSummary = fromCache ? readCacheSummary(rawDir) : undefined;
 const permitCache = withPermits ? readPermitCache(permitCacheDir!) : undefined;
 const contractorCache = withPermits
   ? readContractorCache(contractorCacheDir!)
   : undefined;
-const runId =
+const runTime =
   permitCache && contractorCache && cacheSummary
-    ? runIdFromCaches([
+    ? runTimeFromCaches([
         cacheSummary.generated_at,
         permitCache.summary.generated_at,
         contractorCache.summary.generated_at,
@@ -147,16 +168,14 @@ const fetchSummary = fromCache
       downloaded_rows: number;
       count_request_url: string;
     });
-const workDir = join("data", "work", runId);
-// A dry run writes only under data/work/<run_id>/dry-run/ (cleared first).
-const outDir = dryRun ? join(workDir, "dry-run") : join("data", "out", runId);
+const workDir = join("data", "work", runTime);
+// Every output file is written here first (cleared first); the run ID is known only once they exist.
+const buildDir = join(workDir, "build");
+rmSync(buildDir, { recursive: true, force: true });
+mkdirSync(buildDir, { recursive: true });
+// The recorded data folder, named with the placeholder until the build digest gives the ID.
+const recordedOutDir = join("data", "out", RUN_ID_PLACEHOLDER);
 const seedDir = join("data", "seeds");
-const runsDir = dryRun ? outDir : join("runs", runId);
-if (dryRun) rmSync(outDir, { recursive: true, force: true });
-for (const d of dryRun
-  ? [workDir, outDir]
-  : [workDir, outDir, seedDir, runsDir])
-  mkdirSync(d, { recursive: true });
 
 const ndjson = join(workDir, "rows.ndjson");
 let receipts: Awaited<ReturnType<typeof stageRaw>>["receipts"] = [];
@@ -182,9 +201,11 @@ if (fromCache) {
 }
 
 const parquetName = `los-angeles_property_roll${cfg.roll_year}${countyWide ? "" : "_slice"}.parquet`;
-const parquetPath = join(outDir, parquetName);
-const seedRunPath = join(outDir, "los-angeles-seed.csv");
+const parquetPath = join(buildDir, parquetName);
+const seedRunPath = join(buildDir, "los-angeles-seed.csv");
 const seedPath = join(seedDir, "los-angeles.csv");
+/** The recorded path of a file written in buildDir. */
+const recordedPath = (path: string) => join(recordedOutDir, basename(path));
 
 // File-backed under data/work, so a county-size build can spill to disk instead of failing.
 const dbPath = join(workDir, "build.duckdb");
@@ -199,6 +220,8 @@ const q = async (sql: string) =>
   (await c.runAndReadAll(sql)).getRowObjectsJson() as Array<
     Record<string, unknown>
   >;
+const sha256File = (path: string) =>
+  createHash("sha256").update(readFileSync(path)).digest("hex");
 
 // Column types come from every row of a county-size file, not only the first sample.
 await c.run(
@@ -282,12 +305,11 @@ const dupes = await q(
 );
 if (Number(dupes[0]!.d) !== 0) throw new Error("duplicate parcel_identifier");
 
-// The Parquet is written next to its final path first, so a recorded run's file is never replaced.
-// A run already in the history with the same Parquet is not recorded again: its Parquet, seed,
-// manifest and history row stay as they are. The same run ID with a different Parquet fails.
-const parquetPartial = `${parquetPath}.partial`;
+// Every file is written in buildDir; a recorded run's files are never replaced. A run already in
+// the history with the same files is not recorded again: its Parquet, seed, manifest and history
+// row stay as they are. The same run ID with a different Parquet fails.
 await c.run(
-  `copy property to ${lit(parquetPartial)} (format parquet, compression zstd)`,
+  `copy property to ${lit(parquetPath)} (format parquet, compression zstd)`,
 );
 // Permit run: the three permit tables, each next to its final path first, as the property file.
 const PERMIT_PARQUETS = [
@@ -306,72 +328,18 @@ const PERMIT_PARQUETS = [
 const permitFiles: HistoryFile[] = [];
 if (withPermits)
   for (const [table, role, name] of PERMIT_PARQUETS) {
-    const path = join(outDir, name);
+    const path = join(buildDir, name);
     await c.run(
-      `copy ${table} to ${lit(`${path}.partial`)} (format parquet, compression zstd)`,
+      `copy ${table} to ${lit(path)} (format parquet, compression zstd)`,
     );
-    permitFiles.push({
-      role,
-      path,
-      sha256: createHash("sha256")
-        .update(readFileSync(`${path}.partial`))
-        .digest("hex"),
-    });
+    permitFiles.push({ role, path, sha256: sha256File(path) });
   }
-const partials = [
-  parquetPartial,
-  ...permitFiles.map((f) => `${f.path}.partial`),
-];
 const historyPath = join("runs", "run_history.jsonl");
-const parquetSha256 = createHash("sha256")
-  .update(readFileSync(parquetPartial))
-  .digest("hex");
-let historyPlan: ReturnType<typeof planHistory>;
-try {
-  // A dry run records nothing; its delta compares with the latest recorded run.
-  historyPlan = dryRun
-    ? {
-        kind: "new",
-        previous: readHistory(historyPath)
-          .filter((r) => r.run_id !== runId)
-          .at(-1),
-      }
-    : planHistory(
-        readHistory(historyPath),
-        runId,
-        parquetSha256,
-        withPermits ? permitFiles : undefined,
-      );
-} catch (err) {
-  for (const f of partials) rmSync(f);
-  throw err;
-}
-if (historyPlan.kind === "recorded") {
-  for (const f of partials) rmSync(f);
-  console.log(
-    JSON.stringify(
-      {
-        run_id: runId,
-        already_recorded: true,
-        parquet: parquetPath,
-        parquet_sha256: parquetSha256,
-        manifest: historyPlan.row.manifest_path,
-        note: "same run ID and same Parquet sha256: no history row added; Parquet, seed and manifest left as recorded",
-      },
-      null,
-      2,
-    ),
-  );
-  process.exit(0);
-}
-for (const f of partials) renameSync(f, f.slice(0, -".partial".length));
+const parquetSha256 = sha256File(parquetPath);
+const history = readHistory(historyPath);
 
 await c.run(`copy (select parcel_identifier as parcel_id, request_identifier as source_identifier, unnormalized_address as situs_address,
   assessor_id_formatted, roll_year, latitude, longitude from property order by parcel_id) to ${lit(seedRunPath)} (header, delimiter ',')`);
-if (!dryRun) {
-  if (existsSync(seedPath)) console.log(`replacing existing ${seedPath}`);
-  copyFileSync(seedRunPath, seedPath);
-}
 
 const stats = (
   await q(`select count(*) n,
@@ -394,27 +362,6 @@ const seedRows = Number(
 const byUse = await q(
   `select source_use_type, count(*) n from property group by 1 order by 2 desc`,
 );
-
-// Delta against the previous run in run history (by parcel identifier and file digest).
-const prev = historyPlan.previous;
-let delta: Record<string, unknown> = {
-  previous_run_id: null,
-  note: "first run; every row is new",
-  added: parquetRows,
-  removed: 0,
-};
-if (prev?.parquet_path && existsSync(prev.parquet_path)) {
-  const d = (
-    await q(`select
-    (select count(*) from read_parquet(${lit(parquetPath)}) n where n.parcel_identifier not in (select parcel_identifier from read_parquet(${lit(prev.parquet_path)}))) added,
-    (select count(*) from read_parquet(${lit(prev.parquet_path)}) o where o.parcel_identifier not in (select parcel_identifier from read_parquet(${lit(parquetPath)}))) removed`)
-  )[0]!;
-  delta = {
-    previous_run_id: prev.run_id,
-    added: Number(d.added),
-    removed: Number(d.removed),
-  };
-}
 
 const catalog = parse(readFileSync(cfg.sources_catalog, "utf8")) as {
   permits: { jurisdictions: Array<{ jurisdiction: string; status: string }> };
@@ -479,8 +426,6 @@ const permitLimitations = (ps: PermitBuildStats): string[] => {
 
 const n = Number(stats.n);
 const share = (k: string) => Math.round((Number(stats[k]) / n) * 10000) / 100;
-const sha256File = (path: string) =>
-  createHash("sha256").update(readFileSync(path)).digest("hex");
 // Roll cache files are recorded by their path inside the cache directory, never an absolute path.
 const cacheFileEntry = (rel: string, rows: number | null, role: string) => ({
   ...fileEntry(join(rawDir, rel), rows, role, false),
@@ -531,10 +476,167 @@ const cache = cacheSummary && {
     body_sha256: p.sha256,
   })),
 };
-const manifest = {
-  run_id: runId,
+const permitCaches = permitStaging && {
+  note: "Paths are relative to each cache directory. The cache files are recorded by sha256; their contents are not copied. The derived roofing flag file in the permit cache is not read.",
+  permits: {
+    name: basename(permitCacheDir!),
+    generated_at: permitCache!.summary.generated_at,
+    files: permitStaging.permits.files,
+    rows: permitStaging.permits.rows,
+    rows_by_dataset: permitStaging.permits.rowsByDataset,
+    pages: permitStaging.permits.pages.map((p) => ({
+      dataset: p.dataset,
+      kind: p.kind,
+      path: `${PAGES_DIR}/${p.file}`,
+      request_url: p.url,
+      retrieved_at: p.retrieved_at,
+      rows: p.row_count,
+      json_sha256: p.sha256_json,
+      gz_sha256: p.sha256_gz,
+    })),
+  },
+  contractors: {
+    name: basename(contractorCacheDir!),
+    generated_at: contractorCache!.summary.generated_at,
+    files: permitStaging.contractors.files,
+    rows: permitStaging.contractors.rows,
+    exact_duplicate_rows: permitStaging.contractors.duplicates,
+    staged: permitStaging.contractors.staged,
+    distinct_permits: permitStaging.contractors.distinctPermits,
+    pages: contractorCache!.manifest.pages.map((p) => ({
+      path: `${PAGES_DIR}/${p.file}`,
+      request_url: p.url,
+      retrieved_at: p.retrieved_at,
+      rows: p.row_count,
+      json_sha256: p.sha256_json,
+      gz_sha256: p.sha256_gz,
+    })),
+  },
+};
+
+// Input cache files of this build, as src/run-history.ts inputCacheDigests reads a manifest.
+const inputFiles = fromCache
+  ? []
+  : [
+      fileEntry(
+        join(rawDir, "receipts.jsonl"),
+        receipts.length,
+        "raw page receipts",
+        false,
+      ),
+      ...receipts.map((r) =>
+        fileEntry(
+          join(rawDir, r.file),
+          r.rows,
+          "raw source page (byte-preserved)",
+          false,
+        ),
+      ),
+    ];
+const inputs = inputCacheDigests({
+  ...(cache && { cache }),
+  ...(permitCaches && { permit_caches: permitCaches }),
+  files: inputFiles,
+} as InputManifestLike);
+
+// This build's outputs (role, file in buildDir) and their Parquet schemas.
+const outputs: Array<{ role: string; path: string; sha256: string }> = [
+  { role: "property", path: parquetPath, sha256: parquetSha256 },
+  ...permitFiles,
+];
+const parquetColumns = async (path: string): Promise<ParquetColumn[]> =>
+  (await q(`describe select * from read_parquet(${lit(path)})`)).map((r) => ({
+    name: String(r.column_name),
+    type: String(r.column_type),
+  }));
+const schemas: Record<string, ParquetColumn[]> = {};
+for (const o of outputs) schemas[o.role] = await parquetColumns(o.path);
+
+// A previous run's recorded file, checked against its recorded sha256 before it is read.
+const checked = new Map<string, string>();
+const recordedFile = (path: unknown, sha256: unknown, what: string): string => {
+  if (typeof path !== "string" || !existsSync(path))
+    throw new Error(
+      `the previous run's ${what} (${String(path)}) is needed for the delta, run_kind and schema_changes`,
+    );
+  if (!checked.has(path)) checked.set(path, sha256File(path));
+  if (checked.get(path) !== sha256)
+    throw new Error(`${path} does not match its recorded sha256`);
+  return path;
+};
+
+/** How this build relates to a previous run: delta, run kind and schema changes. */
+async function relationTo(prev: HistoryRow | undefined) {
+  if (!prev)
+    return {
+      delta: {
+        previous_run_id: null,
+        note: "first run; every row is new",
+        added: parquetRows,
+        removed: 0,
+      } as Record<string, unknown>,
+      rebuild: rebuildFields(inputs, undefined),
+      schema_changes: schemaChanges(undefined, schemas),
+    };
+  // Delta by parcel identifier.
+  const prevParquet = recordedFile(
+    prev.parquet_path,
+    prev.parquet_sha256,
+    "property Parquet",
+  );
+  const d = (
+    await q(`select
+    (select count(*) from read_parquet(${lit(parquetPath)}) n where n.parcel_identifier not in (select parcel_identifier from read_parquet(${lit(prevParquet)}))) added,
+    (select count(*) from read_parquet(${lit(prevParquet)}) o where o.parcel_identifier not in (select parcel_identifier from read_parquet(${lit(parquetPath)}))) removed`)
+  )[0]!;
+  const prevSchemas: Record<string, ParquetColumn[]> = {
+    property: await parquetColumns(prevParquet),
+  };
+  for (const f of prev.permit_files ?? [])
+    prevSchemas[f.role] = await parquetColumns(
+      recordedFile(f.path, f.sha256, `${f.role} Parquet`),
+    );
+  const prevManifest = JSON.parse(
+    readFileSync(
+      recordedFile(prev.manifest_path, prev.manifest_sha256, "run manifest"),
+      "utf8",
+    ),
+  ) as InputManifestLike;
+  return {
+    delta: {
+      previous_run_id: prev.run_id,
+      added: Number(d.added),
+      removed: Number(d.removed),
+    } as Record<string, unknown>,
+    rebuild: rebuildFields(inputs, {
+      run_id: prev.run_id,
+      inputs: inputCacheDigests(prevManifest),
+    }),
+    schema_changes: schemaChanges(prevSchemas, schemas),
+  };
+}
+
+const seedEntries = recordedSeedFileEntries(
+  {
+    ...fileEntry(
+      seedRunPath,
+      seedRows,
+      "runtime seed CSV for this run (parcel_id, source_identifier, situs_address + extras)",
+      false,
+    ),
+    path: recordedPath(seedRunPath),
+  },
+  seedPath,
+);
+
+/**
+ * The run manifest as the recorded build writes it, with the run ID as RUN_ID_PLACEHOLDER and
+ * generated_at and build_digest still empty (neither is in the build digest).
+ */
+const makeManifest = (rel: Awaited<ReturnType<typeof relationTo>>) => ({
+  run_id: RUN_ID_PLACEHOLDER,
   run_name: cfg.run_name,
-  generated_at: new Date().toISOString(),
+  generated_at: "",
   county: cfg.county,
   state: cfg.state,
   fips: "06037",
@@ -548,7 +650,7 @@ const manifest = {
     ...(withPermits && { permit_jurisdictions: cfg.permit_jurisdictions }),
     where: whereClause(cfg),
   },
-  dry_run: dryRun,
+  dry_run: false,
   readiness: {
     ...readiness,
     evidence: [
@@ -600,45 +702,7 @@ const manifest = {
       : []),
   ],
   ...(cache && { cache }),
-  ...(permitStaging && {
-    permit_caches: {
-      note: "Paths are relative to each cache directory. The cache files are recorded by sha256; their contents are not copied. The derived roofing flag file in the permit cache is not read.",
-      permits: {
-        name: basename(permitCacheDir!),
-        generated_at: permitCache!.summary.generated_at,
-        files: permitStaging.permits.files,
-        rows: permitStaging.permits.rows,
-        rows_by_dataset: permitStaging.permits.rowsByDataset,
-        pages: permitStaging.permits.pages.map((p) => ({
-          dataset: p.dataset,
-          kind: p.kind,
-          path: `${PAGES_DIR}/${p.file}`,
-          request_url: p.url,
-          retrieved_at: p.retrieved_at,
-          rows: p.row_count,
-          json_sha256: p.sha256_json,
-          gz_sha256: p.sha256_gz,
-        })),
-      },
-      contractors: {
-        name: basename(contractorCacheDir!),
-        generated_at: contractorCache!.summary.generated_at,
-        files: permitStaging.contractors.files,
-        rows: permitStaging.contractors.rows,
-        exact_duplicate_rows: permitStaging.contractors.duplicates,
-        staged: permitStaging.contractors.staged,
-        distinct_permits: permitStaging.contractors.distinctPermits,
-        pages: contractorCache!.manifest.pages.map((p) => ({
-          path: `${PAGES_DIR}/${p.file}`,
-          request_url: p.url,
-          retrieved_at: p.retrieved_at,
-          rows: p.row_count,
-          json_sha256: p.sha256_json,
-          gz_sha256: p.sha256_gz,
-        })),
-      },
-    },
-  }),
+  ...(permitCaches && { permit_caches: permitCaches }),
   row_counts: {
     expected_from_source_count: cacheSummary
       ? cacheSummary.source_count_at_start
@@ -675,32 +739,32 @@ const manifest = {
   },
   ...(permitStats && { permits: permitStats }),
   derived_field_reference_date: referenceDate,
-  delta,
+  delta: rel.delta,
+  run_kind: rel.rebuild.run_kind,
+  rebuild_of: rel.rebuild.rebuild_of,
+  source_changes: rel.rebuild.source_changes,
+  build_digest: "",
+  schema_changes: rel.schema_changes,
   files: [
-    fileEntry(
-      parquetPath,
-      parquetRows,
-      "publishable property table (publish only after user approval and rights check)",
-      true,
-    ),
-    ...permitFiles.map((f) =>
-      fileEntry(
+    {
+      ...fileEntry(
+        parquetPath,
+        parquetRows,
+        "publishable property table (publish only after user approval and rights check)",
+        true,
+      ),
+      path: recordedPath(parquetPath),
+    },
+    ...permitFiles.map((f) => ({
+      ...fileEntry(
         f.path,
         permitRows[f.role] ?? null,
         `publishable ${f.role.replace("_", " ")} table (publish only after user approval and rights check)`,
         true,
       ),
-    ),
-    ...(dryRun
-      ? [
-          fileEntry(
-            seedRunPath,
-            seedRows,
-            "runtime seed CSV for this run (dry run: not copied to the shared seed path)",
-            false,
-          ),
-        ]
-      : seedFileEntries(seedRunPath, seedPath, seedRows)),
+      path: recordedPath(f.path),
+    })),
+    ...seedEntries,
     ...(fromCache
       ? [
           cacheFileEntry("summary.json", null, "roll cache summary"),
@@ -710,22 +774,7 @@ const manifest = {
             "roll cache page manifest (request URL, HTTP status, body sha256 per page)",
           ),
         ]
-      : [
-          fileEntry(
-            join(rawDir, "receipts.jsonl"),
-            receipts.length,
-            "raw page receipts",
-            false,
-          ),
-          ...receipts.map((r) =>
-            fileEntry(
-              join(rawDir, r.file),
-              r.rows,
-              "raw source page (byte-preserved)",
-              false,
-            ),
-          ),
-        ]),
+      : inputFiles),
   ],
   limitations: [
     countyWide
@@ -779,27 +828,143 @@ const manifest = {
           "KIT_DIR=<team kit checkout> node src/build-outputs.ts data/raw/los-angeles/roll-2026/<run_id>",
           "node src/query-radius.ts --parquet data/out/<run_id>/" + parquetName,
         ],
+});
+
+// The build digest and the run ID. If this build's files equal the last recorded run's, that run
+// may be this very build: its manifest was made against the run before it, so try that first.
+const digestOf = (m: ReturnType<typeof makeManifest>) =>
+  buildDigest(
+    outputs,
+    manifestDigestSha256(
+      m as unknown as Record<string, unknown>,
+      RUN_ID_PLACEHOLDER,
+    ),
+  );
+const last = history.at(-1);
+let manifest = makeManifest(await relationTo(last));
+let digest = digestOf(manifest);
+if (
+  last?.build_digest !== undefined &&
+  digest !== last.build_digest &&
+  hasSameFiles(last, parquetSha256, withPermits ? permitFiles : undefined)
+) {
+  const before = makeManifest(await relationTo(history.at(-2)));
+  if (digestOf(before) === last.build_digest) {
+    manifest = before;
+    digest = last.build_digest;
+  }
+}
+const runId = runIdOf(runTime, digest);
+const historyPlan = planHistory(
+  history,
+  runId,
+  parquetSha256,
+  withPermits ? permitFiles : undefined,
+);
+if (historyPlan.kind === "recorded" && !dryRun) {
+  rmSync(buildDir, { recursive: true, force: true });
+  console.log(
+    JSON.stringify(
+      {
+        run_id: historyPlan.row.run_id,
+        already_recorded: true,
+        this_build_id: runId,
+        parquet: historyPlan.row.parquet_path,
+        parquet_sha256: parquetSha256,
+        manifest: historyPlan.row.manifest_path,
+        note:
+          historyPlan.row.run_id === runId
+            ? "same run ID and the same files: no history row added; Parquet, seed and manifest left as recorded"
+            : "the same Parquet and permit files as this run, recorded before the build digest: no history row added; its files left as recorded",
+      },
+      null,
+      2,
+    ),
+  );
+  process.exit(0);
+}
+
+// Move the files from buildDir to the run's folder (a dry run: data/work/<ID>/dry-run/).
+const outDir = dryRun
+  ? join("data", "work", runId, "dry-run")
+  : join("data", "out", runId);
+const runsDir = dryRun ? outDir : join("runs", runId);
+if (dryRun) rmSync(outDir, { recursive: true, force: true });
+for (const d of dryRun ? [outDir] : [outDir, runsDir])
+  if (existsSync(d))
+    throw new Error(
+      `${d} exists but run ${runId} is not recorded; nothing replaced`,
+    );
+mkdirSync(join(outDir, ".."), { recursive: true });
+renameSync(buildDir, outDir);
+if (!dryRun) {
+  mkdirSync(runsDir, { recursive: true });
+  mkdirSync(seedDir, { recursive: true });
+  if (existsSync(seedPath)) console.log(`replacing existing ${seedPath}`);
+  copyFileSync(join(outDir, basename(seedRunPath)), seedPath);
+  if (sha256File(seedPath) !== seedEntries[1].sha256)
+    throw new Error(`${seedPath} is not a byte copy of the run's seed`);
+}
+
+const written = {
+  ...manifest,
+  generated_at: new Date().toISOString(),
+  build_digest: digest,
+  dry_run: dryRun,
 };
+const manifestText = (JSON.stringify(written, null, 2) + "\n")
+  .split(RUN_ID_PLACEHOLDER)
+  .join(runId);
 const manifestPath = join(runsDir, "run_manifest.json");
-writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-const manifestSha = createHash("sha256")
-  .update(readFileSync(manifestPath))
-  .digest("hex");
-const parquetEntry = manifest.files[0]!;
-if (parquetEntry.sha256 !== parquetSha256)
-  throw new Error(`${parquetPath} changed during the build`);
+writeFileSync(manifestPath, manifestText);
+const manifestSha = sha256File(manifestPath);
+// The written manifest gives the same digest (recorded form: dry_run false).
+if (
+  buildDigest(
+    outputs,
+    manifestDigestSha256(
+      {
+        ...(JSON.parse(manifestText) as Record<string, unknown>),
+        dry_run: false,
+      },
+      runId,
+    ),
+  ) !== digest
+)
+  throw new Error("the written run manifest does not give the build digest");
+for (const f of [
+  { path: join(outDir, parquetName), sha256: parquetSha256 },
+  ...permitFiles.map((f) => ({
+    path: join(outDir, basename(f.path)),
+    sha256: f.sha256,
+  })),
+])
+  if (sha256File(f.path) !== f.sha256)
+    throw new Error(`${f.path} changed during the build`);
+const recordedOut = join("data", "out", runId);
+const recordedFiles = (
+  JSON.parse(manifestText) as { files: Array<Record<string, unknown>> }
+).files;
 if (dryRun) {
   console.log(
     JSON.stringify(
       {
         dry_run: true,
         run_id: runId,
+        build_digest: digest,
+        run_kind: manifest.run_kind,
+        rebuild_of: manifest.rebuild_of,
+        schema_changes: manifest.schema_changes,
+        history:
+          historyPlan.kind === "recorded"
+            ? `already recorded as ${historyPlan.row.run_id}: a recorded build adds no row`
+            : "a recorded build would add one row",
         reference_date: referenceDate,
         manifest: manifestPath,
-        files: manifest.files
-          .filter((f) => f.path.startsWith(outDir))
+        files: recordedFiles
+          .filter((f) => isUnder(String(f.path), recordedOut))
           .map((f) => ({
-            path: f.path,
+            path: join(outDir, String(f.name)),
             size_bytes: f.size_bytes,
             sha256: f.sha256,
             rows: f.row_count,
@@ -811,9 +976,13 @@ if (dryRun) {
   );
   process.exit(0);
 }
+const recordedPermitFiles = permitFiles.map((f) => ({
+  ...f,
+  path: join(recordedOut, basename(f.path)),
+}));
 appendRunHistory(historyPath, {
   run_id: runId,
-  finished_at: manifest.generated_at,
+  finished_at: written.generated_at,
   county: cfg.county,
   roll_year: cfg.roll_year,
   scope: manifest.scope,
@@ -821,10 +990,15 @@ appendRunHistory(historyPath, {
     "query_url" in s ? [s.query_url] : s.query_urls,
   ),
   row_counts: manifest.row_counts,
-  delta,
-  parquet_path: parquetPath,
+  delta: manifest.delta,
+  run_kind: manifest.run_kind,
+  rebuild_of: manifest.rebuild_of,
+  source_changes: manifest.source_changes,
+  build_digest: digest,
+  schema_changes: manifest.schema_changes,
+  parquet_path: join(recordedOut, parquetName),
   parquet_sha256: parquetSha256,
-  ...(withPermits && { permit_files: permitFiles }),
+  ...(withPermits && { permit_files: recordedPermitFiles }),
   manifest_path: manifestPath,
   manifest_sha256: manifestSha,
   published: false,
@@ -833,8 +1007,10 @@ appendRunHistory(historyPath, {
 console.log(
   JSON.stringify(
     {
+      run_id: runId,
+      run_kind: manifest.run_kind,
       manifest: manifestPath,
-      parquet: parquetPath,
+      parquet: join(recordedOut, parquetName),
       seed: seedPath,
       row_counts: manifest.row_counts,
       coverage: manifest.coverage,

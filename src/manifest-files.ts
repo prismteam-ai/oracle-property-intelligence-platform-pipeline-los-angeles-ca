@@ -67,3 +67,26 @@ export function seedFileEntries(
     },
   ];
 }
+
+/**
+ * The seed entries as the recorded build writes them, without reading the shared path: the per-run
+ * seed (already hashed, at its recorded path) and the shared runtime seed path as its byte copy.
+ * The build copies the file afterwards and checks the copy's sha256 against this entry; a dry run
+ * records the same entries without copying.
+ */
+export function recordedSeedFileEntries(
+  perRun: FileEntry,
+  sharedSeedPath: string,
+): [FileEntry, FileEntry] {
+  return [
+    perRun,
+    {
+      ...perRun,
+      name: basename(sharedSeedPath),
+      path: sharedSeedPath,
+      role: "shared runtime seed path read by the ingest feeder",
+      copy_of: perRun.path,
+      note: "copy of the per-run seed; the next run overwrites this path, so its digest is only valid for this run",
+    },
+  ];
+}

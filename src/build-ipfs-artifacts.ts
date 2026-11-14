@@ -44,6 +44,7 @@ import {
   type ParquetTable,
   type RunManifestLike,
 } from "./publishable-docs.ts";
+import { RUN_ID_PATTERN } from "./run-config.ts";
 import { guardDirectory } from "./publish-guard.ts";
 import { scanJson } from "./publish-scans.ts";
 
@@ -96,7 +97,7 @@ const conn = await db.connect();
 const index: unknown[] = [];
 
 for (const runId of runIds) {
-  if (!/^[0-9T:.-]+Z$/.test(runId)) throw new Error(`not a run ID: ${runId}`);
+  if (!RUN_ID_PATTERN.test(runId)) throw new Error(`not a run ID: ${runId}`);
   const t0 = Date.now();
   const manifestPath = join(source, "runs", runId, "run_manifest.json");
   const runManifestBytes = new Uint8Array(readFileSync(manifestPath));

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 export interface RunScope {
@@ -70,15 +71,93 @@ export function whereClause(scope: RunScope): string {
 const ISO_MS = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 
 /**
- * Run ID of a build from several caches: the latest of their summary generated_at times, with ":"
+ * The time part <T> of a run ID: the latest of the caches' summary generated_at times, with ":"
  * and "." replaced (as for one cache).
  */
-export function runIdFromCaches(generatedAts: string[]): string {
+export function runTimeFromCaches(generatedAts: string[]): string {
   if (generatedAts.length === 0) throw new Error("no cache times");
   for (const t of generatedAts)
     if (!ISO_MS.test(t))
       throw new Error(`cache generated_at "${t}" is not an ISO time`);
   return [...generatedAts].sort().at(-1)!.replace(/[:.]/g, "-");
+}
+
+/**
+ * A run ID: <T> alone (runs recorded before the build digest) or <T>-b<D>, D the first 12 hex
+ * characters of the build digest. Letters, digits and "-" only, so it is safe as a path segment and
+ * an S3 key.
+ */
+export const RUN_ID_PATTERN =
+  /^\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-\d{3}Z(-b[0-9a-f]{12})?$/;
+
+/** Stands for the run ID in the manifest text the build digest hashes (the ID depends on it). */
+export const RUN_ID_PLACEHOLDER = "@RUN_ID@";
+
+/** Manifest keys left out of the build digest: the clock time and the digest itself. */
+export const UNHASHED_MANIFEST_KEYS = ["generated_at", "build_digest"] as const;
+
+const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
+
+/**
+ * sha256 of a run manifest as the build digest sees it: the recorded manifest (paths under
+ * data/out/<ID>/ and runs/<ID>/, also in a dry run) without generated_at and build_digest, written
+ * as the build writes it, with every occurrence of the run ID replaced by RUN_ID_PLACEHOLDER.
+ */
+export function manifestDigestSha256(
+  manifest: Record<string, unknown>,
+  runId: string,
+): string {
+  const kept = Object.fromEntries(
+    Object.entries(manifest).filter(
+      ([k]) => !(UNHASHED_MANIFEST_KEYS as readonly string[]).includes(k),
+    ),
+  );
+  return sha256(
+    (JSON.stringify(kept, null, 2) + "\n")
+      .split(runId)
+      .join(RUN_ID_PLACEHOLDER),
+  );
+}
+
+/** One data file a build writes: its role and sha256. */
+export interface BuildOutput {
+  role: string;
+  sha256: string;
+}
+
+/**
+ * The build digest: sha256 over the sorted lines "output <role> <sha256>" (the property Parquet and
+ * the permit Parquets) and "manifest <sha256>" (manifestDigestSha256). The manifest lists every
+ * input cache file's sha256, so the inputs are covered through it.
+ */
+export function buildDigest(
+  outputs: BuildOutput[],
+  manifestSha256: string,
+): string {
+  const roles = outputs.map((o) => o.role);
+  if (new Set(roles).size !== roles.length)
+    throw new Error(`an output role appears twice: ${roles.join(", ")}`);
+  for (const h of [manifestSha256, ...outputs.map((o) => o.sha256)])
+    if (!/^[0-9a-f]{64}$/.test(h)) throw new Error(`not a sha256: ${h}`);
+  const lines = [
+    ...outputs.map((o) => `output ${o.role} ${o.sha256}`),
+    `manifest ${manifestSha256}`,
+  ].sort();
+  return sha256(lines.join("\n") + "\n");
+}
+
+/** A run ID from its time part and the build digest: <T>-b<first 12 hex of the digest>. */
+export function runIdOf(runTime: string, digest: string): string {
+  if (!/^[0-9a-f]{64}$/.test(digest))
+    throw new Error(`not a build digest: ${digest}`);
+  const id = `${runTime}-b${digest.slice(0, 12)}`;
+  if (!RUN_ID_PATTERN.test(id)) throw new Error(`not a run ID: ${id}`);
+  return id;
+}
+
+/** True when path lies inside dir (compared with a trailing "/", so run ID prefixes never match). */
+export function isUnder(path: string, dir: string): boolean {
+  return path.startsWith(dir.endsWith("/") ? dir : `${dir}/`);
 }
 
 /** Reference date (YYYY-MM-DD) for every derived duration: the date of the permit cache's generated_at. */
