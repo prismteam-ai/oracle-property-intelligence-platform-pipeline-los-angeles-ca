@@ -62,6 +62,7 @@ import {
 } from "../src/eval/cli.ts";
 import {
   DEFAULT_PROMPTS_FILE,
+  GAPS,
   PROMPT_CASES,
   loadPrompts,
   promptsFileSchema,
@@ -925,6 +926,109 @@ describe("checks: §18 prompt i option 1 and the outside-city text", () => {
       expect((await checksOf(noName, parcelsOnly)).gaps_text.result).toBe(
         "fail",
       );
+    });
+  });
+});
+
+describe("checks: §19 gaps_text keyword misses on Sonnet run 2", () => {
+  const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
+  const byId = (id: string) => prompts.find((p) => p.id === id)!;
+
+  describe("place_ambiguous_or_unreliable: a negated reliable/usable center or point", () => {
+    const f = byId("f-los-angeles-ambiguous-unreliable");
+    const losAngeles = (text: string) =>
+      ask(f.question, [
+        toolReply([{ name: "resolve_place", input: { name: "Los Angeles" } }]),
+        textReply(text),
+      ]);
+    // Sonnet run 2, run-1-f-los-angeles-ambiguous-unreliable.json, the answer text verbatim.
+    const SONNET_RUN2_F =
+      'I can\'t run a meaningful three-mile search around "Los Angeles" because the place name doesn\'t give a reliable center.\n\nThe tool matched 803,001 parcels to "Los Angeles". Their median center is 34.10198, -118.39110. The parcels are spread over about 15 miles, so 90% of them lie within 15.15 miles of that point. A three-mile radius around the median would cover an arbitrary part of the city, not "Los Angeles". The postal-city match gives a different center, 34.08860, -118.37806, from 790,999 parcels, and it has the same problem.\n\nPlease give me one of these, and I\'ll list parcels with roofs older than 15 years:\n- A specific point (latitude and longitude).\n- A more specific neighborhood or community name.\n- An address or parcel ID to center on.\n\nIf you want the search around the median center anyway, say so. I\'d then treat it as a point that isn\'t tied to any landmark.';
+
+    test("the failing sentence and the full Sonnet run-2 answer pass", async () => {
+      expect(f.expected.gaps).toEqual(["place_ambiguous_or_unreliable"]);
+      for (const text of [
+        "The place name doesn't give a reliable center.",
+        SONNET_RUN2_F,
+      ]) {
+        const c = await checksOf(f, await losAngeles(text));
+        expect(c.gaps_text).toEqual({
+          result: "pass",
+          details: ["place_ambiguous_or_unreliable: mentioned"],
+        });
+      }
+    });
+    test("a reliable center stated without negation fails; an answer that only lists parcels fails", async () => {
+      for (const text of [
+        "Los Angeles resolves to a reliable center at 34.10198, -118.39110.",
+        `Old roofs within three miles of Los Angeles: ${FAKE_PARCELS.join(", ")}.`,
+      ]) {
+        const c = await checksOf(f, await losAngeles(text));
+        expect(c.gaps_text).toEqual({
+          result: "fail",
+          details: ["place_ambiguous_or_unreliable: NOT mentioned in the text"],
+        });
+      }
+    });
+    test("each negation and reliable/usable with center, centre or point, in one sentence only", () => {
+      const re = GAPS.place_ambiguous_or_unreliable.inText;
+      for (const neg of [
+        "doesn't give",
+        "doesn’t give",
+        "does not give",
+        "don't have",
+        "can't pick",
+        "cannot pick",
+        "has no",
+        "is not a",
+        "isn't a",
+        "is without a",
+      ])
+        for (const word of ["reliable", "usable"])
+          for (const target of ["center", "centre", "point"])
+            expect(re.test(`The name ${neg} ${word} ${target}.`)).toBe(true);
+      // The negation must come first and in the same sentence.
+      expect(
+        re.test("This is not a test. The name has a reliable center."),
+      ).toBe(false);
+      expect(
+        re.test("This is not a test\nThe name has a reliable center."),
+      ).toBe(false);
+      expect(re.test("A reliable center is not given.")).toBe(false);
+    });
+  });
+
+  describe('no_center: "latitude and longitude"', () => {
+    const e = byId("e-springfield-unknown");
+    const springfield = (text: string) =>
+      ask(e.question, [
+        toolReply([{ name: "resolve_place", input: { name: "Springfield" } }]),
+        textReply(text),
+      ]);
+    // Sonnet run 2, run-3-e-springfield-unknown.json, the answer text verbatim.
+    const SONNET_RUN2_E =
+      "I couldn't find \"Springfield\" in this dataset's parcels, so I didn't run the search. I won't guess a location for it.\n\nYou can give me either of these instead:\n- a latitude and longitude, or\n- a Los Angeles County city or community name, such as Van Nuys or Pasadena.\n\nI'll then search a 5-mile radius for roofs older than 15 years. The default roof-age threshold is 15 years, as you asked. Roof age counts from the assessor's year-built proxy unless a finaled roofing permit exists. Permit data covers only the City of Los Angeles.";
+
+    test("the Sonnet run-2 answer passes", async () => {
+      expect(e.expected.gaps).toEqual(["place_unknown", "no_center"]);
+      const c = await checksOf(e, await springfield(SONNET_RUN2_E));
+      expect(c.gaps_text).toEqual({
+        result: "pass",
+        details: ["place_unknown: mentioned", "no_center: mentioned"],
+      });
+    });
+    test("an answer with no request for a location and no center/point words fails", async () => {
+      const c = await checksOf(
+        e,
+        await springfield("Springfield is not in this dataset."),
+      );
+      expect(c.gaps_text.result).toBe("fail");
+      expect(c.gaps_text.details).toContain(
+        "no_center: NOT mentioned in the text",
+      );
+      expect(
+        GAPS.no_center.inText.test("Springfield is not in this dataset."),
+      ).toBe(false);
     });
   });
 });

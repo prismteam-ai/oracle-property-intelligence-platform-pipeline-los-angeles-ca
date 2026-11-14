@@ -85,12 +85,17 @@ export const GAPS = {
   },
   place_ambiguous_or_unreliable: {
     inGaps: (g) => g.includes("too spread out") || g.includes("is ambiguous:"),
+    // Last alternative (design brief §19): a negated reliable/usable center or point, e.g. "the place name doesn't
+    // give a reliable center": a negation, then "reliable" or "usable", then center/centre/point, all in one sentence
+    // (no . ! ? or line break between them).
     inText:
-      /spread out|ambiguous|unreliable|not reliable|not meaningful|no (?:single|reliable|meaningful) cent(?:er|re)/i,
+      /spread out|ambiguous|unreliable|not reliable|not meaningful|no (?:single|reliable|meaningful) cent(?:er|re)|\b(?:doesn['’]t|does not|don['’]t|can['’]t|cannot|isn['’]t|not|no|without)\b[^.!?\n]*?\b(?:reliable|usable)\b[^.!?\n]*?\b(?:cent(?:er|re)|point)/i,
   },
   no_center: {
     inGaps: (g) => g === GAP_NO_CENTER,
-    inText: /\b(?:cent(?:er|re)|point|pin|coordinates|more specific)\b/i,
+    // "latitude and longitude" (design brief §19): an answer asking for one instead of a center.
+    inText:
+      /\b(?:cent(?:er|re)|point|pin|coordinates|more specific|latitude and longitude)\b/i,
   },
   owner_data: {
     inGaps: (g) => g === standard("No owner data"),
