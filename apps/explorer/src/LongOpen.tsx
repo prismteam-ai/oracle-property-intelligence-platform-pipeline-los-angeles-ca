@@ -7,11 +7,7 @@ import type {
   ParcelPermits,
 } from "@oracle-la/api-client";
 import { basisLabel } from "./basis.ts";
-import {
-  contractorAttribution,
-  retrieved,
-  type LoadSources,
-} from "./sources.ts";
+import { contractorNote, retrieved, type LoadSources } from "./sources.ts";
 import { useQuery } from "./useQuery.ts";
 
 /** The API's default minimum (5 years x 365.25, rounded); typed so a different API default fails the typecheck. */
@@ -244,7 +240,7 @@ export function LongOpen({
                   parcel={parcels[i.parcel_id]}
                   sourceName={permitSource?.source_name}
                   contractorNote={
-                    contractorSource && contractorAttribution(contractorSource)
+                    contractorSource && contractorNote(contractorSource)
                   }
                 />
               ))}
@@ -328,6 +324,9 @@ function Row({
                         <th>Owner-builder</th>
                         <th>License expires</th>
                         <th>City, state</th>
+                        <th>Identity (license)</th>
+                        <th>Canonical name</th>
+                        <th>Name variants</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -353,6 +352,15 @@ function Row({
                             {[c.city_name, c.state_code]
                               .filter(Boolean)
                               .join(", ") || "—"}
+                          </td>
+                          <td data-testid="identity-key">
+                            {c.contractor_identity_key ?? "—"}
+                          </td>
+                          <td data-testid="canonical-name">
+                            {c.canonical_business_name ?? "—"}
+                          </td>
+                          <td data-testid="name-variants">
+                            {c.name_variant_count ?? "—"}
                           </td>
                         </tr>
                       ))}

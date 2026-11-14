@@ -5,7 +5,7 @@ import type {
   SourceKind,
   SourceRow,
 } from "@oracle-la/api-client";
-import { contractorAttribution, type LoadSources } from "./sources.ts";
+import { contractorNote, type LoadSources } from "./sources.ts";
 import { useQuery } from "./useQuery.ts";
 
 const yesNo = (b: boolean | null) => (b === null ? "—" : b ? "yes" : "no");
@@ -62,6 +62,21 @@ const COLUMNS: Record<
     [
       "Owner-builder",
       (r) => (r.kind === "contractor" ? yesNo(r.is_owner_builder) : null),
+    ],
+    // The identity: one per license number; its name variants are counted, never listed; no name, none shown.
+    [
+      "Identity (license)",
+      (r) =>
+        r.kind === "contractor" ? (r.contractor_identity_key ?? null) : null,
+    ],
+    [
+      "Canonical name",
+      (r) =>
+        r.kind === "contractor" ? (r.canonical_business_name ?? null) : null,
+    ],
+    [
+      "Name variants",
+      (r) => (r.kind === "contractor" ? (r.name_variant_count ?? null) : null),
     ],
   ],
 };
@@ -141,7 +156,7 @@ function SourceRecords({
       <h2>Records from {source.source_name}</h2>
       {source.source_kind === "contractor" && (
         <p className="note" data-testid="records-attribution">
-          {contractorAttribution(source)}
+          {contractorNote(source)}
         </p>
       )}
       {source.source_kind === "permit" && (

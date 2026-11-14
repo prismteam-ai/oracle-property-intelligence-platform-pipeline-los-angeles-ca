@@ -13,6 +13,11 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+// The API contract's wording constants (import-free), to check that the Explorer shows them verbatim.
+import {
+  OWNERSHIP_BASIS,
+  OWNERSHIP_PROXY_NOTE,
+} from "../../api/src/contract.ts";
 
 const h = vi.hoisted(() => ({
   search: vi.fn(),
@@ -208,8 +213,16 @@ const source = (
   license: null,
   attribution: null,
   access: null,
+  coverage: null,
   ...extra,
 });
+const WINDOW = {
+  field: "permit_issue_date",
+  first: "2013-01-02",
+  last: "2023-05-19",
+};
+const CONTRACTOR_NOTE =
+  "Contains data from LADBS, licensed under CC BY 4.0; license classes normalized. Contractor rows exist only for permits issued 2013-01-02 to 2023-05-19 (permit_issue_date).";
 const SOURCES = {
   sources: [
     source("parcel", ROLL, 4, 2, {
@@ -228,6 +241,7 @@ const SOURCES = {
       query_urls: ["https://data.lacity.org/resource/8guu-8f5m.json"],
       license: "CC BY 4.0",
       attribution: "LADBS",
+      coverage: WINDOW,
     }),
   ],
   pages: [
@@ -321,6 +335,10 @@ const RECORDS: Record<string, unknown> = {
         license_class: "C-39",
         license_class_note: null,
         is_owner_builder: false,
+        contractor_identity_key: "123456",
+        canonical_business_name: "ACME ROOFING & SOLAR INC",
+        name_variant_count: 3,
+        identity_permit_count: 40,
         ...prov(CONTRACTORS),
       },
       {
@@ -337,6 +355,10 @@ const RECORDS: Record<string, unknown> = {
         license_class: null,
         license_class_note: "owner-builder",
         is_owner_builder: true,
+        contractor_identity_key: null,
+        canonical_business_name: null,
+        name_variant_count: null,
+        identity_permit_count: null,
         ...prov(CONTRACTORS),
       },
     ],
@@ -412,6 +434,26 @@ const parcelPermits = (parcel_id: string) => ({
                 license_expiration_date: "2027-01-31",
                 city_name: "VAN NUYS",
                 state_code: "CA",
+                contractor_identity_key: "123456",
+                canonical_business_name: "ACME ROOFING & SOLAR INC",
+                name_variant_count: 3,
+                identity_permit_count: 40,
+              },
+              // A license whose rows carry no name: no canonical name shown, never a guessed one.
+              {
+                contractors_business_name: null,
+                license_identifier: "654321",
+                source_license_type: "C39",
+                license_class: "C-39",
+                license_class_note: null,
+                is_owner_builder: false,
+                license_expiration_date: null,
+                city_name: null,
+                state_code: null,
+                contractor_identity_key: "654321",
+                canonical_business_name: null,
+                name_variant_count: 0,
+                identity_permit_count: 1,
               },
             ]
           : [],
@@ -457,11 +499,16 @@ describe("Explorer sources, records and long-open permits", () => {
       [PERMITS, "permit", "3", "2"],
       [CONTRACTORS, "contractor", "5", "1"],
     ]);
-    // License, attribution and changes made per source, as served (none for the roll).
-    expect(rows.map((r) => [r[6], r[7], r[8]])).toEqual([
-      ["—", "—", "—"],
-      [PERMIT_LICENSE, PERMIT_ATTRIBUTION, "—"],
-      ["CC BY 4.0", "LADBS", "license classes normalized"],
+    // License, attribution, changes made and coverage window per source, as served (none for the roll).
+    expect(rows.map((r) => [r[6], r[7], r[8], r[9]])).toEqual([
+      ["—", "—", "—", "—"],
+      [PERMIT_LICENSE, PERMIT_ATTRIBUTION, "—", "—"],
+      [
+        "CC BY 4.0",
+        "LADBS",
+        "license classes normalized",
+        "permit_issue_date 2013-01-02 to 2023-05-19",
+      ],
     ]);
     expect(rows[1]![7]).toContain('reads "TSB"');
     expect(rows[1]![5]).toContain("aaaa-0001.json");
@@ -547,12 +594,40 @@ describe("Explorer sources, records and long-open permits", () => {
 
     fireEvent.change(select, { target: { value: CONTRACTORS } });
     await screen.findByText("5 records", { exact: false });
-    expect(tbodyText("records").map((r) => r.slice(0, 6))).toEqual([
-      ["10000-20000-00001", "ACME ROOFING INC", "123456", "C39", "C-39", "no"],
-      ["10000-20000-00001", "—", "—", "NA", "owner-builder", "yes"],
+    // The identity follows: the license number, the canonical name and the variant count (no variant named);
+    // a row without a license has none.
+    expect(tbodyText("records").map((r) => r.slice(0, 9))).toEqual([
+      [
+        "10000-20000-00001",
+        "ACME ROOFING INC",
+        "123456",
+        "C39",
+        "C-39",
+        "no",
+        "123456",
+        "ACME ROOFING & SOLAR INC",
+        "3",
+      ],
+      [
+        "10000-20000-00001",
+        "—",
+        "—",
+        "NA",
+        "owner-builder",
+        "yes",
+        "—",
+        "—",
+        "—",
+      ],
     ]);
+    expect(
+      [...screen.getByTestId("records").querySelectorAll("th")]
+        .map((th) => th.textContent)
+        .slice(6, 9),
+    ).toEqual(["Identity (license)", "Canonical name", "Name variants"]);
+    // The attribution and the contractor source's coverage window.
     expect(screen.getByTestId("records-attribution").textContent).toBe(
-      "Contains data from LADBS, licensed under CC BY 4.0; license classes normalized.",
+      CONTRACTOR_NOTE,
     );
     expect(document.body.textContent).not.toMatch(/licen[^s]|work_desc/i);
     // explorer.sources (about 1.4 MB on the county run) is fetched once for every tab that shows it.
@@ -585,10 +660,12 @@ describe("Explorer sources, records and long-open permits", () => {
           roof_age_basis: i === 1 ? PERMIT_BASIS : PROXY_BASIS,
           roof_year_permit_number: i === 1 ? "11111-22222-33333" : null,
           permit_data_available: true,
+          land_base_year: i === 3 ? null : 2001,
           distance_miles: i / 10,
           latitude: 34.2,
           longitude: -118.49,
         })),
+        ownership: null,
       });
       render(<App />);
       await wait(0);
@@ -598,11 +675,13 @@ describe("Explorer sources, records and long-open permits", () => {
       expect(screen.getByTestId("rule").textContent).toBe(
         "Roof age counts from the effective roof year: … an effective roof year before 2011 …",
       );
-      expect(tbodyText("radius-results").map((r) => r.slice(2, 7))).toEqual([
-        ["1980", "2004", "permit 11111-22222-33333", "22", "0.1"],
-        ["1980", "1980", "year built (proxy)", "46", "0.2"],
-        ["—", "1980", "year built (proxy)", "46", "0.3"],
+      expect(tbodyText("radius-results").map((r) => r.slice(2, 8))).toEqual([
+        ["1980", "2004", "permit 11111-22222-33333", "22", "2001", "0.1"],
+        ["1980", "1980", "year built (proxy)", "46", "2001", "0.2"],
+        ["—", "1980", "year built (proxy)", "46", "—", "0.3"],
       ]);
+      // No ownership filter was asked for: none stated.
+      expect(screen.queryByTestId("ownership-rule")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -699,18 +778,28 @@ describe("Explorer sources, records and long-open permits", () => {
     expect(h.forParcel).toHaveBeenLastCalledWith({ parcel_id: "1111111111" });
     const table = await screen.findByTestId("contractors");
     expect(
-      [...table.querySelectorAll("tbody td")].map((td) => td.textContent),
+      // The table sits inside the long-open table's body: its own rows only.
+      [...table.querySelectorAll(":scope > tbody > tr")].map((tr) =>
+        [...tr.querySelectorAll("td")].map((td) => td.textContent),
+      ),
     ).toEqual([
-      "ACME ROOFING INC",
-      "123456",
-      "C39",
-      "C-39",
-      "no",
-      "2027-01-31",
-      "VAN NUYS, CA",
+      [
+        "ACME ROOFING INC",
+        "123456",
+        "C39",
+        "C-39",
+        "no",
+        "2027-01-31",
+        "VAN NUYS, CA",
+        "123456",
+        "ACME ROOFING & SOLAR INC",
+        "3",
+      ],
+      // No name on any row of the license: none shown.
+      ["—", "654321", "C39", "C-39", "no", "—", "—", "654321", "—", "0"],
     ]);
     expect(screen.getByText(/^Contains data from LADBS/).textContent).toBe(
-      "Contains data from LADBS, licensed under CC BY 4.0; license classes normalized.",
+      CONTRACTOR_NOTE,
     );
     expect(screen.getByTestId("bbb-reason").textContent).toBe(
       `BBB: not available. ${BBB_REASON}`,
@@ -819,5 +908,212 @@ describe("Explorer sources, records and long-open permits", () => {
     expect(cards.textContent).toContain("113,642");
     expect(cards.textContent).toContain("805,901");
     expect(cards.textContent).toContain("2026-11-12");
+  });
+});
+
+describe("Explorer ownership filter, run kind and contractor window", () => {
+  const item = {
+    parcel_id: "0000000001",
+    address: "1 TEST ST",
+    year_built: 1980,
+    roof_age_years_proxy: 46,
+    effective_roof_year: 1980,
+    roof_age_years: 46,
+    roof_age_basis: PROXY_BASIS,
+    roof_year_permit_number: null,
+    permit_data_available: true,
+    land_base_year: 1998,
+    distance_miles: 0.1,
+    latitude: 34.2,
+    longitude: -118.49,
+  };
+  beforeEach(() => {
+    h.runSummary.mockReset().mockResolvedValue({
+      run: { run_id: "r1", row_counts: { parquet: 4 }, limitations: [] },
+      history: [],
+    });
+    h.sources.mockReset().mockResolvedValue(SOURCES);
+    h.search
+      .mockReset()
+      .mockImplementation(async (i: { ownership_basis?: string }) => ({
+        count: 1,
+        rule,
+        next_offset: null,
+        items: [item],
+        ownership: i.ownership_basis
+          ? {
+              basis: i.ownership_basis,
+              ...OWNERSHIP_BASIS[i.ownership_basis as "both"],
+              proxy_note: OWNERSHIP_PROXY_NOTE,
+            }
+          : null,
+      }));
+  });
+  afterEach(() => cleanup());
+  const openRadius = async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Radius query" }));
+  };
+  const search = async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByTestId("radius-count");
+  };
+
+  test("the ownership filter is off by default: no basis sent, no basis text shown", async () => {
+    await openRadius();
+    const on = screen.getByRole("checkbox", {
+      name: /Owner unchanged for 10 years or more/,
+    }) as HTMLInputElement;
+    expect(on.checked).toBe(false);
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    await search();
+    expect("ownership_basis" in h.search.mock.calls[0]![0]).toBe(false);
+    expect(screen.queryByTestId("ownership-rule")).toBeNull();
+  });
+
+  test("turned on, it preselects both and shows the three bases with their weakness and the proxy note, verbatim from the contract", async () => {
+    await openRadius();
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /Owner unchanged for 10 years or more/,
+      }),
+    );
+    const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map((r) => [r.value, r.checked])).toEqual([
+      ["both", true],
+      ["recording", false],
+      ["base_year", false],
+    ]);
+    const box = screen.getByTestId("ownership").textContent!;
+    for (const b of ["recording", "base_year", "both"] as const) {
+      expect(box).toContain(OWNERSHIP_BASIS[b].text);
+      expect(box).toContain(OWNERSHIP_BASIS[b].weakness);
+    }
+    expect(
+      screen.getAllByTestId("ownership-weakness").map((p) => p.textContent),
+    ).toEqual(
+      (["both", "recording", "base_year"] as const).map(
+        (b) => `Weakness: ${OWNERSHIP_BASIS[b].weakness}`,
+      ),
+    );
+    expect(screen.getByTestId("ownership-proxy-note").textContent).toBe(
+      OWNERSHIP_PROXY_NOTE,
+    );
+    await search();
+    expect(h.search.mock.calls[0]![0]).toMatchObject({
+      ownership_basis: "both",
+    });
+    const stated = screen.getByTestId("ownership-rule");
+    expect(stated.getAttribute("data-basis")).toBe("both");
+    expect(stated.textContent).toBe(
+      `Ownership filter (both): ${OWNERSHIP_BASIS.both.text} Weakness: ${OWNERSHIP_BASIS.both.weakness} ${OWNERSHIP_PROXY_NOTE}`,
+    );
+    expect(screen.getByTestId("land-base-year").textContent).toBe("1998");
+  });
+
+  test("each basis sends its value; turning the filter off sends none again", async () => {
+    await openRadius();
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /Owner unchanged for 10 years or more/,
+      }),
+    );
+    for (const b of ["recording", "base_year", "both"] as const) {
+      fireEvent.click(
+        screen
+          .getAllByRole("radio")
+          .find((r) => r.getAttribute("value") === b)!,
+      );
+      await search();
+      expect(h.search.mock.lastCall![0]).toMatchObject({ ownership_basis: b });
+      expect(
+        screen.getByTestId("ownership-rule").getAttribute("data-basis"),
+      ).toBe(b);
+    }
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: /Owner unchanged for 10 years or more/,
+      }),
+    );
+    await search();
+    expect("ownership_basis" in h.search.mock.lastCall![0]).toBe(false);
+  });
+
+  test("a rebuild run: the summary states the kind and its source; the history table says rebuild, new data, or nothing where the row has no kind", async () => {
+    h.runSummary.mockReset().mockResolvedValue({
+      run: {
+        run_id: "r4",
+        row_counts: { parquet: 4 },
+        limitations: [],
+        run_kind: "rebuild",
+        rebuild_of: "r3",
+        source_changes: "none",
+      },
+      history: [
+        {
+          run_id: "r1",
+          run_kind: null,
+          rebuild_of: null,
+          source_changes: null,
+        },
+        {
+          run_id: "r2",
+          run_kind: "new data",
+          rebuild_of: null,
+          source_changes: null,
+        },
+        {
+          run_id: "r3",
+          run_kind: null,
+          rebuild_of: null,
+          source_changes: null,
+        },
+        {
+          run_id: "r4",
+          run_kind: "rebuild",
+          rebuild_of: "r3",
+          source_changes: "none",
+        },
+      ],
+    });
+    render(<App />);
+    expect((await screen.findByTestId("run-kind")).textContent).toBe(
+      "Run kind: rebuild of r3, no source changes",
+    );
+    expect(tbodyText("run-history").map((r) => [r[0], r[1]])).toEqual([
+      ["r1", ""],
+      ["r2", "new data"],
+      ["r3", ""],
+      ["r4", "rebuild"],
+    ]);
+  });
+
+  test("a run without run_kind shows no kind at all, never a guess", async () => {
+    render(<App />);
+    await screen.findByTestId("run-summary");
+    expect(screen.queryByTestId("run-kind")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/rebuild|new data/);
+  });
+
+  test("the Contractor rows card shows the contractor source's coverage window", async () => {
+    h.runSummary.mockReset().mockResolvedValue({
+      run: {
+        run_id: "r1",
+        row_counts: {
+          parquet: 4,
+          permits: { parquet: { permits: 3, permit_contractors: 5 } },
+        },
+        limitations: [],
+      },
+      history: [],
+    });
+    render(<App />);
+    expect((await screen.findByTestId("contractor-window")).textContent).toBe(
+      "permit_issue_date 2013-01-02 to 2023-05-19",
+    );
+    expect(screen.getByTestId("contractor-rows-card").textContent).toContain(
+      "5",
+    );
+    expect(h.sources).toHaveBeenCalledTimes(1);
   });
 });

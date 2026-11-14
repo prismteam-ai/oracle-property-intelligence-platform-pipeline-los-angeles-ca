@@ -1,4 +1,9 @@
-import { CHANGES_MADE, retrieved, type LoadSources } from "./sources.ts";
+import {
+  CHANGES_MADE,
+  coverageText,
+  retrieved,
+  type LoadSources,
+} from "./sources.ts";
 import { useQuery } from "./useQuery.ts";
 
 /** Every source of the run (the roll, the LADBS permits, the LADBS contractor view) with its terms and pages. */
@@ -28,6 +33,7 @@ export function Sources({ loadSources }: { loadSources: LoadSources }) {
             <th>License</th>
             <th>Attribution</th>
             <th>Changes made</th>
+            <th>Coverage</th>
             <th>Terms</th>
           </tr>
         </thead>
@@ -49,6 +55,7 @@ export function Sources({ loadSources }: { loadSources: LoadSources }) {
               <td data-testid="source-changes">
                 {CHANGES_MADE[s.source_kind] ?? "—"}
               </td>
+              <td data-testid="source-coverage">{coverageText(s) ?? "—"}</td>
               <td>
                 <a href={s.terms_of_use ?? "#"}>terms</a>
               </td>

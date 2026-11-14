@@ -1,5 +1,10 @@
 import { expect, request, test } from "@playwright/test";
-import type { SourceKind, Sources } from "@oracle-la/api-client";
+import type {
+  OwnershipBasis,
+  SourceKind,
+  SourceRow,
+  Sources,
+} from "@oracle-la/api-client";
 import { BASE_URL, CREDS, ORIGIN } from "./env.ts";
 
 const VN = { lat: 34.199, lon: -118.487 };
@@ -15,6 +20,19 @@ const haversine = (a: number[], b: number[]) => {
 const trpc = (apiUrl: string, proc: string, input?: unknown) =>
   `${apiUrl}/trpc/${proc}${input === undefined ? "" : `?input=${encodeURIComponent(JSON.stringify(input))}`}`;
 const fmt = (n: number) => n.toLocaleString("en-US");
+/** A source's coverage window as the Explorer prints it; "—" without one. */
+const windowText = (s: SourceRow) =>
+  s.coverage
+    ? `${s.coverage.field} ${s.coverage.first} to ${s.coverage.last}`
+    : "—";
+/** The contractor note: the attribution, then the window when the source states one. */
+const contractorNoteText = (s: SourceRow) =>
+  `Contains data from ${s.attribution}, licensed under ${s.license}; license classes normalized.` +
+  (s.coverage
+    ? ` Contractor rows exist only for permits issued ${s.coverage.first} to ${s.coverage.last} (${s.coverage.field}).`
+    : "");
+/** A cell as the Explorer prints a nullable value. */
+const cell = (v: unknown) => (v === null || v === undefined ? "—" : String(v));
 
 // Serial by default (a failure stops the run); PW_SERIAL=0 runs tests independently (each loads its own config).
 test.describe.configure({
@@ -169,6 +187,38 @@ test.describe("with credentials", () => {
     await expect(page.getByTestId("run-history")).toContainText(
       summary.run.run_id,
     );
+    // The run kind as the API records it: "rebuild of <run ID>, no source changes"; nothing where none.
+    if (summary.run.run_kind === "rebuild")
+      await expect(page.getByTestId("run-kind")).toHaveText(
+        `Run kind: rebuild of ${summary.run.rebuild_of}${summary.run.source_changes === "none" ? ", no source changes" : ""}`,
+      );
+    else if (summary.run.run_kind)
+      await expect(page.getByTestId("run-kind")).toHaveText(
+        `Run kind: ${summary.run.run_kind}`,
+      );
+    else await expect(page.getByTestId("run-kind")).toHaveCount(0);
+    // Every history row's kind cell: the API's run_kind, empty where the row has none.
+    const historyRows = page.getByTestId("run-history").locator("tbody tr");
+    await expect(historyRows).toHaveCount(summary.history.length);
+    expect(
+      await historyRows.evaluateAll((trs) =>
+        trs.map((tr) => [
+          tr.querySelectorAll("td")[0]!.textContent,
+          tr.querySelectorAll("td")[1]!.textContent,
+        ]),
+      ),
+    ).toEqual(
+      summary.history.map((h: { run_id: string; run_kind?: string | null }) => [
+        h.run_id,
+        h.run_kind ?? "",
+      ]),
+    );
+    // The Contractor rows card states the contractor source's window from explorer.sources.
+    const contractorWindow = byKind.get("contractor")!.coverage;
+    if (summary.run.row_counts.permits && contractorWindow)
+      await expect(page.getByTestId("contractor-window")).toHaveText(
+        windowText(byKind.get("contractor")!),
+      );
     await page.getByRole("tab", { name: "Sources & pages" }).click();
     const srcRows = page.getByTestId("sources").locator("tbody tr");
     await expect(srcRows).toHaveCount(sources.sources.length);
@@ -183,6 +233,9 @@ test.describe("with credentials", () => {
       );
       await expect(row.getByTestId("source-attribution")).toHaveText(
         s.attribution ?? "—",
+      );
+      await expect(row.getByTestId("source-coverage")).toHaveText(
+        windowText(s),
       );
     }
     // The terms as recorded: the permit datasets state no license (portal terms of May 2014) and their
@@ -267,10 +320,24 @@ test.describe("with credentials", () => {
           ? expected.items[0].permit_number
           : expected.items[0].record_key,
       );
-      if (s.source_kind === "contractor")
+      if (s.source_kind === "contractor") {
         await expect(page.getByTestId("records-attribution")).toHaveText(
-          `Contains data from ${s.attribution}, licensed under ${s.license}; license classes normalized.`,
+          contractorNoteText(s),
         );
+        // The first row's identity: license key, canonical name and variant count, as the API serves them.
+        const first = expected.items[0];
+        const cells = await page
+          .getByTestId("records")
+          .locator("tbody tr")
+          .first()
+          .locator("td")
+          .allInnerTexts();
+        expect(cells.slice(6, 9)).toEqual([
+          cell(first.contractor_identity_key),
+          cell(first.canonical_business_name),
+          cell(first.name_variant_count),
+        ]);
+      }
       if (s.source_kind === "permit")
         await expect(page.getByTestId("records-attribution")).toContainText(
           String(s.attribution),
@@ -332,6 +399,53 @@ test.describe("with credentials", () => {
         expect(haversine([VN.lat, VN.lon], [lat!, lon!])).toBeCloseTo(d!, 2);
       }
     }
+    // The ownership filter: off by default; on, "both" preselected; each basis's count, texts and the first
+    // row's land base year equal parcels.search with that basis.
+    const ownershipOn = page.getByRole("checkbox", {
+      name: /Owner unchanged for 10 years or more/,
+    });
+    await expect(ownershipOn).not.toBeChecked();
+    await page
+      .getByRole("spinbutton", { name: "Roof older than (years)" })
+      .fill("15");
+    await ownershipOn.check();
+    await expect(
+      page.locator('input[name="ownership-basis"]:checked'),
+    ).toHaveValue("both");
+    const bases: OwnershipBasis[] = ["both", "recording", "base_year"];
+    const weaknesses: string[] = [];
+    for (const basis of bases) {
+      const expected = await apiGet("parcels.search", {
+        ...VN,
+        radius_miles: 5,
+        threshold_years: 15,
+        ownership_basis: basis,
+      });
+      expect(expected.ownership.basis).toBe(basis);
+      weaknesses.push(`Weakness: ${expected.ownership.weakness}`);
+      await page
+        .locator(`input[name="ownership-basis"][value="${basis}"]`)
+        .check();
+      await page.getByRole("button", { name: "Search" }).click();
+      await expect(page.getByTestId("ownership-rule")).toHaveAttribute(
+        "data-basis",
+        basis,
+      );
+      await expect(page.getByTestId("radius-count")).toHaveText(
+        fmt(expected.count),
+      );
+      await expect(page.getByTestId("ownership-rule")).toHaveText(
+        `Ownership filter (${basis}): ${expected.ownership.text} Weakness: ${expected.ownership.weakness} ${expected.ownership.proxy_note}`,
+      );
+      await expect(page.getByTestId("ownership-proxy-note")).toHaveText(
+        expected.ownership.proxy_note,
+      );
+      await expect(page.getByTestId("land-base-year").first()).toHaveText(
+        cell(expected.items[0].land_base_year),
+      );
+    }
+    // The three weakness texts shown with the selector are the API's.
+    await expect(page.getByTestId("ownership-weakness")).toHaveText(weaknesses);
   });
 
   test("8. future features are disabled placeholders", async ({ page }) => {
@@ -434,6 +548,21 @@ test.describe("with credentials", () => {
         await expect(trs).toHaveCount(contractors.length);
         await expect(trs.first().locator("td").first()).toHaveText(
           contractors[0].contractors_business_name ?? "—",
+        );
+        // Each row's identity as the API serves it; no canonical name where the license has none.
+        for (const [k, id] of [
+          ["contractor_identity_key", "identity-key"],
+          ["canonical_business_name", "canonical-name"],
+          ["name_variant_count", "name-variants"],
+        ] as const)
+          await expect(page.getByTestId(id)).toHaveText(
+            contractors.map((c: Record<string, unknown>) => cell(c[k])),
+          );
+        const contractorSrc = sources.sources.find(
+          (x) => x.source_kind === "contractor",
+        )!;
+        await expect(page.getByText(/^Contains data from /).first()).toHaveText(
+          contractorNoteText(contractorSrc),
         );
       } else await expect(page.getByTestId("no-contractors")).toBeVisible();
       return contractors.length;

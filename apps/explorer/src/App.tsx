@@ -68,7 +68,9 @@ export function App() {
           </p>
         )}
         {!api && !error && <p>Loading…</p>}
-        {api && tab === "Run summary" && <RunSummary api={api} />}
+        {conn && tab === "Run summary" && (
+          <RunSummary api={conn.api} loadSources={conn.loadSources} />
+        )}
         {conn && tab === "Sources & pages" && (
           <Sources loadSources={conn.loadSources} />
         )}

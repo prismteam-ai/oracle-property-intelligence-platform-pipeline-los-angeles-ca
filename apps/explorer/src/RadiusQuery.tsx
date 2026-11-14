@@ -1,6 +1,16 @@
 import { useState, type FormEvent } from "react";
-import type { ApiClient, SearchResult } from "@oracle-la/api-client";
+import type {
+  ApiClient,
+  OwnershipBasis,
+  SearchResult,
+} from "@oracle-la/api-client";
 import { basisLabel } from "./basis.ts";
+import {
+  BASES,
+  DEFAULT_BASIS,
+  OWNERSHIP_TEXTS,
+  PROXY_NOTE,
+} from "./ownership.ts";
 
 /** Radius + roof-age query as form and table (no map in the Explorer; the CRM owns the map). */
 export function RadiusQuery({ api }: { api: ApiClient }) {
@@ -10,6 +20,11 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
     radius_miles: 5,
     threshold_years: 15,
   });
+  // The ownership filter: off by default; turned on, "both" is preselected.
+  const [ownership, setOwnership] = useState<{
+    on: boolean;
+    basis: OwnershipBasis;
+  }>({ on: false, basis: DEFAULT_BASIS });
   const [offset, setOffset] = useState(0);
   const [res, setRes] = useState<SearchResult>();
   const [error, setError] = useState<string>();
@@ -17,7 +32,13 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
     setError(undefined);
     try {
       setRes(
-        await api.parcels.search.query({ ...form, offset: off, limit: 50 }),
+        await api.parcels.search.query({
+          ...form,
+          // Sent only when the filter is on: no ownership filter by default.
+          ...(ownership.on ? { ownership_basis: ownership.basis } : {}),
+          offset: off,
+          limit: 50,
+        }),
       );
       setOffset(off);
     } catch (e) {
@@ -79,12 +100,62 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
         </label>
         <button type="submit">Search</button>
       </form>
+      <fieldset data-testid="ownership">
+        <legend>
+          <label>
+            <input
+              type="checkbox"
+              name="ownership-on"
+              checked={ownership.on}
+              onChange={(e) =>
+                setOwnership((o) => ({ ...o, on: e.target.checked }))
+              }
+            />{" "}
+            Owner unchanged for 10 years or more (ownership filter)
+          </label>
+        </legend>
+        {ownership.on && (
+          <>
+            {BASES.map(([basis, label]) => (
+              <div key={basis} className="basis" data-basis={basis}>
+                <label>
+                  <input
+                    type="radio"
+                    name="ownership-basis"
+                    value={basis}
+                    checked={ownership.basis === basis}
+                    onChange={() => setOwnership((o) => ({ ...o, basis }))}
+                  />{" "}
+                  {label}
+                </label>
+                <p className="note">{OWNERSHIP_TEXTS[basis].text}</p>
+                <p className="note" data-testid="ownership-weakness">
+                  Weakness: {OWNERSHIP_TEXTS[basis].weakness}
+                </p>
+              </div>
+            ))}
+            <p className="note" data-testid="ownership-proxy-note">
+              {PROXY_NOTE}
+            </p>
+          </>
+        )}
+      </fieldset>
       {error && <p className="error">{error}</p>}
       {res && (
         <>
           <p className="note" data-testid="rule">
             {res.rule.text}
           </p>
+          {res.ownership && (
+            <p
+              className="note"
+              data-testid="ownership-rule"
+              data-basis={res.ownership.basis}
+            >
+              Ownership filter ({res.ownership.basis}): {res.ownership.text}{" "}
+              Weakness: {res.ownership.weakness} {res.ownership.proxy_note}
+            </p>
+          )}
           <p>
             <b data-testid="radius-count">
               {res.count.toLocaleString("en-US")}
@@ -112,6 +183,7 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
                 <th>Effective roof year</th>
                 <th>Basis</th>
                 <th>Roof age (years)</th>
+                <th>Land base year</th>
                 <th>Distance (mi)</th>
                 <th>Latitude</th>
                 <th>Longitude</th>
@@ -128,6 +200,9 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
                     {basisLabel(i.roof_age_basis, i.roof_year_permit_number)}
                   </td>
                   <td>{i.roof_age_years}</td>
+                  <td data-testid="land-base-year">
+                    {i.land_base_year ?? "—"}
+                  </td>
                   <td data-testid="distance">{i.distance_miles}</td>
                   <td data-testid="lat">{i.latitude}</td>
                   <td data-testid="lon">{i.longitude}</td>

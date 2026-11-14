@@ -1,11 +1,25 @@
-import type { ApiClient } from "@oracle-la/api-client";
+import type { ApiClient, RunRelation } from "@oracle-la/api-client";
+import { coverageText, type LoadSources } from "./sources.ts";
 import { useQuery } from "./useQuery.ts";
 
 const fmt = (n: unknown) =>
   typeof n === "number" ? n.toLocaleString("en-US") : String(n ?? "—");
 
+/**
+ * A run's relation to the previous run as recorded: "rebuild of <run ID>, no source changes", "new data", or
+ * nothing at all where the run recorded no run_kind (never a guess).
+ */
+export function runKindText(r: Partial<RunRelation>): string {
+  if (r.run_kind === "rebuild")
+    return [
+      `rebuild of ${r.rebuild_of ?? "—"}`,
+      ...(r.source_changes === "none" ? ["no source changes"] : []),
+    ].join(", ");
+  return r.run_kind ?? "";
+}
+
 /** The run_manifest.json fields this view shows (v_run). */
-interface RunView {
+interface RunView extends Partial<RunRelation> {
   run_id?: string;
   run_name?: string;
   generated_at?: string;
@@ -47,7 +61,7 @@ interface RunView {
   limitations?: string[];
 }
 /** One run_history.jsonl entry (v_run_history). */
-interface HistoryView {
+interface HistoryView extends Partial<RunRelation> {
   run_id: string;
   finished_at?: string;
   row_counts?: { parquet?: number };
@@ -56,7 +70,13 @@ interface HistoryView {
   published?: boolean;
 }
 
-export function RunSummary({ api }: { api: ApiClient }) {
+export function RunSummary({
+  api,
+  loadSources,
+}: {
+  api: ApiClient;
+  loadSources: LoadSources;
+}) {
   const { data, error } = useQuery(
     () => api.explorer.runSummary.query(),
     "runSummary",
@@ -71,6 +91,7 @@ export function RunSummary({ api }: { api: ApiClient }) {
         {r.run_name} · generated {r.generated_at} · {r.county}, {r.state} (FIPS{" "}
         {r.fips}) · roll year {r.roll_year}
       </p>
+      {r.run_kind && <p data-testid="run-kind">Run kind: {runKindText(r)}</p>}
       <div className="cards">
         <div className="card">
           <span>Parcels in Parquet</span>
@@ -119,9 +140,10 @@ export function RunSummary({ api }: { api: ApiClient }) {
               <span>Permit-to-parcel links</span>
               <b>{fmt(r.row_counts.permits.parquet?.permit_parcels)}</b>
             </div>
-            <div className="card">
+            <div className="card" data-testid="contractor-rows-card">
               <span>Contractor rows</span>
               <b>{fmt(r.row_counts.permits.parquet?.permit_contractors)}</b>
+              <ContractorWindow loadSources={loadSources} />
             </div>
             <div className="card">
               <span>Parcels with permit data</span>
@@ -156,6 +178,7 @@ export function RunSummary({ api }: { api: ApiClient }) {
         <thead>
           <tr>
             <th>Run</th>
+            <th>Kind</th>
             <th>Finished</th>
             <th>Parquet rows</th>
             <th>Added</th>
@@ -168,6 +191,7 @@ export function RunSummary({ api }: { api: ApiClient }) {
           {(data.history as unknown as HistoryView[]).map((h) => (
             <tr key={h.run_id}>
               <td>{h.run_id}</td>
+              <td data-testid="history-kind">{h.run_kind ?? ""}</td>
               <td>{h.finished_at}</td>
               <td>{fmt(h.row_counts?.parquet)}</td>
               <td>{fmt(h.delta?.added)}</td>
@@ -180,4 +204,16 @@ export function RunSummary({ api }: { api: ApiClient }) {
       </table>
     </section>
   );
+}
+
+/**
+ * The contractor source's coverage window under the "Contractor rows" card, from explorer.sources (fetched once
+ * per session and shared with the other tabs; rendered only after the run summary, so it never races the
+ * cold start's first call).
+ */
+function ContractorWindow({ loadSources }: { loadSources: LoadSources }) {
+  const { data } = useQuery(loadSources, "sources");
+  const c = data?.sources.find((s) => s.source_kind === "contractor");
+  const text = c && coverageText(c);
+  return text ? <small data-testid="contractor-window">{text}</small> : null;
 }
