@@ -295,6 +295,25 @@ describe("prompts file (eval/prompts.json)", () => {
       "contractor_license_after_may_2023",
     ]);
   });
+  test("i (§18): no tool required, parcel_permits forbidden, Van Nuys resolved with no search required; the note says why", () => {
+    const i = byCase("i")[0]!;
+    expect(i.expected).toEqual({
+      tools: [],
+      forbidden_tools: ["parcel_permits"],
+      gaps: ["contractor_license_after_may_2023"],
+      refused: false,
+      place: { outcome: "resolved", name: "Van Nuys", search_required: false },
+    });
+    expect(i.note).toContain(
+      "the answer may state there is no contractor data after May 2023 without a search",
+    );
+    expect(i.note).toContain("contradicted the May 2023 rule added in 81d33fb");
+    // Every other prompt is unchanged: no forbidden tool, and a resolved place still requires the search.
+    for (const p of prompts.filter((x) => x.case !== "i")) {
+      expect(p.expected.forbidden_tools).toBeUndefined();
+      expect("search_required" in p.expected.place).toBe(false);
+    }
+  });
   test("the schema rejects an unknown gap, a duplicate id and a follow-up that opens its group", () => {
     const one = structuredClone(prompts[0]!);
     const bad = (ps: unknown) => promptsFileSchema.safeParse(ps).success;
@@ -314,6 +333,24 @@ describe("prompts file (eval/prompts.json)", () => {
       ]),
     ).toBe(false);
     expect(bad([one])).toBe(true);
+  });
+  test("the schema (§18): forbidden_tools optional tool names; search_required an optional boolean of resolved", () => {
+    const one = structuredClone(prompts[0]!);
+    const ok = (expected: Record<string, unknown>) =>
+      promptsFileSchema.safeParse([
+        { ...one, expected: { ...one.expected, ...expected } },
+      ]).success;
+    expect(ok({ forbidden_tools: ["parcel_permits"] })).toBe(true);
+    expect(ok({ forbidden_tools: ["no_such_tool"] })).toBe(false);
+    // A tool cannot be both required and forbidden.
+    expect(ok({ forbidden_tools: ["resolve_place"] })).toBe(false);
+    const place = { outcome: "resolved", name: "Van Nuys" };
+    expect(ok({ place: { ...place, search_required: false } })).toBe(true);
+    expect(ok({ place: { ...place, search_required: true } })).toBe(true);
+    expect(ok({ place: { ...place, search_required: "no" } })).toBe(false);
+    expect(
+      ok({ place: { outcome: "unknown", name: "X", search_required: false } }),
+    ).toBe(false);
   });
 });
 
@@ -715,6 +752,180 @@ describe("checks: §17 B1 and B2", () => {
     expect(c.counts.details[0]).toMatch(
       /^parcel_permits: the tool failed; the direct query did not/,
     );
+  });
+});
+
+describe("checks: §18 prompt i option 1 and the outside-city text", () => {
+  const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
+  const byId = (id: string) => prompts.find((p) => p.id === id)!;
+  const promptI = byId("i-contractors-after-may-2023");
+  const NO_CONTRACTOR_DATA =
+    "There is no contractor data for permits issued after May 2023: contractor rows end in May 2023.";
+
+  /** Resolve Van Nuys, then the given tool calls (built from its center), then answer. */
+  const vanNuysThen = (
+    calls: (center: {
+      lat: number;
+      lon: number;
+    }) => Parameters<typeof toolReply>[0],
+    text = NO_CONTRACTOR_DATA,
+  ): ConstructorParameters<typeof ScriptedModel>[0] => [
+    toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+    (p) => {
+      const { center } = lastToolResult(p, "resolve_place") as {
+        center: { lat: number; lon: number };
+      };
+      return toolReply(calls(center));
+    },
+    () => textReply(text),
+  ];
+
+  test("prompt i with only resolve_place passes tools and place (and every check)", async () => {
+    const a = await ask(promptI.question, [
+      toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      textReply(NO_CONTRACTOR_DATA),
+    ]);
+    const c = await checksOf(promptI, a);
+    expect(c.tools).toEqual({
+      result: "pass",
+      details: ["called: resolve_place"],
+    });
+    expect(c.place.result).toBe("pass");
+    expect(c.place.details).toContain("searches: 0");
+    expect([c.gaps.result, c.gaps_text.result]).toEqual(["pass", "pass"]);
+    expect(allPassed(c)).toBe(true);
+  });
+  test("prompt i with a parcel_permits call fails tools, naming the forbidden tool", async () => {
+    const a = await ask(
+      promptI.question,
+      vanNuysThen(() => [
+        { name: "parcel_permits", input: { parcel_id: FAKE_PARCELS[0] } },
+      ]),
+    );
+    const c = await checksOf(promptI, a);
+    expect(c.tools).toEqual({
+      result: "fail",
+      details: [
+        "called: resolve_place, parcel_permits",
+        "forbidden tool parcel_permits called (1 call(s))",
+      ],
+    });
+    expect(allPassed(c)).toBe(false);
+  });
+  test("prompt i: a search, if made, must still be at the center (same5): elsewhere fails place, at it passes", async () => {
+    const search = (dLat: number) =>
+      ask(
+        promptI.question,
+        vanNuysThen((center) => [
+          {
+            name: "long_open_permits",
+            input: { lat: center.lat + dLat, lon: center.lon, radius_miles: 5 },
+          },
+        ]),
+      );
+    const elsewhere = await checksOf(promptI, await search(0.01));
+    expect(elsewhere.place.result).toBe("fail");
+    expect(elsewhere.place.details.at(-1)).toBe(
+      "want resolved, reliable, and no search or a search at its center",
+    );
+    expect(elsewhere.tools.result).toBe("pass");
+    const atCenter = await checksOf(promptI, await search(0));
+    expect(atCenter.place.result).toBe("pass");
+  });
+  test("every other prompt still requires the search: b with only resolve_place fails place", async () => {
+    const b = byId("b-crm-van-nuys");
+    expect(b.expected.place).toEqual({ outcome: "resolved", name: "Van Nuys" });
+    const a = await ask(b.question, [
+      toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      textReply("No long-open roofing permits were searched."),
+    ]);
+    const c = await checksOf(b, a);
+    expect(c.place.result).toBe("fail");
+    expect(c.place.details.at(-1)).toBe(
+      "want resolved, reliable, and a search at its center",
+    );
+    expect(c.tools.result).toBe("fail");
+  });
+  test("a refusal prompt (no tool, no forbidden_tools) still fails on any call", async () => {
+    const g = byId("g-owner-refused");
+    expect(g.expected.tools).toEqual([]);
+    const a = await ask("Which properties have old roofs near Van Nuys?", [
+      toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      textReply("Done."),
+    ]);
+    const c = await checksOf(g, a);
+    expect(c.tools.result).toBe("fail");
+    expect(c.tools.details).toContain(
+      "a tool was called although none was expected",
+    );
+  });
+
+  describe('gaps_text outside_city_of_la: "permit data does not cover <place>"', () => {
+    const d = byId("d-pasadena-outside-city");
+    const pasadena = (text: string) =>
+      ask(d.question, [
+        toolReply([{ name: "resolve_place", input: { name: "Pasadena" } }]),
+        (p) => {
+          const { center } = lastToolResult(p, "resolve_place") as {
+            center: { lat: number; lon: number };
+          };
+          return toolReply([
+            {
+              name: "search_aged_roofs",
+              input: { ...center, radius_miles: 1, threshold_years: 20 },
+            },
+          ]);
+        },
+        () => textReply(text),
+      ]);
+    test("the Haiku smoke-2 wording passes for the Pasadena prompt", async () => {
+      const a = await pasadena(
+        "Roofs older than 20 years near Pasadena are listed above. LADBS permit data does not cover Pasadena, so open roofing permits cannot be checked there.",
+      );
+      const c = await checksOf(d, a);
+      expect(c.gaps_text).toEqual({
+        result: "pass",
+        details: ["outside_city_of_la: mentioned"],
+      });
+      expect(c.gaps.result).toBe("pass");
+    });
+    test("an answer that does not state the gap still fails: only parcels; another place's name", async () => {
+      const parcelsOnly = await pasadena(
+        `Old roofs within one mile of Pasadena: ${FAKE_PARCELS.join(", ")}.`,
+      );
+      expect((await checksOf(d, parcelsOnly)).gaps_text).toEqual({
+        result: "fail",
+        details: ["outside_city_of_la: NOT mentioned in the text"],
+      });
+      const glendale = await pasadena(
+        "Old roofs are listed above. LADBS permit data does not cover Glendale.",
+      );
+      expect((await checksOf(d, glendale)).gaps_text.result).toBe("fail");
+    });
+    test("the place name is matched case-insensitively and escaped; with no expected place name, 1–4 words", async () => {
+      const lower = await pasadena("Permit data does not cover pasadena.");
+      expect((await checksOf(d, lower)).gaps_text.result).toBe("pass");
+      const dotted = prompt({
+        gaps: ["outside_city_of_la"],
+        place: { outcome: "resolved", name: "St. Pasadena" },
+      });
+      const stx = await pasadena("Permit data does not cover StX Pasadena.");
+      expect((await checksOf(dotted, stx)).gaps_text.result).toBe("fail");
+      const st = await pasadena("Permit data does not cover St. Pasadena.");
+      expect((await checksOf(dotted, st)).gaps_text.result).toBe("pass");
+      // No expected place name (outcome none): any 1–4 word place.
+      const noName = prompt({ gaps: ["outside_city_of_la"] });
+      const anyPlace = await pasadena(
+        "LADBS permit data does not cover South Pasadena.",
+      );
+      expect((await checksOf(noName, anyPlace)).gaps_text.result).toBe("pass");
+      const parcelsOnly = await pasadena(
+        `Old roofs within one mile: ${FAKE_PARCELS.join(", ")}.`,
+      );
+      expect((await checksOf(noName, parcelsOnly)).gaps_text.result).toBe(
+        "fail",
+      );
+    });
   });
 });
 

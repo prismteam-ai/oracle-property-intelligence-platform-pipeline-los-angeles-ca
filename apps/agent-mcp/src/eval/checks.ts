@@ -19,7 +19,7 @@ import {
   type SessionArea,
   type ToolName,
 } from "@oracle-la/agent";
-import { GAPS, type EvalPrompt } from "./prompts.ts";
+import { GAPS, type EvalPrompt, type GapSpec } from "./prompts.ts";
 
 /** The API Gateway HTTP API's maximum integration timeout (docs/sources.md §3), in ms. */
 export const ELAPSED_LIMIT_MS = 30_000;
@@ -386,10 +386,19 @@ export function checkCited(
   return check(details, !answer.unverified_ids.length && !notCited.length);
 }
 
-/** (iii) The expected gaps in the answer's gaps list, and mentioned in its text. */
+/** The expected place's name, when the prompt names a place. */
+const placeNameOf = (
+  place: EvalPrompt["expected"]["place"],
+): string | undefined => ("name" in place ? place.name : undefined);
+
+/**
+ * (iii) The expected gaps in the answer's gaps list, and mentioned in its text (a gap's text pattern may depend on
+ * the prompt's expected place name).
+ */
 export function checkGaps(
   answer: AgentAnswer,
   expected: EvalPrompt["expected"]["gaps"],
+  placeName?: string,
 ): { gaps: CheckResult; gaps_text: CheckResult } {
   if (!expected.length) {
     const none = check(["no gap expected"], null);
@@ -399,10 +408,12 @@ export function checkGaps(
     id,
     ok: answer.gaps.some((g) => GAPS[id].inGaps(g)),
   }));
-  const said = expected.map((id) => ({
-    id,
-    ok: GAPS[id].inText.test(answer.text),
-  }));
+  const said = expected.map((id) => {
+    const spec: GapSpec = GAPS[id];
+    const re =
+      typeof spec.inText === "function" ? spec.inText(placeName) : spec.inText;
+    return { id, ok: re.test(answer.text) };
+  });
   return {
     gaps: check(
       listed.map((x) => `${x.id}: ${x.ok ? "listed" : "NOT in the gaps"}`),
@@ -426,7 +437,10 @@ export function checkElapsed(answer: AgentAnswer): CheckResult {
   );
 }
 
-/** The expected tools were called, one call of each with its expected input values. */
+/**
+ * The expected tools were called, one call of each with its expected input values, and no forbidden tool was
+ * called. A prompt with no expected tool and no forbidden_tools (a refusal) fails on any call.
+ */
 export function checkTools(
   calls: readonly ToolCallRecord[],
   expected: EvalPrompt["expected"],
@@ -458,8 +472,15 @@ export function checkTools(
       details.push(`no ${tool} call with ${JSON.stringify(want)}`);
     }
   }
-  if (!expected.tools.length && calls.length) {
-    // A prompt that expects no tool (a refusal) fails on any call.
+  for (const t of expected.forbidden_tools ?? []) {
+    const n = calls.filter((c) => c.name === t).length;
+    if (n) {
+      ok = false;
+      details.push(`forbidden tool ${t} called (${n} call(s))`);
+    }
+  }
+  if (!expected.tools.length && !expected.forbidden_tools && calls.length) {
+    // A prompt that expects no tool and lists no forbidden tool (a refusal) fails on any call.
     ok = false;
     details.push("a tool was called although none was expected");
   }
@@ -557,6 +578,7 @@ export function checkPlace(
         ) && searches.length === 0,
       );
     case "resolved": {
+      const searchRequired = expected.search_required !== false;
       const ok = mine.some(
         (r) =>
           r.status === "resolved" &&
@@ -567,18 +589,20 @@ export function checkPlace(
               arr(r.raw_values).includes(expected.jurisdiction))) &&
           (expected.parcel_count === undefined ||
             r.parcel_count === expected.parcel_count) &&
-          // At its center: equal when both round to the same 5-decimal value.
-          searches.some(
-            (s) =>
-              typeof s.lat === "number" &&
-              typeof s.lon === "number" &&
-              same5(s.lat, r.center!.lat) &&
-              same5(s.lon, r.center!.lon),
-          ),
+          // At its center: equal when both round to the same 5-decimal value. With search_required false, no
+          // search passes; a search that was made must still be at the center.
+          ((!searchRequired && searches.length === 0) ||
+            searches.some(
+              (s) =>
+                typeof s.lat === "number" &&
+                typeof s.lon === "number" &&
+                same5(s.lat, r.center!.lat) &&
+                same5(s.lon, r.center!.lon),
+            )),
       );
       if (!ok)
         details.push(
-          `want resolved${expected.jurisdiction ? `, jurisdiction ${expected.jurisdiction}` : ""}${expected.parcel_count ? `, ${expected.parcel_count} parcels` : ""}, reliable, and a search at its center`,
+          `want resolved${expected.jurisdiction ? `, jurisdiction ${expected.jurisdiction}` : ""}${expected.parcel_count ? `, ${expected.parcel_count} parcels` : ""}, reliable, and ${searchRequired ? "a search" : "no search or a search"} at its center`,
         );
       return check(details, ok);
     }
@@ -597,7 +621,11 @@ export async function checkAnswer(args: {
 }): Promise<{ checks: AnswerChecks; calls: ToolCallRecord[] }> {
   const { prompt, answer } = args;
   const calls = toolCallsOf(answer, args.previousLength);
-  const gaps = checkGaps(answer, prompt.expected.gaps);
+  const gaps = checkGaps(
+    answer,
+    prompt.expected.gaps,
+    placeNameOf(prompt.expected.place),
+  );
   return {
     calls,
     checks: {

@@ -41,9 +41,15 @@ const standard = (start: string): string => {
 export interface GapSpec {
   /** True for the entry of AgentAnswer.gaps that states this gap (deterministic). */
   inGaps: (gap: string) => boolean;
-  /** The answer text mentions the gap (keywords; the model's own words). */
-  inText: RegExp;
+  /**
+   * The answer text mentions the gap (keywords; the model's own words). A function gets the prompt's expected place
+   * name (undefined when the prompt names no place).
+   */
+  inText: RegExp | ((placeName: string | undefined) => RegExp);
 }
+
+const escapeRegExp = (s: string): string =>
+  s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * The gap IDs a prompt can expect. A gap is stated when AgentAnswer.gaps has its entry (check "gaps") and the
@@ -62,7 +68,15 @@ export const GAPS = {
   outside_city_of_la: {
     inGaps: (g) =>
       /^.+ is outside the City of Los Angeles: no permit data there\.$/.test(g),
-    inText: /outside (?:the )?City of Los Angeles|no permit data/i,
+    // "permit data does not cover <place>": the prompt's expected place name when it has one, else 1–4 words.
+    inText: (placeName) =>
+      new RegExp(
+        String.raw`outside (?:the )?City of Los Angeles|no permit data|permit data does not cover ` +
+          (placeName === undefined
+            ? String.raw`[\p{L}\p{N}'-]+(?:\s+[\p{L}\p{N}'-]+){0,3}`
+            : escapeRegExp(placeName)),
+        "iu",
+      ),
   },
   place_unknown: {
     inGaps: (g) => g.includes("matches no jurisdiction or postal city"),
@@ -92,7 +106,8 @@ const placeName = z.string().trim().min(1).max(80);
 
 /**
  * Place outcomes: resolved (a resolve_place result for the name, reliable, and a search at its center; optional
- * jurisdiction and parcel count), unknown, "ambiguous/unreliable" (ambiguous, or resolved with no reliable
+ * jurisdiction and parcel count; with search_required false the search is optional, but one made must be at the
+ * center), unknown, "ambiguous/unreliable" (ambiguous, or resolved with no reliable
  * center; either way no search), reused_previous_area (every search uses the previous answer's center and radius),
  * none (no resolve_place call).
  */
@@ -102,6 +117,11 @@ export const placeSchema = z.discriminatedUnion("outcome", [
     name: placeName,
     jurisdiction: z.string().min(1).optional(),
     parcel_count: z.number().int().positive().optional(),
+    /**
+     * Default true: a search at the center is required. False: the answer may resolve the place without searching;
+     * a search, if made, must still be at the center.
+     */
+    search_required: z.boolean().optional(),
   }),
   z.strictObject({ outcome: z.literal("unknown"), name: placeName }),
   z.strictObject({
@@ -120,8 +140,13 @@ export const promptSchema = z.strictObject({
   note: z.string().optional(),
   question: z.string().trim().min(1).max(2000),
   expected: z.strictObject({
-    /** Tools that must be called (each at least once). */
+    /**
+     * Tools that must be called (each at least once). Empty with no forbidden_tools: no tool may be called; empty
+     * with forbidden_tools: any tool but the forbidden ones may be called.
+     */
     tools: z.array(toolName),
+    /** Tools that must not be called (a call of one fails the "tools" check). */
+    forbidden_tools: z.array(toolName).optional(),
     /** Per tool: input values one call of it must have (schema defaults applied). */
     tool_inputs: z
       .partialRecord(
@@ -155,6 +180,13 @@ export const promptsFileSchema = z
             code: "custom",
             path: [i, "expected", "tool_inputs", t],
             message: `tool_inputs names ${t}, which is not in tools`,
+          });
+      for (const t of p.expected.forbidden_tools ?? [])
+        if (p.expected.tools.includes(t))
+          ctx.addIssue({
+            code: "custom",
+            path: [i, "expected", "forbidden_tools"],
+            message: `${t} is both required (tools) and forbidden`,
           });
       if (p.expected.place.outcome === "reused_previous_area") {
         const before = ps.slice(0, i).some((q) => q.group === p.group);
