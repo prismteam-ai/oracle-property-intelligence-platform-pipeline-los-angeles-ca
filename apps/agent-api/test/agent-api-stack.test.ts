@@ -145,7 +145,7 @@ describe("OracleLaAgentApi", () => {
       AGENT_MODEL: "sonnet-5.5",
       AGENT_EFFORT: "low",
       AGENT_MAX_TOOL_TURNS: "5",
-      AGENT_MAX_TOKENS: "40000",
+      AGENT_MAX_TOKENS: "80000",
       AGENT_MAX_OUTPUT_TOKENS: "2048",
       AGENT_TIME_BUDGET_MS: "25000",
       POWERTOOLS_SERVICE_NAME: "oracle-la-agent",

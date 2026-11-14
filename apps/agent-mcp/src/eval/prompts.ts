@@ -108,9 +108,11 @@ export const GAPS = {
     inGaps: (g) =>
       /^.+ is outside the City of Los Angeles: no permit data there\.$/.test(g),
     // "permit data does not cover <place>": the prompt's expected place name when it has one, else 1–4 words.
+    // Approvals §3e.82.1: "permit data covers only (the) City of Los Angeles", and "only in/for the City of Los
+    // Angeles" only with "permit" or "permits" in the same sentence (no . ! ? or line break between them).
     inText: (placeName) =>
       new RegExp(
-        String.raw`outside (?:the )?City of Los Angeles|no permit data|permit data does not cover ` +
+        String.raw`outside (?:the )?City of Los Angeles|no permit data|permit data covers only (?:the )?City of Los Angeles|\bpermits?\b[^.!?\n]*?\bonly (?:in|for) the City of Los Angeles|\bonly (?:in|for) the City of Los Angeles\b[^.!?\n]*?\bpermits?\b|permit data does not cover ` +
           (placeName === undefined
             ? String.raw`[\p{L}\p{N}'-]+(?:\s+[\p{L}\p{N}'-]+){0,3}`
             : escapeRegExp(placeName)),
@@ -124,11 +126,12 @@ export const GAPS = {
   },
   place_ambiguous_or_unreliable: {
     inGaps: (g) => g.includes("too spread out") || g.includes("is ambiguous:"),
-    // Last alternative (design brief §19): a negated reliable/usable center or point, e.g. "the place name doesn't
-    // give a reliable center": a negation, then "reliable" or "usable", then center/centre/point, all in one sentence
-    // (no . ! ? or line break between them).
+    // "spread out" or "spread over" (approvals §3e.80: "spread over about 15 miles"). Last alternative (design brief
+    // §19): a negated reliable/usable center or point, e.g. "the place name doesn't give a reliable center": a
+    // negation, then "reliable", "reliably" or "usable", then center/centre/point, all in one sentence (no . ! ? or
+    // line break between them).
     inText:
-      /spread out|ambiguous|unreliable|not reliable|not meaningful|no (?:single|reliable|meaningful) cent(?:er|re)|\b(?:doesn['’]t|does not|don['’]t|can['’]t|cannot|isn['’]t|not|no|without)\b[^.!?\n]*?\b(?:reliable|usable)\b[^.!?\n]*?\b(?:cent(?:er|re)|point)/i,
+      /spread (?:out|over)|ambiguous|unreliable|not reliable|not meaningful|no (?:single|reliable|meaningful) cent(?:er|re)|\b(?:doesn['’]t|does not|don['’]t|can['’]t|cannot|isn['’]t|not|no|without)\b[^.!?\n]*?\b(?:reliabl[ey]|usable)\b[^.!?\n]*?\b(?:cent(?:er|re)|point)/i,
   },
   no_center: {
     inGaps: (g) => g === GAP_NO_CENTER,
@@ -151,9 +154,10 @@ const placeName = z.string().trim().min(1).max(80);
 /**
  * Place outcomes: resolved (a resolve_place result for the name, reliable, and a search at its center; optional
  * jurisdiction and parcel count; with search_required false the search is optional, but one made must be at the
- * center), unknown, "ambiguous/unreliable" (ambiguous, or resolved with no reliable
- * center; either way no search), reused_previous_area (every search uses the previous answer's center and radius),
- * none (no resolve_place call).
+ * center; with resolve_required false the resolve_place call is optional: without it the place check is skipped and
+ * any search is judged only by the expected and forbidden tools), unknown,
+ * "ambiguous/unreliable" (ambiguous, or resolved with no reliable center; either way no search),
+ * reused_previous_area (every search uses the previous answer's center and radius), none (no resolve_place call).
  */
 export const placeSchema = z.discriminatedUnion("outcome", [
   z.strictObject({
@@ -166,6 +170,12 @@ export const placeSchema = z.discriminatedUnion("outcome", [
      * a search, if made, must still be at the center.
      */
     search_required: z.boolean().optional(),
+    /**
+     * Default true: a resolve_place call for the name is required. False (prompt i only; approvals §3e.83.3): the
+     * call is allowed, not required. With no call for the name the place check is skipped (n/a) and any search is
+     * judged only by the expected and forbidden tools; a call made is checked as for any resolved place.
+     */
+    resolve_required: z.boolean().optional(),
   }),
   z.strictObject({ outcome: z.literal("unknown"), name: placeName }),
   z.strictObject({

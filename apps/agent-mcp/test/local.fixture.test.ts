@@ -70,7 +70,7 @@ let permitData: LocalData;
 const SETTINGS: AgentSettings = {
   modelId: "claude-test-model",
   maxToolTurns: 5,
-  maxTokens: 40_000,
+  maxTokens: 80_000,
   maxOutputTokens: 2_048,
   timeBudgetMs: 25_000,
   effort: "low",

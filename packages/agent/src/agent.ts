@@ -498,6 +498,18 @@ function explain(
         );
         assumptions.push(durationAssumption(req.question, f.min_open_days));
         rules.push(longOpenRuleLine(f.min_open_days, f.max_open_days));
+        // with_contractor_window: the second list, within the contractor window (its limit computed by the tool).
+        if (f.within_window?.status === "read") {
+          reasoning.push(
+            `listed the long-open permits issued within the contractor window (open at most ${fmt(f.within_window.max_open_days)} days): ${fmt(f.within_window.count)} match, ${f.within_window.returned} listed`,
+          );
+          rules.push(
+            longOpenRuleLine(f.min_open_days, f.within_window.max_open_days),
+          );
+        } else if (f.within_window)
+          reasoning.push(
+            "did not list the long-open permits within the contractor window (stated as a gap)",
+          );
         break;
       case "parcel_detail":
         reasoning.push(

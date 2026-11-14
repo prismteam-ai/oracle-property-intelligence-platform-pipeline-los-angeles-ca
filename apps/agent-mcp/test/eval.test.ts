@@ -82,7 +82,7 @@ import {
 const SETTINGS: AgentSettings = {
   modelId: "claude-test-model",
   maxToolTurns: 5,
-  maxTokens: 40_000,
+  maxTokens: 80_000,
   maxOutputTokens: 2_048,
   timeBudgetMs: 25_000,
   effort: "low",
@@ -302,23 +302,29 @@ describe("prompts file (eval/prompts.json)", () => {
       "contractor_license_after_may_2023",
     ]);
   });
-  test("i (§18): no tool required, parcel_permits forbidden, Van Nuys resolved with no search required; the note says why", () => {
+  test("i (§3e.80): run_summary required, parcel_permits forbidden, Van Nuys allowed (not required) with no search required; the note says why", () => {
     const i = byCase("i")[0]!;
     expect(i.expected).toEqual({
-      tools: [],
+      tools: ["run_summary"],
       forbidden_tools: ["parcel_permits"],
       gaps: ["contractor_license_after_may_2023"],
       refused: false,
-      place: { outcome: "resolved", name: "Van Nuys", search_required: false },
+      place: {
+        outcome: "resolved",
+        name: "Van Nuys",
+        search_required: false,
+        resolve_required: false,
+      },
     });
     expect(i.note).toContain(
-      "the answer may state there is no contractor data after May 2023 without a search",
+      "the May 2023 line of the system prompt says to call it and state the contractor window from it",
     );
-    expect(i.note).toContain("contradicted the May 2023 rule added in 81d33fb");
-    // Every other prompt is unchanged: no forbidden tool, and a resolved place still requires the search.
+    expect(i.note).toContain("resolve_place is allowed, not required");
+    // Every other prompt is unchanged: no forbidden tool, and a resolved place still requires the call and the search.
     for (const p of prompts.filter((x) => x.case !== "i")) {
       expect(p.expected.forbidden_tools).toBeUndefined();
       expect("search_required" in p.expected.place).toBe(false);
+      expect("resolve_required" in p.expected.place).toBe(false);
     }
   });
   test("the schema rejects an unknown gap, a duplicate id and a follow-up that opens its group", () => {
@@ -357,6 +363,23 @@ describe("prompts file (eval/prompts.json)", () => {
     expect(ok({ place: { ...place, search_required: "no" } })).toBe(false);
     expect(
       ok({ place: { outcome: "unknown", name: "X", search_required: false } }),
+    ).toBe(false);
+    // resolve_required (§3e.83.3): an optional boolean of resolved, on its own (not tied to search_required).
+    expect(
+      ok({
+        place: { ...place, search_required: false, resolve_required: false },
+      }),
+    ).toBe(true);
+    expect(ok({ place: { ...place, resolve_required: false } })).toBe(true);
+    expect(
+      ok({
+        place: { ...place, search_required: true, resolve_required: false },
+      }),
+    ).toBe(true);
+    expect(ok({ place: { ...place, resolve_required: true } })).toBe(true);
+    expect(ok({ place: { ...place, resolve_required: "no" } })).toBe(false);
+    expect(
+      ok({ place: { outcome: "unknown", name: "X", resolve_required: false } }),
     ).toBe(false);
   });
 });
@@ -767,9 +790,9 @@ describe("checks: §18 prompt i option 1 and the outside-city text", () => {
   const byId = (id: string) => prompts.find((p) => p.id === id)!;
   const promptI = byId("i-contractors-after-may-2023");
   const NO_CONTRACTOR_DATA =
-    "There is no contractor data for permits issued after May 2023: contractor rows end in May 2023.";
+    "There is no contractor data for permits issued after May 2023: the run summary's contractor rows cover permits issued 2013-01-02 to 2023-05-19.";
 
-  /** Resolve Van Nuys, then the given tool calls (built from its center), then answer. */
+  /** Resolve Van Nuys and read the run summary, then the given tool calls (built from its center), then answer. */
   const vanNuysThen = (
     calls: (center: {
       lat: number;
@@ -777,7 +800,10 @@ describe("checks: §18 prompt i option 1 and the outside-city text", () => {
     }) => Parameters<typeof toolReply>[0],
     text = NO_CONTRACTOR_DATA,
   ): ConstructorParameters<typeof ScriptedModel>[0] => [
-    toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+    toolReply([
+      { name: "resolve_place", input: { name: "Van Nuys" } },
+      { name: "run_summary", input: {} },
+    ]),
     (p) => {
       const { center } = lastToolResult(p, "resolve_place") as {
         center: { lat: number; lon: number };
@@ -787,24 +813,37 @@ describe("checks: §18 prompt i option 1 and the outside-city text", () => {
     () => textReply(text),
   ];
 
-  test("prompt i with only resolve_place passes tools and place (and every check)", async () => {
+  test("prompt i with resolve_place and run_summary passes tools and place (and every check)", async () => {
     const a = await ask(promptI.question, [
-      toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      toolReply([
+        { name: "resolve_place", input: { name: "Van Nuys" } },
+        { name: "run_summary", input: {} },
+      ]),
       textReply(NO_CONTRACTOR_DATA),
     ]);
     const c = await checksOf(promptI, a);
     expect(c.tools).toEqual({
       result: "pass",
-      details: ["called: resolve_place"],
+      details: ["called: resolve_place, run_summary"],
     });
     expect(c.place.result).toBe("pass");
     expect(c.place.details).toContain("searches: 0");
     expect([c.gaps.result, c.gaps_text.result]).toEqual(["pass", "pass"]);
     expect(allPassed(c)).toBe(true);
   });
-  test("prompt i with the contractor window from explorer.sources (P19): the gap names the source and window; every check still passes", async () => {
+  test("prompt i with only resolve_place now fails tools: run_summary not called (§3e.80)", async () => {
     const a = await ask(promptI.question, [
       toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      textReply(NO_CONTRACTOR_DATA),
+    ]);
+    const c = await checksOf(promptI, a);
+    expect(c.tools.result).toBe("fail");
+    expect(c.tools.details).toContain("run_summary not called");
+    expect(c.place.result).toBe("pass");
+  });
+  test("prompt i with the contractor window from explorer.sources (P19): the gap names the source and window; every check still passes", async () => {
+    const a = await ask(promptI.question, [
+      toolReply([{ name: "run_summary", input: {} }]),
       textReply(NO_CONTRACTOR_DATA),
     ]);
     expect(a.gaps).toContain("No contractor license data after May 2023.");
@@ -813,6 +852,8 @@ describe("checks: §18 prompt i option 1 and the outside-city text", () => {
     );
     const c = await checksOf(promptI, a);
     expect([c.gaps.result, c.gaps_text.result]).toEqual(["pass", "pass"]);
+    // No resolve_place call and no search: the place check is skipped (resolve_required false).
+    expect(c.place.result).toBe("n/a");
     expect(allPassed(c)).toBe(true);
   });
   test("prompt i with a parcel_permits call fails tools, naming the forbidden tool", async () => {
@@ -826,7 +867,7 @@ describe("checks: §18 prompt i option 1 and the outside-city text", () => {
     expect(c.tools).toEqual({
       result: "fail",
       details: [
-        "called: resolve_place, parcel_permits",
+        "called: resolve_place, run_summary, parcel_permits",
         "forbidden tool parcel_permits called (1 call(s))",
       ],
     });
@@ -1977,3 +2018,357 @@ describe("coverage prompt o (approvals §3e.78.1), with the scripted model", () 
       expect(re.test(bad)).toBe(false);
   });
 });
+
+describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model", () => {
+  const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
+  const byId = (id: string) => prompts.find((p) => p.id === id)!;
+
+  test("a2 (§3e.83.1): one long_open_permits call with with_contractor_window returns both labeled lists, the limit computed in code; then parcel_permits per listed parcel: every check passes", async () => {
+    const a1 = byId("a1-readme-108-van-nuys");
+    const a2 = byId("a2-readme-110-follow-up");
+    const first = await ask(
+      a1.question,
+      vanNuysSearch((ps) => `Parcels: ${ps.join(", ")}.`),
+    );
+    const area = first.session.area!;
+    const at = { lat: area.lat, lon: area.lon, radius_miles: 5 };
+    // 2026-11-12 (the fake rule's reference date) minus 2013-01-02 (the window's first day) = 5,062 days.
+    const WITHIN = 5062;
+    const model = new ScriptedModel([
+      toolReply([
+        {
+          name: "long_open_permits",
+          input: { ...at, limit: 5, with_contractor_window: true },
+        },
+      ]),
+      (p) => {
+        const r = lastToolResult(p, "long_open_permits") as {
+          within_contractor_window: { items: { parcel_id: string }[] };
+        };
+        return toolReply(
+          r.within_contractor_window.items.map((it) => ({
+            name: "parcel_permits",
+            input: { parcel_id: it.parcel_id },
+          })),
+        );
+      },
+      textReply(
+        `The longest-open permits were issued before the contractor window (2013-01-02 to 2023-05-19). Within it, permit ${FAKE_PERMITS[0]} on parcel ${FAKE_PARCELS[0]} lists ACME ROOFING, INC. (license 123456, C-39).`,
+      ),
+    ]);
+    const { queries, calls } = fakeQueries();
+    const answer = await runAgent(
+      {
+        question: a2.question,
+        history: first.history,
+        session: first.session,
+      },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(answer.status).toBe("answered");
+    // Two tool rounds and the final call: three model calls.
+    expect(answer.usage.model_calls).toBe(3);
+    expect(model.remaining).toBe(0);
+    expect(
+      (model.requests[0]!.params.system as string).includes(
+        "When a question asks for long-open permits and their contractors, set with_contractor_window in long_open_permits",
+      ),
+    ).toBe(true);
+    // The tool result as the model received it: both lists labeled, the limit and the two dates stated.
+    const r = lastToolResult(
+      model.requests[1]!.params,
+      "long_open_permits",
+    ) as Record<string, Record<string, unknown>>;
+    expect(r.contractor_window).toMatchObject({
+      first: "2013-01-02",
+      last: "2023-05-19",
+      reference_date: "2026-11-12",
+      max_open_days: WITHIN,
+    });
+    expect(r.contractor_window!.text).toContain(
+      "A permit issued on or after 2013-01-02 has been open at most 5,062 days on the run's reference date 2026-11-12, so the within-window list is limited to 5,062 days open.",
+    );
+    expect(r.longest_open!.label).toBe(
+      "Longest-open permits, any issue date (open at least 1,826 days)",
+    );
+    expect(r.within_contractor_window!.label).toBe(
+      "Longest-open permits issued within the contractor window (open at least 1,826 days and at most 5,062 days)",
+    );
+    // Data calls, one at a time: the window read once (the prompt's, shared), two long-open reads, one permits read
+    // per listed parcel.
+    const fns = calls.map((c) => c.fn);
+    expect(fns.filter((f) => f === "explorer.sources")).toHaveLength(1);
+    const longOpen = calls.filter((c) => c.fn === "permits.longOpen");
+    expect(longOpen).toHaveLength(2);
+    expect(longOpen[0]!.input).not.toHaveProperty("max_open_days");
+    expect(longOpen[1]!.input).toMatchObject({
+      min_open_days: 1826,
+      max_open_days: WITHIN,
+    });
+    expect(fns.filter((f) => f === "permits.forParcel").length).toBe(2);
+    const c = await checksOf(a2, answer, {
+      queries,
+      previousLength: first.history.length,
+      previousArea: area,
+    });
+    expect(c.tools.result).toBe("pass");
+    expect(c.place.result).toBe("pass");
+    // Both lists compared with their own direct queries.
+    expect(c.counts.result).toBe("pass");
+    expect(c.counts.details.join(" ")).toContain(
+      "permits.longOpen (within_contractor_window)",
+    );
+    expect(allPassed(c)).toBe(true);
+  });
+
+  test("a2 as answered on 6432d4a (one long_open_permits call, no parcel_permits) still fails tools: the check is unchanged", async () => {
+    const a1 = byId("a1-readme-108-van-nuys");
+    const a2 = byId("a2-readme-110-follow-up");
+    const first = await ask(
+      a1.question,
+      vanNuysSearch((ps) => `Parcels: ${ps.join(", ")}.`),
+    );
+    const area = first.session.area!;
+    const answer = await ask(
+      a2.question,
+      [
+        toolReply([
+          {
+            name: "long_open_permits",
+            input: { lat: area.lat, lon: area.lon, radius_miles: 5 },
+          },
+        ]),
+        textReply(
+          "These were issued before the contractor window, so no contractor can be named.",
+        ),
+      ],
+      { history: first.history, session: first.session },
+    );
+    const c = await checksOf(a2, answer, {
+      previousLength: first.history.length,
+      previousArea: area,
+    });
+    expect(c.tools.result).toBe("fail");
+    expect(c.tools.details).toContain("parcel_permits not called");
+  });
+
+  test("h: an area question that also asks about BBB is answered with the usual tools (resolve_place, long_open_permits), the gap stated; no run_summary needed: every check passes", async () => {
+    const h = byId("h-bbb-van-nuys");
+    const { queries, calls } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      (p) => {
+        const { center } = lastToolResult(p, "resolve_place") as {
+          center: { lat: number; lon: number };
+        };
+        return toolReply([
+          {
+            name: "long_open_permits",
+            input: { lat: center.lat, lon: center.lon, radius_miles: 5 },
+          },
+        ]);
+      },
+      textReply(
+        `BBB ratings are not available in this data. Long-open roofing permits near Van Nuys: ${FAKE_PERMITS[0]}, ${FAKE_PERMITS[2]}.`,
+      ),
+    ]);
+    const a = await runAgent(
+      { question: h.question },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    expect(calls.map((c) => c.fn)).not.toContain("explorer.runSummary");
+    const system = model.requests[0]!.params.system as string;
+    expect(system).toContain(
+      "A question that also asks about an area, parcels or permits is answered with the usual tools as for any other question, stating the gap; run_summary is not needed for it.",
+    );
+    const c = await checksOf(h, a, { queries });
+    expect(allPassed(c)).toBe(true);
+  });
+
+  test("h as answered on 6432d4a (run_summary only, the search offered) still fails tools and place", async () => {
+    const h = byId("h-bbb-van-nuys");
+    const a = await ask(h.question, [
+      toolReply([{ name: "run_summary", input: {} }]),
+      textReply(
+        "This data has no BBB ratings. Do you want me to run the long-open permit search near Van Nuys?",
+      ),
+    ]);
+    const c = await checksOf(h, a);
+    expect([c.tools.result, c.place.result]).toEqual(["fail", "fail"]);
+  });
+
+  test("a coverage-only question still calls run_summary first (prompt o): every check passes", async () => {
+    const o = byId("o-bbb-coverage");
+    const { queries, calls } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([{ name: "run_summary", input: {} }]),
+      textReply(
+        "BBB ratings are not available: none of the run's sources is a BBB source.",
+      ),
+    ]);
+    const a = await runAgent(
+      { question: o.question },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(calls.map((c) => c.fn)).toContain("explorer.runSummary");
+    expect(model.requests[0]!.params.system as string).toContain(
+      "- A question that asks only what the data covers or lacks (its sources, coverage, BBB ratings, owners, the contractor window, what you can do) is in scope: call run_summary first and answer from it",
+    );
+    expect(allPassed(await checksOf(o, a, { queries }))).toBe(true);
+  });
+
+  test("i: run_summary called, the window stated from it; the answer is shown, not replaced by the no-tool-call rule: every check passes", async () => {
+    const i = byId("i-contractors-after-may-2023");
+    const { queries, calls } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([{ name: "run_summary", input: {} }]),
+      textReply(
+        "There is no contractor data after May 2023: the contractor rows cover permits issued 2013-01-02 to 2023-05-19.",
+      ),
+    ]);
+    const a = await runAgent(
+      { question: i.question },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    expect(a.refused_by).toBeUndefined();
+    expect(a.text).not.toBe(NO_TOOL_CALL_TEXT);
+    expect(calls.map((c) => c.fn)).toContain("explorer.runSummary");
+    expect(model.requests[0]!.params.system as string).toContain(
+      "- Contractor rows end in May 2023: for permits issued after May 2023, call run_summary and state the contractor window from it (there is no contractor data after May 2023) instead of reading parcels' permits.",
+    );
+    const c = await checksOf(i, a, { queries });
+    expect(c.place.result).toBe("n/a");
+    expect(c.place.details).toContain(
+      "no resolve_place for Van Nuys: allowed, not required (resolve_required false), so the place check is skipped",
+    );
+    expect(allPassed(c)).toBe(true);
+  });
+
+  test("i as answered on 6432d4a (no tool call) is replaced by the no-tool-call rule and fails; with run_summary and a search but no resolve_place the place check is skipped (§3e.83.3)", async () => {
+    const i = byId("i-contractors-after-may-2023");
+    const none = await ask(i.question, [
+      textReply("There is no contractor data after May 2023."),
+    ]);
+    expect(none.refused_by).toBe("no_tool_call");
+    const cn = await checksOf(i, none);
+    expect([cn.tools.result, cn.refusal.result]).toEqual(["fail", "fail"]);
+    const searched = await ask(i.question, [
+      toolReply([
+        { name: "run_summary", input: {} },
+        {
+          name: "long_open_permits",
+          input: { ...VAN_NUYS_POINT, radius_miles: 5 },
+        },
+      ]),
+      textReply("There is no contractor data after May 2023."),
+    ]);
+    const cs = await checksOf(i, searched);
+    // No resolve_place call: the place check is skipped (n/a); the search is judged only by the expected and
+    // forbidden tools (run_summary called, parcel_permits not), so every check passes.
+    expect(cs.place.result).toBe("n/a");
+    expect(cs.place.details).toContain(
+      "no resolve_place for Van Nuys: allowed, not required (resolve_required false), so the place check is skipped",
+    );
+    expect(cs.tools.result).toBe("pass");
+    expect(allPassed(cs)).toBe(true);
+  });
+
+  test("i with a resolve_place call (§3e.83.3): the place check applies, so a search away from the resolved center fails place and one at it passes", async () => {
+    const i = byId("i-contractors-after-may-2023");
+    const at = (dLat: number) =>
+      ask(i.question, [
+        toolReply([
+          { name: "resolve_place", input: { name: "Van Nuys" } },
+          { name: "run_summary", input: {} },
+        ]),
+        (p) => {
+          const { center } = lastToolResult(p, "resolve_place") as {
+            center: { lat: number; lon: number };
+          };
+          return toolReply([
+            {
+              name: "long_open_permits",
+              input: {
+                lat: center.lat + dLat,
+                lon: center.lon,
+                radius_miles: 5,
+              },
+            },
+          ]);
+        },
+        textReply("There is no contractor data after May 2023."),
+      ]);
+    const away = await checksOf(i, await at(0.01));
+    expect(away.place.result).toBe("fail");
+    expect(away.place.details[0]).toMatch(
+      /^resolve_place: Van Nuys → resolved/,
+    );
+    const atCenter = await checksOf(i, await at(0));
+    expect(atCenter.place.result).toBe("pass");
+  });
+
+  test('f: "spread over" and "reliably" (Sonnet run 3 on 6432d4a) pass the place_ambiguous_or_unreliable text check', async () => {
+    const f = byId("f-los-angeles-ambiguous-unreliable");
+    const re = GAPS.place_ambiguous_or_unreliable.inText;
+    // run-3-f-los-angeles-ambiguous-unreliable.json on 6432d4a, the sentences that state the gap.
+    expect(
+      re.test(
+        "Those parcels are spread over about 15 miles (90% lie within 15.15 miles of that point).",
+      ),
+    ).toBe(true);
+    expect(re.test("The parcels are spread out.")).toBe(true);
+    expect(re.test("I can't reliably use that center.")).toBe(true);
+    expect(re.test("The name does not reliably give a point.")).toBe(true);
+    // Still one sentence, still negated: "reliably" alone, or with no center or point, does not pass.
+    expect(re.test("I can't run this search reliably yet.")).toBe(false);
+    expect(re.test("It reliably gives a center.")).toBe(false);
+    expect(re.test("The parcels spread across the county.")).toBe(false);
+    const run3 =
+      'I can\'t run this search reliably yet. "Los Angeles" resolved to a median center of 34.10198, -118.39110, taken from 803,001 parcels. Those parcels are spread over about 15 miles (90% lie within 15.15 miles of that point). A three-mile radius around that center would not mean "within three miles of Los Angeles". It would cover an arbitrary part of the city.';
+    const a = await ask(f.question, [
+      toolReply([{ name: "resolve_place", input: { name: "Los Angeles" } }]),
+      textReply(run3),
+    ]);
+    const c = await checksOf(f, a);
+    expect(c.gaps_text).toEqual({
+      result: "pass",
+      details: ["place_ambiguous_or_unreliable: mentioned"],
+    });
+  });
+
+  test('d (§3e.82.1): "permit data covers only the City of Los Angeles" (run 1 on 6432d4a) passes the outside_city_of_la text check; "only in/for the City of Los Angeles" passes only with "permit(s)" in the same sentence', () => {
+    const re = GAPS.outside_city_of_la.inText("Pasadena");
+    // run-1-d-pasadena-outside-city.json on 6432d4a, the sentences that state the gap.
+    expect(
+      re.test(
+        "This probably reflects missing data, not an absence of work. Permit data covers only the City of Los Angeles. Pasadena is a separate city, so the permit tool has no records for these parcels.",
+      ),
+    ).toBe(true);
+    expect(
+      re.test("Permit data covers only City of Los Angeles parcels."),
+    ).toBe(true);
+    expect(
+      re.test("Permits are recorded only in the City of Los Angeles."),
+    ).toBe(true);
+    expect(
+      re.test("Only for the City of Los Angeles are permits listed."),
+    ).toBe(true);
+    // Without "permit" or "permits" in the same sentence it does not pass.
+    expect(re.test("Roof data is only for the City of Los Angeles area.")).toBe(
+      false,
+    );
+    expect(
+      re.test(
+        "Roof data is only for the City of Los Angeles area. Permits vary.",
+      ),
+    ).toBe(false);
+    expect(
+      re.test("The permitted roof is only in the City of Los Angeles."),
+    ).toBe(false);
+  });
+});
+
+/** A point near Van Nuys that no resolve_place call produced (prompt i's search without a resolution). */
+const VAN_NUYS_POINT = { lat: 34.199, lon: -118.487 };

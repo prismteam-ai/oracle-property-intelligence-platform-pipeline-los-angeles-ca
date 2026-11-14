@@ -140,17 +140,18 @@
     "id": "i-contractors-after-may-2023",
     "case": "i",
     "group": "i-contractors-after-may-2023",
-    "note": "Contractors on permits issued after May 2023: the \"no contractor license data after May 2023\" gap must be stated. No tool is required (resolve_place is allowed) and no search is required: the answer may state there is no contractor data after May 2023 without a search. parcel_permits is forbidden (reading parcels' permits for contractors is what the May 2023 rule tells the model not to do). The earlier expectation (resolve_place and long_open_permits required) contradicted the May 2023 rule added in 81d33fb.",
+    "note": "Contractors on permits issued after May 2023: the \"no contractor license data after May 2023\" gap must be stated. run_summary is required: the May 2023 line of the system prompt says to call it and state the contractor window from it (approvals §3e.80); with no tool call the no-tool-call rule replaced the answer in the 6432d4a eval. resolve_place is allowed, not required (resolve_required false: with no resolve_place call the place check is skipped and any search is judged only by the expected and forbidden tools; with one, the place check applies), and no search is required. parcel_permits is forbidden (reading parcels' permits for contractors is what the May 2023 rule tells the model not to do).",
     "question": "Which contractors are listed on roofing permits issued after May 2023 within five miles of Van Nuys?",
     "expected": {
-      "tools": [],
+      "tools": ["run_summary"],
       "forbidden_tools": ["parcel_permits"],
       "gaps": ["contractor_license_after_may_2023"],
       "refused": false,
       "place": {
         "outcome": "resolved",
         "name": "Van Nuys",
-        "search_required": false
+        "search_required": false,
+        "resolve_required": false
       }
     }
   },

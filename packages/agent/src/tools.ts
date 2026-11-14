@@ -16,6 +16,7 @@ import type {
   DEFAULT_MIN_OPEN_DAYS as API_DEFAULT_MIN_OPEN_DAYS,
   MAX_OPEN_DAYS as API_MAX_OPEN_DAYS,
   LongOpenItem,
+  LongOpenResult,
   OwnershipBasis,
   ParcelDetail,
   ParcelPermit,
@@ -28,6 +29,7 @@ import {
   ownershipStated,
 } from "./ownership.ts";
 import { unavailableIn } from "./http-data.ts";
+import { contractorWindow } from "./contractor-coverage.ts";
 import { basisWord, type DataQueries, type SourceList } from "./permit-api.ts";
 import {
   resolutionNote,
@@ -147,6 +149,12 @@ export const toolSchemas = {
       .max(25)
       .default(10)
       .describe("Most items to return"),
+    with_contractor_window: z
+      .boolean()
+      .default(false)
+      .describe(
+        "Also list the longest-open permits issued within the contractor window, whose contractors the data can name: a second labeled list in the same result, with its day limit and dates stated. Off by default; on when the question asks for long-open permits and their contractors",
+      ),
   }),
   parcel_detail: z.strictObject({ parcel_id: parcelId }),
   parcel_permits: z.strictObject({ parcel_id: parcelId }),
@@ -173,7 +181,9 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "City of Los Angeles (LADBS) roofing-work permits, issued and still open, within a radius: open at least " +
     "min_open_days days (optionally at most max_open_days), longest open first, each counted once at its nearest " +
     "parcel. Durations are in days only. Each item has its permit number, parcel ID, status, open days, the " +
-    "roofing_work and roof_coating_only flags and its parcel's roof year; the permit source is cited once.",
+    "roofing_work and roof_coating_only flags and its parcel's roof year; the permit source is cited once. With " +
+    "with_contractor_window, a second list follows: the longest-open permits issued within the contractor window " +
+    "(at most the stated number of days open), each list labeled.",
   parcel_detail:
     "One parcel's property facts (address, year built, effective roof year and basis, use type, coordinates, " +
     "whether permit data covers it) and its provenance: source name and collection time (the source's URLs, terms " +
@@ -221,6 +231,8 @@ export type ToolFact =
       max_open_days: number | null;
       count: number;
       returned: number;
+      /** With with_contractor_window: the within-window list (or why it is missing); absent without it. */
+      within_window?: WithinWindowFact;
     }
   | { tool: "parcel_detail"; parcel_id: string }
   | {
@@ -636,75 +648,114 @@ const run = {
       input.max_open_days < input.min_open_days
     )
       throw new ToolInputError("max_open_days is below min_open_days");
-    const [res, src] = await Promise.all([
+    const longOpen = (maxOpenDays: number | undefined) =>
       q.permits.longOpen({
         lat: input.lat,
         lon: input.lon,
         radius_miles: input.radius_miles,
         min_open_days: input.min_open_days,
-        ...(input.max_open_days !== undefined
-          ? { max_open_days: input.max_open_days }
-          : {}),
+        ...(maxOpenDays !== undefined ? { max_open_days: maxOpenDays } : {}),
         sort: "open_days",
         offset: 0,
         limit: input.limit,
-      }),
-      q.explorer.sources(),
-    ]);
+      });
+    const fact = (res: LongOpenResult, items: unknown[]) => ({
+      tool: "long_open_permits" as const,
+      lat: input.lat,
+      lon: input.lon,
+      radius_miles: input.radius_miles,
+      min_open_days: input.min_open_days,
+      max_open_days: input.max_open_days ?? null,
+      count: res.count,
+      returned: items.length,
+    });
+    if (!input.with_contractor_window) {
+      const [res, src] = await Promise.all([
+        longOpen(input.max_open_days),
+        q.explorer.sources(),
+      ]);
+      const ref = sourceRef(src, "permit");
+      const list = longOpenList(res, ref, "long_open_permits");
+      return {
+        content: {
+          count: res.count,
+          returned: list.items.length,
+          rule: res.rule.text,
+          scope: LONG_OPEN_SCOPE,
+          source: ref,
+          items: list.items,
+          truncated: list.truncated,
+        },
+        records: list.records,
+        ids: list.ids,
+        gaps: list.gaps,
+        fact: fact(res, list.items),
+      };
+    }
+    // with_contractor_window (approvals §3e.83.1): one call at a time, each through the data layer's own per-call
+    // cap and retry (http-data.ts). The default list first; the window from explorer.sources (the answer's read for
+    // the prompt's contractor end: onceSources, no new call in the agent); then the within-window list.
+    const res = await longOpen(input.max_open_days);
+    const src = await q.explorer.sources();
     const ref = sourceRef(src, "permit");
-    const items = res.items.map((p: LongOpenItem) => ({
-      ...project(p as unknown as Record<string, unknown>, {
-        ...PERMIT_FIELDS,
-        ...fields("parcel_id", "distance_miles", "effective_roof_year"),
-      }),
-      ...basis(p.roof_age_basis),
-      ...project(
-        p as unknown as Record<string, unknown>,
-        fields("roof_year_permit_number"),
-      ),
-    }));
-    const gaps: string[] = [];
-    if (!ref && items.length) gaps.push(noSourceGap("permit"));
-    const truncated = res.count > items.length;
-    if (truncated)
-      gaps.push(
-        `Results truncated: long_open_permits returned ${items.length} of ${res.count} long-open permits (longest open first).`,
-      );
+    const first = longOpenList(res, ref, "the longest-open list");
+    const within = await withinWindow(
+      input,
+      res.rule.reference_date,
+      contractorWindow(src),
+      longOpen,
+    );
+    let second: ReturnType<typeof longOpenList> | null = null;
+    let withinContent: Record<string, unknown>;
+    let withinFact: WithinWindowFact;
+    if (within.status === "read") {
+      second = longOpenList(within.res, ref, "the within-window list");
+      withinContent = {
+        label: `Longest-open permits issued within the contractor window (open at least ${days(input.min_open_days)} and at most ${days(within.maxOpenDays)})`,
+        count: within.res.count,
+        returned: second.items.length,
+        max_open_days: within.maxOpenDays,
+        rule: within.res.rule.text,
+        items: second.items,
+        truncated: second.truncated,
+      };
+      withinFact = {
+        status: "read",
+        max_open_days: within.maxOpenDays,
+        count: within.res.count,
+        returned: second.items.length,
+      };
+    } else {
+      withinContent = {
+        label:
+          "Longest-open permits issued within the contractor window: not listed",
+        not_listed: within.gap,
+      };
+      withinFact = { status: "not_listed", gap: within.gap };
+    }
     return {
       content: {
-        count: res.count,
-        returned: items.length,
-        rule: res.rule.text,
         scope: LONG_OPEN_SCOPE,
         source: ref,
-        items,
-        truncated,
+        contractor_window: within.window,
+        longest_open: {
+          label: `Longest-open permits, any issue date (open at least ${days(input.min_open_days)}${input.max_open_days !== undefined ? ` and at most ${days(input.max_open_days)}` : ""})`,
+          count: res.count,
+          returned: first.items.length,
+          rule: res.rule.text,
+          items: first.items,
+          truncated: first.truncated,
+        },
+        within_contractor_window: withinContent,
       },
-      // Each item's permit, then the permit that set its parcel's roof year (when there is one).
-      records: ref
-        ? dedupeCitations(
-            res.items.flatMap((p) =>
-              present([
-                cite("permit", ref, p.permit_number),
-                roofYearCitation(ref, p.roof_year_permit_number),
-              ]),
-            ),
-          )
-        : [],
-      ids: res.items.flatMap((p) =>
-        strings(p.permit_number, p.parcel_id, p.roof_year_permit_number),
-      ),
-      gaps,
-      fact: {
-        tool: "long_open_permits",
-        lat: input.lat,
-        lon: input.lon,
-        radius_miles: input.radius_miles,
-        min_open_days: input.min_open_days,
-        max_open_days: input.max_open_days ?? null,
-        count: res.count,
-        returned: items.length,
-      },
+      records: dedupeCitations([...first.records, ...(second?.records ?? [])]),
+      ids: [...first.ids, ...(second?.ids ?? [])],
+      gaps: [
+        ...first.gaps,
+        ...(second?.gaps ?? []),
+        ...(withinFact.status === "not_listed" ? [withinFact.gap] : []),
+      ],
+      fact: { ...fact(res, first.items), within_window: withinFact },
     };
   },
 
@@ -882,6 +933,156 @@ const run = {
     };
   },
 };
+
+const days = (n: number) => `${n.toLocaleString("en-US")} days`;
+
+/** One long-open list as a tool result shows it: the projected items, citations, IDs and truncation gap. */
+function longOpenList(
+  res: LongOpenResult,
+  ref: SourceRef | null,
+  what: string,
+): {
+  items: Record<string, unknown>[];
+  truncated: boolean;
+  records: Citation[];
+  ids: string[];
+  gaps: string[];
+} {
+  const items = res.items.map((p: LongOpenItem) => ({
+    ...project(p as unknown as Record<string, unknown>, {
+      ...PERMIT_FIELDS,
+      ...fields("parcel_id", "distance_miles", "effective_roof_year"),
+    }),
+    ...basis(p.roof_age_basis),
+    ...project(
+      p as unknown as Record<string, unknown>,
+      fields("roof_year_permit_number"),
+    ),
+  }));
+  const gaps: string[] = [];
+  if (!ref && items.length) gaps.push(noSourceGap("permit"));
+  const truncated = res.count > items.length;
+  if (truncated)
+    gaps.push(
+      `Results truncated: ${what} returned ${items.length} of ${res.count} long-open permits (longest open first).`,
+    );
+  return {
+    items,
+    truncated,
+    // Each item's permit, then the permit that set its parcel's roof year (when there is one).
+    records: ref
+      ? dedupeCitations(
+          res.items.flatMap((p) =>
+            present([
+              cite("permit", ref, p.permit_number),
+              roofYearCitation(ref, p.roof_year_permit_number),
+            ]),
+          ),
+        )
+      : [],
+    ids: res.items.flatMap((p) =>
+      strings(p.permit_number, p.parcel_id, p.roof_year_permit_number),
+    ),
+    gaps,
+  };
+}
+
+/** The within-window list of long_open_permits, as the agent's reasoning states it. */
+export type WithinWindowFact =
+  | { status: "read"; max_open_days: number; count: number; returned: number }
+  | { status: "not_listed"; gap: string };
+
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+/** Whole days from one YYYY-MM-DD date to another (UTC); null when either is not such a date. */
+export function daysBetween(from: string, to: string): number | null {
+  const utc = (d: string) => {
+    const m = ISO_DAY.exec(d);
+    return m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+  };
+  const a = utc(from);
+  const b = utc(to);
+  return a === null || b === null ? null : Math.round((b - a) / 86_400_000);
+}
+
+/** The contractor window as a with_contractor_window result states it: its dates and the day limit. */
+interface WindowStated {
+  source_name: string | null;
+  first: string | null;
+  last: string | null;
+  reference_date: string;
+  /** The within-window day limit; null when there is no window to compute it from. */
+  max_open_days: number | null;
+  text: string;
+}
+
+/**
+ * The within-window call of long_open_permits: a permit issued on or after the window's first day has been open at
+ * most (reference date − first day) days, so the limit is that number of days (lowered to the call's own
+ * max_open_days when it is smaller), computed here, never by the model. No call when there is no window, or when
+ * the limit is below min_open_days (no permit can be both); a failed call is a stated gap, the first list stays.
+ */
+async function withinWindow(
+  input: ToolInput<"long_open_permits">,
+  referenceDate: string,
+  window: ReturnType<typeof contractorWindow>,
+  longOpen: (maxOpenDays: number) => Promise<LongOpenResult>,
+): Promise<
+  { window: WindowStated } & (
+    | { status: "read"; res: LongOpenResult; maxOpenDays: number }
+    | { status: "not_listed"; gap: string }
+  )
+> {
+  const toWindow = window ? daysBetween(window.first, referenceDate) : null;
+  if (!window || toWindow === null) {
+    const gap = window
+      ? `The within-window list is not given: the run's reference date (${referenceDate}) is not a date the day limit can be computed from.`
+      : "The within-window list is not given: the run's sources state no contractor window.";
+    return {
+      window: {
+        source_name: window?.source_name ?? null,
+        first: window?.first ?? null,
+        last: window?.last ?? null,
+        reference_date: referenceDate,
+        max_open_days: null,
+        text: gap,
+      },
+      status: "not_listed",
+      gap,
+    };
+  }
+  const maxOpenDays = Math.min(
+    toWindow,
+    input.max_open_days ?? MAX_OPEN_DAYS,
+    MAX_OPEN_DAYS,
+  );
+  const stated: WindowStated = {
+    source_name: window.source_name,
+    first: window.first,
+    last: window.last,
+    reference_date: referenceDate,
+    max_open_days: maxOpenDays,
+    text:
+      `The contractor rows (${window.source_name}) cover permits issued ${window.first} to ${window.last}. A permit ` +
+      `issued on or after ${window.first} has been open at most ${days(toWindow)} on the run's reference date ` +
+      `${referenceDate}, so the within-window list is limited to ${days(maxOpenDays)} open` +
+      (maxOpenDays < toWindow ? " (the call's own max_open_days)." : "."),
+  };
+  if (maxOpenDays < input.min_open_days) {
+    const gap = `No permit issued within the contractor window (from ${window.first}) can be open ${days(input.min_open_days)} on ${referenceDate}: the limit of ${days(maxOpenDays)} is below the minimum, so no within-window list is given.`;
+    return { window: stated, status: "not_listed", gap };
+  }
+  try {
+    return {
+      window: stated,
+      status: "read",
+      res: await longOpen(maxOpenDays),
+      maxOpenDays,
+    };
+  } catch (err) {
+    const gap = `The within-window list was not read (${notRead("permits.longOpen", err)}): only the longest-open list is given.`;
+    return { window: stated, status: "not_listed", gap };
+  }
+}
 
 /** A tool input the schema cannot express (e.g. max below min). */
 export class ToolInputError extends Error {

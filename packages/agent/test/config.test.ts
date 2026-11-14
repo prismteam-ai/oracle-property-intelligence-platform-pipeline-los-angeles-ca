@@ -28,7 +28,7 @@ describe("configuration", () => {
       model: "sonnet-5.5",
       modelId: "claude-sonnet-5-5",
       maxToolTurns: 5,
-      maxTokens: 40_000,
+      maxTokens: 80_000,
       maxOutputTokens: 2_048,
       timeBudgetMs: 25_000,
       effort: "low",

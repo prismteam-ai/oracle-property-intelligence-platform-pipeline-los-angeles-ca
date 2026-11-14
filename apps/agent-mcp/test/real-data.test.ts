@@ -38,7 +38,7 @@ const test = (name: string, fn: () => Promise<void>) =>
 const SETTINGS: AgentSettings = {
   modelId: "claude-test-model",
   maxToolTurns: 5,
-  maxTokens: 40_000,
+  maxTokens: 80_000,
   maxOutputTokens: 2_048,
   timeBudgetMs: 25_000,
   effort: "low",
@@ -72,15 +72,16 @@ describe.skipIf(!hasRealData)("the agent on the real latest run (P19)", () => {
     );
     // The instruction line is the same as without a window.
     expect(prompt).toContain(
-      "\n- Contractor rows end in May 2023: for permits issued after May 2023, say there is no contractor data instead of reading parcels' permits for it.\n",
+      "\n- Contractor rows end in May 2023: for permits issued after May 2023, call run_summary and state the contractor window from it (there is no contractor data after May 2023) instead of reading parcels' permits.\n",
     );
   });
 
   test("eval prompt i's question with the scripted model: the contractor gap and the text check pass on the real sources", async () => {
     const text =
       "There is no contractor data for permits issued after May 2023: contractor rows end in May 2023.";
+    // run_summary, as the May 2023 line says (approvals §3e.80).
     const model = new ScriptedModel([
-      toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
+      toolReply([{ name: "run_summary", input: {} }]),
       textReply(text),
     ]);
     const a = await runAgent(

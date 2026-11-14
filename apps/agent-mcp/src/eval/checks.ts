@@ -146,6 +146,34 @@ function parsedInput(c: ToolCallRecord): Record<string, unknown> | null {
 }
 
 /**
+ * The lists of a long_open_permits result: the result itself, or with with_contractor_window its labeled
+ * longest_open list (the call's own max_open_days) and, when it was listed, its within_contractor_window list
+ * (the max_open_days the tool computed and stated).
+ */
+function longOpenLists(
+  r: Record<string, unknown>,
+  input: Record<string, unknown>,
+): Array<{ name: string; r: Record<string, unknown>; max_open_days?: number }> {
+  const own =
+    typeof input.max_open_days === "number" ? input.max_open_days : undefined;
+  if (input.with_contractor_window !== true)
+    return [{ name: "", r, max_open_days: own }];
+  const lists: Array<{
+    name: string;
+    r: Record<string, unknown>;
+    max_open_days?: number;
+  }> = [{ name: "longest_open", r: rec(r.longest_open), max_open_days: own }];
+  const w = rec(r.within_contractor_window);
+  if (typeof w.max_open_days === "number")
+    lists.push({
+      name: "within_contractor_window",
+      r: w,
+      max_open_days: w.max_open_days,
+    });
+  return lists;
+}
+
+/**
  * The direct query of one tool call and the comparison with the tool's result: a list of mismatches (empty when
  * they agree), or null when the input does not parse (no query to compare with).
  */
@@ -219,30 +247,39 @@ async function compareDirect(
       break;
     case "long_open_permits":
       direct = async () => {
-        const d = await q.permits.longOpen({
-          lat: n("lat"),
-          lon: n("lon"),
-          radius_miles: n("radius_miles"),
-          min_open_days: n("min_open_days"),
-          ...(input.max_open_days !== undefined
-            ? { max_open_days: n("max_open_days") }
-            : {}),
-          sort: "open_days",
-          offset: 0,
-          limit: n("limit"),
-        });
-        cmp("count", r.count, d.count);
-        cmpList(
-          "permit numbers",
-          ids(r.items, "permit_number"),
-          d.items.map((x) => x.permit_number),
-        );
-        cmpList(
-          "parcel IDs",
-          ids(r.items, "parcel_id"),
-          d.items.map((x) => x.parcel_id),
-        );
-        return `permits.longOpen: count ${d.count}, ${d.items.length} IDs`;
+        // Each list of the result (with with_contractor_window, the labeled longest-open and within-window lists)
+        // against its own direct query.
+        const said: string[] = [];
+        for (const list of longOpenLists(r, input)) {
+          const d = await q.permits.longOpen({
+            lat: n("lat"),
+            lon: n("lon"),
+            radius_miles: n("radius_miles"),
+            min_open_days: n("min_open_days"),
+            ...(list.max_open_days !== undefined
+              ? { max_open_days: list.max_open_days }
+              : {}),
+            sort: "open_days",
+            offset: 0,
+            limit: n("limit"),
+          });
+          const tag = list.name ? `${list.name} ` : "";
+          cmp(`${tag}count`, list.r.count, d.count);
+          cmpList(
+            `${tag}permit numbers`,
+            ids(list.r.items, "permit_number"),
+            d.items.map((x) => x.permit_number),
+          );
+          cmpList(
+            `${tag}parcel IDs`,
+            ids(list.r.items, "parcel_id"),
+            d.items.map((x) => x.parcel_id),
+          );
+          said.push(
+            `permits.longOpen${list.name ? ` (${list.name})` : ""}: count ${d.count}, ${d.items.length} IDs`,
+          );
+        }
+        return said.join("; ");
       };
       break;
     case "parcel_detail":
@@ -369,8 +406,9 @@ export function linkedParcels(
     if (c.is_error) continue;
     const r = rec(c.result);
     if (c.name === "long_open_permits")
-      for (const item of arr(r.items))
-        link(rec(item).parcel_id, rec(item).permit_number);
+      for (const list of longOpenLists(r, parsedInput(c) ?? {}))
+        for (const item of arr(list.r.items))
+          link(rec(item).parcel_id, rec(item).permit_number);
     if (c.name === "parcel_permits")
       for (const permit of arr(r.permits))
         link(r.parcel_id, rec(permit).permit_number);
@@ -653,6 +691,20 @@ export function checkPlace(
   const mine = resolutions.filter(
     (r) => typeof r.name === "string" && placeKey(r.name) === key,
   );
+  // resolve_required false (prompt i): with no resolve_place call for the name the place check is skipped (n/a);
+  // any search is then judged only by the expected and forbidden tools. A call made is checked as below.
+  if (
+    !mine.length &&
+    expected.outcome === "resolved" &&
+    expected.resolve_required === false
+  )
+    return check(
+      [
+        ...details,
+        `no resolve_place for ${expected.name}: allowed, not required (resolve_required false), so the place check is skipped`,
+      ],
+      null,
+    );
   if (!mine.length)
     return check([...details, `no resolve_place for ${expected.name}`], false);
   switch (expected.outcome) {

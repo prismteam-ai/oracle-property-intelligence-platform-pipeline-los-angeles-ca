@@ -59,7 +59,7 @@ const envSchema = z.object({
   AGENT_PROVIDER: z.enum(PROVIDERS),
   AGENT_MODEL: z.enum(MODEL_KEYS),
   AGENT_MAX_TOOL_TURNS: z.coerce.number().int().min(1).max(10).default(5),
-  AGENT_MAX_TOKENS: z.coerce.number().int().min(1).default(40_000),
+  AGENT_MAX_TOKENS: z.coerce.number().int().min(1).default(80_000),
   AGENT_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(1).default(2_048),
   AGENT_TIME_BUDGET_MS: z.coerce
     .number()

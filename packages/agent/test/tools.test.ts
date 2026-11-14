@@ -6,9 +6,11 @@ import { dropDescriptions } from "../src/policy.ts";
 import {
   TOOL_NAMES,
   anthropicTools,
+  daysBetween,
   runTool,
   toolSchemas,
 } from "../src/tools.ts";
+import { DataApiUnavailableError } from "../src/http-data.ts";
 import {
   CONTRACTOR_COVERAGE,
   CONTRACTOR_RETRIEVED,
@@ -93,6 +95,7 @@ describe("tool definitions for the model", () => {
         radius_miles: 5,
         min_open_days: 1826,
         limit: 10,
+        with_contractor_window: false,
       },
     );
     // No client-side roofing input: the server filters roofing work (68c697b).
@@ -1022,5 +1025,218 @@ describe("parcel_permits: the contractor identity (P19)", () => {
     expect(keysDeep(o.content)).not.toContain("name_variants");
     expect(JSON.stringify(o.content)).not.toContain("GUESSED");
     expect(JSON.stringify(o.content)).not.toContain("ACME");
+  });
+});
+
+describe("long_open_permits: with_contractor_window (approvals §3e.83.1)", () => {
+  const at = { lat: 34.2, lon: -118.45, radius_miles: 5 };
+  type Lists = {
+    contractor_window: Record<string, unknown>;
+    longest_open: Record<string, unknown> & {
+      items: { permit_number: string }[];
+    };
+    within_contractor_window: Record<string, unknown>;
+  };
+
+  test("days from the window's first day to the reference date, computed in code", () => {
+    expect(daysBetween("2013-01-02", "2026-11-12")).toBe(5062);
+    expect(daysBetween("2026-11-12", "2026-11-12")).toBe(0);
+    expect(daysBetween("2013-01-02", "12 Nov 2026")).toBeNull();
+  });
+
+  test("off (the default): one long-open call, the result shape unchanged", async () => {
+    const { queries, calls } = fakeQueries();
+    const o = await runTool("long_open_permits", at, queries);
+    expect(o.ok).toBe(true);
+    expect(calls.filter((c) => c.fn === "permits.longOpen")).toHaveLength(1);
+    expect(Object.keys(o.content as object)).toEqual([
+      "count",
+      "returned",
+      "rule",
+      "scope",
+      "source",
+      "items",
+      "truncated",
+    ]);
+  });
+
+  test("on: the default call, then explorer.sources, then the within-window call (one at a time); both lists labeled, the limit and the two dates stated", async () => {
+    const { queries, calls } = fakeQueries();
+    let inFlight = 0;
+    let most = 0;
+    const tracked =
+      <A extends unknown[], R>(f: (...a: A) => Promise<R>) =>
+      async (...a: A): Promise<R> => {
+        most = Math.max(most, ++inFlight);
+        try {
+          return await f(...a);
+        } finally {
+          inFlight--;
+        }
+      };
+    const q: DataQueries = {
+      ...queries,
+      explorer: {
+        runSummary: queries.explorer.runSummary,
+        sources: tracked(queries.explorer.sources),
+      },
+      permits: {
+        longOpen: tracked(queries.permits.longOpen),
+        forParcel: queries.permits.forParcel,
+      },
+    };
+    const o = await runTool(
+      "long_open_permits",
+      { ...at, limit: 5, with_contractor_window: true },
+      q,
+    );
+    expect(o.ok).toBe(true);
+    expect(most).toBe(1);
+    expect(calls.map((c) => c.fn)).toEqual([
+      "permits.longOpen",
+      "explorer.sources",
+      "permits.longOpen",
+    ]);
+    expect(calls[0]!.input).not.toHaveProperty("max_open_days");
+    expect(calls[2]!.input).toMatchObject({
+      min_open_days: 1826,
+      max_open_days: 5062,
+      limit: 5,
+    });
+    const c = o.content as Lists;
+    expect(Object.keys(c)).toEqual([
+      "scope",
+      "source",
+      "contractor_window",
+      "longest_open",
+      "within_contractor_window",
+    ]);
+    expect(c.contractor_window).toEqual({
+      source_name: FAKE_SOURCES.contractor,
+      first: CONTRACTOR_COVERAGE.first,
+      last: CONTRACTOR_COVERAGE.last,
+      reference_date: "2026-11-12",
+      max_open_days: 5062,
+      text: "The contractor rows (LADBS Contractors) cover permits issued 2013-01-02 to 2023-05-19. A permit issued on or after 2013-01-02 has been open at most 5,062 days on the run's reference date 2026-11-12, so the within-window list is limited to 5,062 days open.",
+    });
+    expect(c.longest_open.label).toBe(
+      "Longest-open permits, any issue date (open at least 1,826 days)",
+    );
+    expect(c.within_contractor_window).toMatchObject({
+      label:
+        "Longest-open permits issued within the contractor window (open at least 1,826 days and at most 5,062 days)",
+      count: 57,
+      max_open_days: 5062,
+      truncated: true,
+    });
+    // Both lists' truncation gaps, each naming its list; the IDs of both lists are known.
+    expect(o.gaps).toEqual([
+      "Results truncated: the longest-open list returned 2 of 57 long-open permits (longest open first).",
+      "Results truncated: the within-window list returned 2 of 57 long-open permits (longest open first).",
+    ]);
+    expect(o.ids).toEqual(
+      expect.arrayContaining([FAKE_PERMITS[0], FAKE_PARCELS[0]]),
+    );
+    expect(o.fact).toMatchObject({
+      tool: "long_open_permits",
+      within_window: {
+        status: "read",
+        max_open_days: 5062,
+        count: 57,
+        returned: 2,
+      },
+    });
+  });
+
+  test("on, with the call's own smaller max_open_days: the within-window limit is lowered to it, and said so", async () => {
+    const { queries, calls } = fakeQueries();
+    const o = await runTool(
+      "long_open_permits",
+      { ...at, max_open_days: 4000, with_contractor_window: true },
+      queries,
+    );
+    expect(
+      calls.filter((c) => c.fn === "permits.longOpen")[1]!.input,
+    ).toMatchObject({
+      max_open_days: 4000,
+    });
+    expect((o.content as Lists).contractor_window.text).toContain(
+      "so the within-window list is limited to 4,000 days open (the call's own max_open_days).",
+    );
+  });
+
+  test("on, the second call fails: the first list with a stated gap", async () => {
+    const { queries, calls } = fakeQueries();
+    let n = 0;
+    const q: DataQueries = {
+      ...queries,
+      permits: {
+        longOpen: async (input) => {
+          if (++n === 2) {
+            calls.push({ fn: "permits.longOpen", input });
+            throw new DataApiUnavailableError("permits.longOpen", "busy", 503);
+          }
+          return queries.permits.longOpen(input);
+        },
+        forParcel: queries.permits.forParcel,
+      },
+    };
+    const o = await runTool(
+      "long_open_permits",
+      { ...at, with_contractor_window: true },
+      q,
+    );
+    expect(o.ok).toBe(true);
+    const c = o.content as Lists;
+    expect(c.longest_open.items.map((i) => i.permit_number)).toEqual([
+      FAKE_PERMITS[0],
+      FAKE_PERMITS[2],
+    ]);
+    const gap =
+      "The within-window list was not read (data API busy: permits.longOpen not read): only the longest-open list is given.";
+    expect(c.within_contractor_window).toEqual({
+      label:
+        "Longest-open permits issued within the contractor window: not listed",
+      not_listed: gap,
+    });
+    expect(o.gaps).toContain(gap);
+    expect(o.fact).toMatchObject({
+      within_window: { status: "not_listed", gap },
+    });
+  });
+
+  test("on, with no contractor window in the run's sources, or a limit below min_open_days: no second call, the gap stated", async () => {
+    const { queries, calls } = fakeQueries();
+    const noWindow: DataQueries = {
+      ...queries,
+      explorer: {
+        runSummary: queries.explorer.runSummary,
+        sources: async () => {
+          const src = await queries.explorer.sources();
+          return {
+            sources: src.sources.map((s) => ({ ...s, coverage: null })),
+          };
+        },
+      },
+    };
+    const o = await runTool(
+      "long_open_permits",
+      { ...at, with_contractor_window: true },
+      noWindow,
+    );
+    expect(calls.filter((c) => c.fn === "permits.longOpen")).toHaveLength(1);
+    expect(o.gaps).toContain(
+      "The within-window list is not given: the run's sources state no contractor window.",
+    );
+    const { queries: q2, calls: c2 } = fakeQueries();
+    const below = await runTool(
+      "long_open_permits",
+      { ...at, min_open_days: 6000, with_contractor_window: true },
+      q2,
+    );
+    expect(c2.filter((c) => c.fn === "permits.longOpen")).toHaveLength(1);
+    expect(below.gaps).toContain(
+      "No permit issued within the contractor window (from 2013-01-02) can be open 6,000 days on 2026-11-12: the limit of 5,062 days is below the minimum, so no within-window list is given.",
+    );
   });
 });
