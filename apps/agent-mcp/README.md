@@ -115,6 +115,21 @@ budget-stop line when it applies, and the output folder. Errors go to stderr.
 
 ## MCP server
 
+Over the hosted data API (no run files needed on this machine), with the `mcp` API client's token:
+
+```sh
+pnpm --filter @oracle-la/agent-mcp mcp --api-url <data API URL> --token-file <key-file>
+```
+
+`--token-file` is required with `--api-url` and has no default: a JSON file `{ "apiToken": "<token>" }` with mode
+`0600` exactly (`chmod 600 <key-file>`); the token is never an argument or an environment variable. Another mode, a
+missing file, invalid JSON or no `apiToken` refuses to start (exit 1) with the path, the mode and the reason, never
+the content; a missing option exits 2. The tools read the data API as the hosted agent does: at most 2 calls in
+flight, each attempt at most 5 s, one retry (after 0–500 ms) when the data API is busy (HTTP 429 or 503), another
+transient status or a timeout, then the tool reports the gap (e.g. `data API busy: permits.longOpen not read`).
+
+Over the latest run of a checkout, in process:
+
 ```sh
 ORACLE_REPO_DIR=<checkout> pnpm --filter @oracle-la/agent-mcp mcp
 ```

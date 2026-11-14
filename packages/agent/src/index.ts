@@ -44,10 +44,28 @@ export {
   type Effort,
 } from "./config.ts";
 export {
+  BUSY_STATUSES,
+  CALL_TIMEOUT_MS,
+  DataApiUnavailableError,
+  MAX_ATTEMPTS,
+  MAX_IN_FLIGHT,
+  RETRY_BASE_MS,
+  RETRY_CAP_MS,
+  TRANSIENT_STATUSES,
+  guardedFetch,
+  httpDataQueries,
+  unavailableGap,
+  unavailableIn,
+  type HttpDataQueriesOptions,
+  type UnavailableReason,
+} from "./http-data.ts";
+export {
   AnthropicKeyFileError,
   REQUIRED_KEY_FILE_MODE,
+  SecretFileError,
   octalMode,
   readAnthropicKeyFile,
+  readSecretField,
   type KeyFileProblem,
 } from "./key-file.ts";
 export {
@@ -56,6 +74,7 @@ export {
   ForeignHostError,
   SDK_CONSTRUCTORS,
   anthropicClientOptions,
+  anthropicModelClient,
   createModelClient,
   modelErrorName,
   pinnedFetch,
@@ -98,6 +117,7 @@ export {
   type LongOpenInput,
   type PermitQueries,
   type SearchInput,
+  type SourceList,
 } from "./permit-api.ts";
 // The place module is the data API's own (packages/views/src/place-index.ts, served by places.resolve), imported
 // by relative path: packages/agent does not list @oracle-la/views as a dependency.

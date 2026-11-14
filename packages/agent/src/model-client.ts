@@ -167,6 +167,20 @@ export function wrapClient(client: MessagesClient): ModelClient {
 }
 
 /**
+ * Provider "anthropic" from a key the caller holds in memory (the hosted agent reads it from its SSM parameter; it
+ * never goes to disk, an argument or the environment), with the same neutralized options as the key-file path.
+ */
+export function anthropicModelClient(
+  apiKey: string,
+  opts: { constructors?: ClientConstructors } = {},
+): ModelClient {
+  if (apiKey.trim() === "")
+    throw new ConfigError('provider "anthropic" needs a non-empty API key');
+  const ctors = opts.constructors ?? SDK_CONSTRUCTORS;
+  return wrapClient(new ctors.anthropic(anthropicClientOptions(apiKey)));
+}
+
+/**
  * The provider switch. "anthropic" reads the key file at `config.anthropicKeyFile`, the path its caller passed
  * (ConfigError when there is none; AnthropicKeyFileError, before any client is constructed, when it is missing, not
  * mode 0600, not valid JSON or without apiKey) and passes the neutralized options; no environment variable is read
@@ -184,7 +198,7 @@ export function createModelClient(
         'provider "anthropic" needs the path of its key file (the eval\'s --key-file <path>); none was given',
       );
     const apiKey = readAnthropicKeyFile(config.anthropicKeyFile);
-    return wrapClient(new ctors.anthropic(anthropicClientOptions(apiKey)));
+    return anthropicModelClient(apiKey, { constructors: ctors });
   }
   return wrapClient(
     new ctors.bedrock({ awsRegion: BEDROCK_REGION, maxRetries: 0 }),

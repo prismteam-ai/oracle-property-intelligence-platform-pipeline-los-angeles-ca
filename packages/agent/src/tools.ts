@@ -17,9 +17,9 @@ import type {
   MAX_OPEN_DAYS as API_MAX_OPEN_DAYS,
   LongOpenItem,
   OwnershipBasis,
+  ParcelDetail,
   ParcelPermit,
   SourceKind,
-  Sources,
 } from "@oracle-la/api/contract";
 import { z } from "zod";
 import {
@@ -27,7 +27,8 @@ import {
   OWNERSHIP_BASES,
   ownershipStated,
 } from "./ownership.ts";
-import { basisWord, type DataQueries } from "./permit-api.ts";
+import { unavailableIn } from "./http-data.ts";
+import { basisWord, type DataQueries, type SourceList } from "./permit-api.ts";
 import {
   resolutionNote,
   roundCenter,
@@ -295,7 +296,7 @@ const joined = (values: ReadonlyArray<string | null | undefined>) => {
  * that kind's own rows (so a contractor citation never takes the permit source's time). Several sources of the kind
  * are joined ("; ") over their combined window; null when the run lists none.
  */
-export function sourceRef(src: Sources, kind: SourceKind): SourceRef | null {
+export function sourceRef(src: SourceList, kind: SourceKind): SourceRef | null {
   const rows = src.sources.filter((s) => s.source_kind === kind);
   if (!rows.length) return null;
   const firsts = rows.map((r) => String(r.first_retrieved_at)).sort();
@@ -479,7 +480,8 @@ const run = {
         `the data API applied ownership basis ${res.ownership?.basis ?? "none"}, not ${ownership ?? "none"}`,
       );
     // The roof-age facts come from the search item itself; the detail call is only for the provenance citation.
-    // explorer.sources is read only when an item's roof year comes from a permit (its citation's source).
+    // explorer.sources is read only when an item's roof year comes from a permit (its citation's source). A read
+    // that fails is stated as a gap with the reason (e.g. "data API busy: parcels.detail not read"), never dropped.
     const roofYearPermits = strings(
       ...res.items.map((it) => it.roof_year_permit_number),
     );
@@ -487,25 +489,48 @@ const run = {
       Promise.all(
         res.items.map((it) =>
           q.parcels.detail({ parcel_id: it.parcel_id }).then(
-            (d) => d,
-            () => null,
+            (d): Read<ParcelDetail> => ({ ok: true, value: d }),
+            (err: unknown): Read<ParcelDetail> => ({
+              ok: false,
+              why: notRead("parcels.detail", err),
+            }),
           ),
         ),
       ),
-      roofYearPermits.length ? q.explorer.sources() : null,
+      roofYearPermits.length
+        ? q.explorer.sources().then(
+            (s): Read<SourceList> => ({ ok: true, value: s }),
+            (err: unknown): Read<SourceList> => ({
+              ok: false,
+              why: notRead("explorer.sources", err),
+            }),
+          )
+        : null,
     ]);
-    const permitRef = src ? sourceRef(src, "permit") : null;
+    const permitRef = src?.ok ? sourceRef(src.value, "permit") : null;
     const records: Citation[] = [];
     const gaps: string[] = [];
-    if (roofYearPermits.length && !permitRef) gaps.push(noSourceGap("permit"));
+    if (src && !src.ok)
+      gaps.push(
+        `${src.why}; the permits that set roof years are listed without a citation.`,
+      );
+    else if (roofYearPermits.length && !permitRef)
+      gaps.push(noSourceGap("permit"));
     let proxy = 0;
     let permit = 0;
     const items = res.items.map((it, i) => {
       const b = basis(it.roof_age_basis);
       if (b.roof_age_basis === "PROXY") proxy++;
       if (b.roof_age_basis === "PERMIT") permit++;
-      const citation = parcelCitation(it.parcel_id, details[i]?.provenance);
+      const detail = details[i];
+      const citation = detail?.ok
+        ? parcelCitation(it.parcel_id, detail.value.provenance)
+        : null;
       if (citation) records.push(citation);
+      else if (detail && !detail.ok)
+        gaps.push(
+          `${detail.why} for parcel ${it.parcel_id}; it is listed without a citation.`,
+        );
       else
         gaps.push(
           `No source provenance was found for parcel ${it.parcel_id}; it is listed without a citation.`,
@@ -545,6 +570,8 @@ const run = {
               collected_at: citation.collected_at,
             }
           : null,
+        // Why the citation is missing when its read failed (the item is still listed).
+        ...(detail && !detail.ok ? { citation_not_read: detail.why } : {}),
       };
     });
     const unknown = items.length - proxy - permit;
@@ -864,6 +891,14 @@ export class ToolInputError extends Error {
   }
 }
 
+/** A read that either returned its value or failed with the reason stated. */
+type Read<T> = { ok: true; value: T } | { ok: false; why: string };
+
+/** Why a read failed, as a gap states it: the adapter's gap for a call not read, else the route and the message. */
+function notRead(route: string, err: unknown): string {
+  return unavailableIn(err)?.gap ?? `${route} failed (${shortMessage(err)})`;
+}
+
 const shortMessage = (err: unknown): string => {
   const m = err instanceof Error ? err.message : String(err);
   const line = m.split("\n")[0] ?? m;
@@ -917,7 +952,13 @@ export async function runTool(
       fact: p.fact,
     };
   } catch (err) {
-    return fromParsed(fail(shortMessage(err)));
+    // A data API call not read after its retry (http-data.ts): the error and its gap name the route.
+    const unavailable = unavailableIn(err);
+    return fromParsed(
+      unavailable
+        ? fail(unavailable.gap, [unavailable.gap])
+        : fail(shortMessage(err)),
+    );
   }
 }
 

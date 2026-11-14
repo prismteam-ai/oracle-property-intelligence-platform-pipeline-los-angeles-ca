@@ -4,7 +4,8 @@
  * data after <month>" gap and the system prompt's contractor lines name that source and window instead of a fixed
  * date.
  */
-import type { SourceCoverage, Sources } from "@oracle-la/api/contract";
+import type { SourceCoverage } from "@oracle-la/api/contract";
+import type { SourceList } from "./permit-api.ts";
 import { GAP_CONTRACTOR_DEFAULT, STANDARD_GAPS } from "./policy.ts";
 
 /** The contractor source(s) and their coverage window, as the run states them. */
@@ -55,7 +56,7 @@ const isCoverage = (c: unknown): c is SourceCoverage =>
  * earliest first, the latest last); null when no contractor source states one (runs recorded before the field, or
  * no contractor source at all). Nothing is guessed.
  */
-export function contractorWindow(src: Sources): ContractorWindow | null {
+export function contractorWindow(src: SourceList): ContractorWindow | null {
   const rows = src.sources.filter(
     (s) => s.source_kind === "contractor" && isCoverage(s.coverage),
   );

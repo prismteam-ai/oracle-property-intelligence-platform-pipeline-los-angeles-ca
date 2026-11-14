@@ -3,11 +3,7 @@
  * Wording: pipeline README lines 108 and 110 and the CRM README line 13, with "[city xyz]" replaced by "Van Nuys".
  */
 import Anthropic from "@anthropic-ai/sdk";
-import {
-  OWNERSHIP_BASIS,
-  OWNERSHIP_PROXY_NOTE,
-  type Sources,
-} from "@oracle-la/api/contract";
+import { OWNERSHIP_BASIS, OWNERSHIP_PROXY_NOTE } from "@oracle-la/api/contract";
 import { beforeAll, describe, expect, test } from "vitest";
 import {
   InvalidRequestError,
@@ -31,6 +27,7 @@ import {
   PEOPLE_REFUSAL_TEXT,
   STANDARD_GAPS,
 } from "../src/policy.ts";
+import type { SourceList } from "../src/permit-api.ts";
 import { systemPrompt } from "../src/prompt.ts";
 import {
   ScriptedModel,
@@ -1400,7 +1397,7 @@ const systemOf = (model: ScriptedModel, i = 0): string =>
   model.requests[i]!.params.system as string;
 /** Queries whose explorer.sources rows are changed by `edit` (the rest as fakeQueries serves them). */
 function withSources(
-  edit: (src: Sources) => Sources | Promise<Sources>,
+  edit: (src: SourceList) => SourceList | Promise<SourceList>,
 ): ReturnType<typeof fakeQueries> {
   const f = fakeQueries();
   const sources = f.queries.explorer.sources;

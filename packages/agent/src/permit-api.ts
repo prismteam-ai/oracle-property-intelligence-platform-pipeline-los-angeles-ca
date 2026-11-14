@@ -48,6 +48,13 @@ export interface LongOpenInput {
   limit?: number;
 }
 
+/**
+ * What the tools read from explorer.sources: the sources only (names, URLs, terms, license, attribution, record and
+ * page counts, windows). The page list (now its own paged route) is not part of it, so no tool can read it; the
+ * in-process caller's wider result still fits, and the HTTP adapter drops any page list (http-data.ts).
+ */
+export type SourceList = Pick<Sources, "sources">;
+
 /** The served procedures the tools read (a structural subset of the tRPC caller). */
 export interface ApiQueries {
   parcels: {
@@ -56,7 +63,7 @@ export interface ApiQueries {
   };
   explorer: {
     runSummary: () => Promise<RunSummary>;
-    sources: () => Promise<Sources>;
+    sources: () => Promise<SourceList>;
   };
   permits: PermitQueries;
 }
@@ -91,15 +98,22 @@ export function basisWord(label: unknown): BasisWord | null {
   return w === "PROXY" || w === "PERMIT" ? w : null;
 }
 
-/** One answer's queries: explorer.sources() runs at most once, however many tools cite from it. */
+/**
+ * One answer's queries: explorer.sources() runs at most once, however many tools cite from it. A failed read is not
+ * kept: the next tool that needs the sources reads them again (the data API may have been busy).
+ */
 export function onceSources(q: DataQueries): DataQueries {
-  let sources: Promise<Sources> | undefined;
+  let sources: Promise<SourceList> | undefined;
   // Explicit members, never a spread: the tRPC caller is a proxy with no own keys.
   return {
     parcels: q.parcels,
     explorer: {
       runSummary: () => q.explorer.runSummary(),
-      sources: () => (sources ??= q.explorer.sources()),
+      sources: () =>
+        (sources ??= q.explorer.sources().catch((err: unknown) => {
+          sources = undefined;
+          throw err;
+        })),
     },
     permits: q.permits,
     places: q.places,

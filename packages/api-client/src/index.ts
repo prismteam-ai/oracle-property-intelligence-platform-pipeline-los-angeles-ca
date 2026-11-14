@@ -3,7 +3,7 @@
  * Every app uses this; none builds its own client. URLs are absolute (from config.json, which the
  * apps fetch from location.origin), so the https://user:pass@host/ URL form works.
  */
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createTRPCClient, httpBatchLink, httpLink } from "@trpc/client";
 import type { AppRouter } from "@oracle-la/api/router";
 
 export type { AppRouter };
@@ -14,17 +14,33 @@ export interface ApiClientOptions {
   apiUrl: string;
   /** Bearer token from config.json (served behind the Amplify password). */
   apiToken: string;
+  /**
+   * One HTTP request per procedure call instead of batching the calls made together (default true: batched).
+   * The agent's data adapter turns batching off so each call is counted, timed and retried on its own.
+   */
+  batch?: boolean;
+  /** The fetch every request goes through (default: the global fetch). */
+  fetch?: Parameters<typeof httpLink>[0]["fetch"];
 }
 
-export function createApiClient({ apiUrl, apiToken }: ApiClientOptions) {
+export function createApiClient({
+  apiUrl,
+  apiToken,
+  batch = true,
+  fetch,
+}: ApiClientOptions) {
   const url = new URL("/trpc", apiUrl).toString();
+  const headers = () => ({ authorization: `Bearer ${apiToken}` });
   return createTRPCClient<AppRouter>({
     links: [
-      httpBatchLink({
-        url,
-        maxURLLength: 2000,
-        headers: () => ({ authorization: `Bearer ${apiToken}` }),
-      }),
+      batch
+        ? httpBatchLink({
+            url,
+            maxURLLength: 2000,
+            headers,
+            ...(fetch ? { fetch } : {}),
+          })
+        : httpLink({ url, headers, ...(fetch ? { fetch } : {}) }),
     ],
   });
 }

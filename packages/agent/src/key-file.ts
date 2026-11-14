@@ -26,13 +26,29 @@ export type KeyFileProblem =
   | "invalid-json"
   | "missing-api-key";
 
-/** Refusal to start provider "anthropic". Carries the path, the problem and the mode; never file content. */
-export class AnthropicKeyFileError extends Error {
+/** A refused secret file: carries the path, the problem and the mode; never file content. */
+export class SecretFileError extends Error {
   readonly path: string;
   readonly problem: KeyFileProblem;
   /** The file's permission bits in octal (e.g. "0644"), when it could be stat'ed. */
   readonly mode: string | null;
 
+  constructor(
+    message: string,
+    path: string,
+    problem: KeyFileProblem,
+    mode: string | null = null,
+  ) {
+    super(message);
+    this.name = "SecretFileError";
+    this.path = path;
+    this.problem = problem;
+    this.mode = mode;
+  }
+}
+
+/** Refusal to start provider "anthropic". Carries the path, the problem and the mode; never file content. */
+export class AnthropicKeyFileError extends SecretFileError {
   constructor(
     path: string,
     problem: KeyFileProblem,
@@ -41,11 +57,11 @@ export class AnthropicKeyFileError extends Error {
   ) {
     super(
       `refusing to start provider "anthropic": the key file ${path} ${detail}`,
+      path,
+      problem,
+      mode,
     );
     this.name = "AnthropicKeyFileError";
-    this.path = path;
-    this.problem = problem;
-    this.mode = mode;
   }
 }
 
@@ -58,34 +74,38 @@ const errorCode = (err: unknown): string =>
     : "unknown error";
 
 /**
- * Read the API key from `path` (as the caller gave it). Throws AnthropicKeyFileError when the file is missing, is not a
- * regular file, has permission bits other than 0600, is not valid JSON, or has no non-empty string `apiKey`.
+ * Read one non-empty string field of a JSON secret file at `path`, with the checks of the header comment (a regular
+ * file, mode exactly 0600, valid JSON, the field present). `refuse` builds the error for a problem and its detail
+ * text; `example` is the expected content shown in it (e.g. { "apiKey": "<key>" }).
  */
-export function readAnthropicKeyFile(path: string): string {
+export function readSecretField(
+  path: string,
+  field: string,
+  example: string,
+  refuse: (
+    problem: KeyFileProblem,
+    detail: string,
+    mode: string | null,
+  ) => Error,
+): string {
   let st: Stats;
   try {
     st = statSync(path);
   } catch (err) {
     const code = errorCode(err);
     if (code === "ENOENT" || code === "ENOTDIR")
-      throw new AnthropicKeyFileError(path, "missing", "does not exist.");
-    throw new AnthropicKeyFileError(
-      path,
-      "unreadable",
-      `cannot be stat'ed (${code}).`,
-    );
+      throw refuse("missing", "does not exist.", null);
+    throw refuse("unreadable", `cannot be stat'ed (${code}).`, null);
   }
   const mode = octalMode(st.mode);
   if (!st.isFile())
-    throw new AnthropicKeyFileError(
-      path,
+    throw refuse(
       "not-a-regular-file",
       `is not a regular file (mode ${mode}).`,
       mode,
     );
   if ((st.mode & 0o777) !== REQUIRED_KEY_FILE_MODE)
-    throw new AnthropicKeyFileError(
-      path,
+    throw refuse(
       "mode",
       `has mode ${mode}; it must be exactly 0600 (chmod 600 ${path}).`,
       mode,
@@ -94,35 +114,42 @@ export function readAnthropicKeyFile(path: string): string {
   try {
     text = readFileSync(path, "utf8");
   } catch (err) {
-    throw new AnthropicKeyFileError(
-      path,
-      "unreadable",
-      `cannot be read (${errorCode(err)}).`,
-      mode,
-    );
+    throw refuse("unreadable", `cannot be read (${errorCode(err)}).`, mode);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     // Never the SyntaxError's message: V8 quotes the input in it.
-    throw new AnthropicKeyFileError(
-      path,
+    throw refuse(
       "invalid-json",
-      'is not valid JSON (expected { "apiKey": "<key>" }).',
+      `is not valid JSON (expected ${example}).`,
       mode,
     );
   }
-  const apiKey =
+  const value =
     parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>).apiKey
+      ? (parsed as Record<string, unknown>)[field]
       : undefined;
-  if (typeof apiKey !== "string" || apiKey.trim() === "")
-    throw new AnthropicKeyFileError(
-      path,
+  if (typeof value !== "string" || value.trim() === "")
+    throw refuse(
       "missing-api-key",
-      'has no non-empty string "apiKey" (expected { "apiKey": "<key>" }).',
+      `has no non-empty string "${field}" (expected ${example}).`,
       mode,
     );
-  return apiKey;
+  return value;
+}
+
+/**
+ * Read the API key from `path` (as the caller gave it). Throws AnthropicKeyFileError when the file is missing, is not a
+ * regular file, has permission bits other than 0600, is not valid JSON, or has no non-empty string `apiKey`.
+ */
+export function readAnthropicKeyFile(path: string): string {
+  return readSecretField(
+    path,
+    "apiKey",
+    '{ "apiKey": "<key>" }',
+    (problem, detail, mode) =>
+      new AnthropicKeyFileError(path, problem, detail, mode),
+  );
 }
