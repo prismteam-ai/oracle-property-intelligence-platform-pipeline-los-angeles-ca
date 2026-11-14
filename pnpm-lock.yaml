@@ -242,9 +242,21 @@ importers:
       '@types/aws-lambda':
         specifier: 8.10.164
         version: 8.10.164
+      aws-cdk:
+        specifier: 2.1146.1
+        version: 2.1146.1
+      aws-cdk-lib:
+        specifier: 2.275.0
+        version: 2.275.0(constructs@10.8.1)
       aws-sdk-client-mock:
         specifier: 4.1.0
         version: 4.1.0
+      constructs:
+        specifier: 10.8.1
+        version: 10.8.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   apps/agent-mcp:
     dependencies:
