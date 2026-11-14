@@ -32,7 +32,7 @@ export interface AgentSettings {
   maxToolTurns: number;
   /** Input + output tokens summed over the whole answer. */
   maxTokens: number;
-  /** max_tokens of one model call (shrunk to what is left of maxTokens). */
+  /** max_tokens of one model call (shrunk to what maxTokens leaves after the call's estimated input; agent.ts). */
   maxOutputTokens: number;
   /** Wall-clock budget of one answer, in milliseconds (≤ 28,000). */
   timeBudgetMs: number;

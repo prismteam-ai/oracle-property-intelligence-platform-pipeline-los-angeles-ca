@@ -22,8 +22,19 @@ import type {
 } from "@oracle-la/api/contract";
 import { z } from "zod";
 import { basisWord, type DataQueries } from "./permit-api.ts";
-import { resolutionNote, type PlaceResolution } from "./place-index.ts";
-import { dropDescriptions, fields, project, type Citation } from "./policy.ts";
+import {
+  resolutionNote,
+  roundCenter,
+  type PlaceCandidate,
+  type PlaceResolution,
+} from "./place-index.ts";
+import {
+  dedupeCitations,
+  dropDescriptions,
+  fields,
+  project,
+  type Citation,
+} from "./policy.ts";
 
 /**
  * Default long-open minimum: 5 × 365.25 days, rounded. Typed as the contract's constant (a type-only import), so a
@@ -289,6 +300,21 @@ const cite = (
   collected_at: ref.retrieved,
 });
 
+/**
+ * The permit that set a parcel's effective roof year (roof_year_permit_number, basis PERMIT) is a permit record:
+ * cited as kind "permit" under the permit source, like any listed permit (null when the value is not a permit
+ * number string or the run lists no permit source).
+ */
+const roofYearCitation = (
+  ref: SourceRef | null,
+  roofYearPermit: unknown,
+): Citation | null =>
+  ref && typeof roofYearPermit === "string"
+    ? cite("permit", ref, roofYearPermit)
+    : null;
+const present = <T>(xs: ReadonlyArray<T | null>): T[] =>
+  xs.filter((x): x is T => x !== null);
+
 /** The basis word and the full stored label, from a roof_age_basis value. */
 const basis = (label: unknown) => ({
   roof_age_basis: basisWord(label),
@@ -370,11 +396,24 @@ const run = {
     input: ToolInput<"resolve_place">,
   ): Promise<Produced> {
     const found = await q.places.resolve({ name: input.name });
-    // The note is rebuilt from the fields, so it always states each center (5 decimals) and parcel count.
-    const r: PlaceResolution =
-      found.status === "unknown"
-        ? found
-        : { ...found, note: resolutionNote(found) };
+    // Every center (and each candidate's and also_matched's) at 5 decimals, the precision the note states and the
+    // agent attributes searches at (place-index.ts coordText); then the note is rebuilt from those fields, so it
+    // always states each center and parcel count.
+    const at5 = <C extends PlaceCandidate>(c: C): C => ({
+      ...c,
+      center: roundCenter(c.center),
+    });
+    let r: PlaceResolution;
+    if (found.status === "resolved") {
+      const rounded = {
+        ...at5(found),
+        also_matched: found.also_matched ? at5(found.also_matched) : null,
+      };
+      r = { ...rounded, note: resolutionNote(rounded) };
+    } else if (found.status === "ambiguous") {
+      const rounded = { ...found, candidates: found.candidates.map(at5) };
+      r = { ...rounded, note: resolutionNote(rounded) };
+    } else r = found;
     const gaps: string[] = [];
     if (r.status !== "resolved" || !r.center_reliable) gaps.push(r.note);
     return { content: r, gaps, fact: { tool: "resolve_place", resolution: r } };
@@ -393,16 +432,25 @@ const run = {
       limit: input.limit,
     });
     // The roof-age facts come from the search item itself; the detail call is only for the provenance citation.
-    const details = await Promise.all(
-      res.items.map((it) =>
-        q.parcels.detail({ parcel_id: it.parcel_id }).then(
-          (d) => d,
-          () => null,
+    // explorer.sources is read only when an item's roof year comes from a permit (its citation's source).
+    const roofYearPermits = strings(
+      ...res.items.map((it) => it.roof_year_permit_number),
+    );
+    const [details, src] = await Promise.all([
+      Promise.all(
+        res.items.map((it) =>
+          q.parcels.detail({ parcel_id: it.parcel_id }).then(
+            (d) => d,
+            () => null,
+          ),
         ),
       ),
-    );
+      roofYearPermits.length ? q.explorer.sources() : null,
+    ]);
+    const permitRef = src ? sourceRef(src, "permit") : null;
     const records: Citation[] = [];
     const gaps: string[] = [];
+    if (roofYearPermits.length && !permitRef) gaps.push(noSourceGap("permit"));
     let proxy = 0;
     let permit = 0;
     const items = res.items.map((it, i) => {
@@ -415,6 +463,8 @@ const run = {
         gaps.push(
           `No source provenance was found for parcel ${it.parcel_id}; it is listed without a citation.`,
         );
+      const roofYear = roofYearCitation(permitRef, it.roof_year_permit_number);
+      if (roofYear) records.push(roofYear);
       return {
         ...project(
           it as unknown as Record<string, unknown>,
@@ -470,7 +520,7 @@ const run = {
     };
     return {
       content,
-      records,
+      records: dedupeCitations(records),
       ids: res.items.flatMap((it) =>
         strings(it.parcel_id, it.roof_year_permit_number),
       ),
@@ -546,8 +596,16 @@ const run = {
         items,
         truncated,
       },
+      // Each item's permit, then the permit that set its parcel's roof year (when there is one).
       records: ref
-        ? res.items.map((p) => cite("permit", ref, p.permit_number))
+        ? dedupeCitations(
+            res.items.flatMap((p) =>
+              present([
+                cite("permit", ref, p.permit_number),
+                roofYearCitation(ref, p.roof_year_permit_number),
+              ]),
+            ),
+          )
         : [],
       ids: res.items.flatMap((p) =>
         strings(p.permit_number, p.parcel_id, p.roof_year_permit_number),
@@ -572,6 +630,11 @@ const run = {
   ): Promise<Produced> {
     const d = await q.parcels.detail({ parcel_id: input.parcel_id });
     const citation = parcelCitation(input.parcel_id, d.provenance);
+    // The permit that set the roof year is cited under the permit source (explorer.sources, read only then).
+    const roofYearPermit = str(d.property.roof_year_permit_number);
+    const permitRef = roofYearPermit
+      ? sourceRef(await q.explorer.sources(), "permit")
+      : null;
     return {
       content: {
         property: {
@@ -580,9 +643,9 @@ const run = {
         },
         provenance: project(d.provenance, PROVENANCE_FIELDS),
       },
-      records: citation ? [citation] : [],
+      records: present([citation, roofYearCitation(permitRef, roofYearPermit)]),
       ids: [input.parcel_id, ...strings(d.property.roof_year_permit_number)],
-      gaps: [],
+      gaps: roofYearPermit && !permitRef ? [noSourceGap("permit")] : [],
       fact: { tool: "parcel_detail", parcel_id: input.parcel_id },
     };
   },
@@ -610,8 +673,10 @@ const run = {
         project(c as unknown as Record<string, unknown>, CONTRACTOR_FIELDS),
       ),
     }));
+    const roofYearPermit = str(r.roof_year_permit_number);
     const gaps: string[] = [];
-    if (!permitRef && permits.length) gaps.push(noSourceGap("permit"));
+    if (!permitRef && (permits.length || roofYearPermit))
+      gaps.push(noSourceGap("permit"));
     if (!contractorRef && contractorRows) gaps.push(noSourceGap("contractor"));
     return {
       content: {
@@ -621,7 +686,7 @@ const run = {
         jurisdiction: str(r.jurisdiction),
         effective_roof_year: r.effective_roof_year ?? null,
         ...basis(r.roof_age_basis),
-        roof_year_permit_number: str(r.roof_year_permit_number),
+        roof_year_permit_number: roofYearPermit,
         permits,
         bbb: {
           available: false,
@@ -633,16 +698,18 @@ const run = {
           ...(contractorRows ? { contractors: contractorRef } : {}),
         },
       },
-      records: [
+      // The parcel's permits, the permit that set its roof year, then the contractor rows.
+      records: dedupeCitations([
         ...(permitRef
           ? r.permits.map((p) => cite("permit", permitRef, p.permit_number))
           : []),
+        ...present([roofYearCitation(permitRef, roofYearPermit)]),
         ...(contractorRef
           ? withContractors.map((p) =>
               cite("contractor", contractorRef, p.permit_number),
             )
           : []),
-      ],
+      ]),
       ids: [
         input.parcel_id,
         ...strings(r.roof_year_permit_number),

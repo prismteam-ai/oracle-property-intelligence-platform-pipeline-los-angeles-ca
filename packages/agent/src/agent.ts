@@ -13,6 +13,7 @@ import {
   candidatesPhrase,
   centerPhrase,
   resolvedPhrase,
+  sameCoord,
   type PlaceBasis,
 } from "./place-index.ts";
 import {
@@ -158,6 +159,47 @@ const STOP_TEXT: Record<StoppedBy, string> = {
 const SEARCH_TOOLS = new Set(["search_aged_roofs", "long_open_permits"]);
 const fmt = (n: number) => n.toLocaleString("en-US");
 const same = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+/**
+ * A search is attributed to a center when both coordinates agree at 5 decimals (the precision resolve_place serves
+ * and the agent states), both sides through the same formatter (place-index.ts coordText).
+ */
+const atCenter = (c: { lat: number; lon: number }, lat: number, lon: number) =>
+  sameCoord(c.lat, lat) && sameCoord(c.lon, lon);
+
+/** A tool round needs room for its estimated input plus at least this many output tokens (design brief §17 A3). */
+export const MIN_ANSWER_TOKENS = 1_024;
+/** Characters per token of the input estimate (design brief §17 A3). */
+export const ESTIMATE_CHARS_PER_TOKEN = 3;
+
+/** The previous model call, for the next call's input estimate. */
+export interface PreviousCall {
+  /** Its input tokens, cache writes and reads included. */
+  input_tokens: number;
+  output_tokens: number;
+}
+
+/**
+ * The estimated input tokens of the next model call (design brief §17 A3):
+ * - first call of the answer: ceil(request JSON characters / 3), the request being its system prompt, tools and
+ *   messages (the whole conversation so far);
+ * - later calls: the previous call's input_tokens + output_tokens (its whole input and its reply, both re-sent) +
+ *   ceil(JSON characters of the messages added after that reply, i.e. the tool results / 3).
+ */
+export function estimateInputTokens(
+  previous: PreviousCall | undefined,
+  /** First call: the request; later calls: the messages added after the previous call's reply. */
+  added: unknown,
+): number {
+  const chars = Math.ceil(
+    JSON.stringify(added).length / ESTIMATE_CHARS_PER_TOKEN,
+  );
+  return previous
+    ? previous.input_tokens + previous.output_tokens + chars
+    : chars;
+}
+
+/** The result text of a tool call the answer closed without running it (closeDanglingToolUse). */
+export const NOT_RUN_PREFIX = "not run: the answer stopped";
 const plural = (n: number, word: string) =>
   `${fmt(n)} ${word}${n === 1 ? "" : "s"}`;
 
@@ -226,7 +268,7 @@ function closeDanglingToolUse(
         type: "tool_result",
         tool_use_id: b.id,
         is_error: true,
-        content: `not run: the answer stopped (${reason})`,
+        content: `${NOT_RUN_PREFIX} (${reason})`,
       })),
     });
 }
@@ -353,24 +395,18 @@ function explain(
       const lat = input.lat;
       const lon = input.lon;
       const radius = Number(input.radius_miles);
-      const place = [...places]
-        .reverse()
-        .find((p) => same(p.lat, lat) && same(p.lon, lon));
+      const place = [...places].reverse().find((p) => atCenter(p, lat, lon));
       let basis: AreaBasis;
       if (place) {
         label = place.label;
         basis = place.basis;
-      } else if (
-        req.center &&
-        same(req.center.lat, lat) &&
-        same(req.center.lon, lon)
-      ) {
+      } else if (req.center && atCenter(req.center, lat, lon)) {
         label = req.center.label;
         basis = "request_center";
         assumptions.push(
           `Used the request's center "${label}" (${lat}, ${lon}).`,
         );
-      } else if (prev && same(prev.lat, lat) && same(prev.lon, lon)) {
+      } else if (prev && atCenter(prev, lat, lon)) {
         label = prev.label;
         basis = prev.basis;
         assumptions.push(
@@ -531,6 +567,10 @@ export async function runAgent(
   let stoppedBy: StoppedBy | undefined;
   let error: string | undefined;
   let finalText = "";
+  /** The previous call's usage and the message count right after its reply (for the next estimate). */
+  let previous: (PreviousCall & { messages: number }) | undefined;
+  /** Set when the token cap stopped the answer before a call: that call's estimate and what was left. */
+  let tokenStop: { estimate: number; left: number } | undefined;
 
   for (;;) {
     const remaining = deadline - now() - TIME_RESERVE_MS;
@@ -539,19 +579,37 @@ export async function runAgent(
       break;
     }
     const used = usage.input_tokens + usage.output_tokens;
-    if (used >= s.maxTokens) {
+    const left = s.maxTokens - used;
+    const request = {
+      model: s.modelId,
+      system,
+      messages,
+      tools,
+      output_config: { effort: s.effort },
+    };
+    // The cap counts input + output over the answer's calls, so this call's input counts too (estimated).
+    const estimate = estimateInputTokens(
+      previous,
+      previous ? messages.slice(previous.messages) : request,
+    );
+    // A tool round needs room for its input and MIN_ANSWER_TOKENS; else only a final answer (tool_choice none)
+    // with what is left after the input; when not even that is left, stop before the call (no truncated output).
+    const room = left - estimate;
+    if (room <= 0) {
       stoppedBy = "token_cap";
+      tokenStop = { estimate, left: Math.max(0, left) };
       break;
     }
-    const lastTurn = toolRounds >= s.maxToolTurns;
+    const tokenLastTurn = room < MIN_ANSWER_TOKENS;
+    const lastTurn = toolRounds >= s.maxToolTurns || tokenLastTurn;
     const params: Anthropic.MessageCreateParamsNonStreaming = {
-      model: s.modelId,
-      max_tokens: Math.min(s.maxOutputTokens, s.maxTokens - used),
+      model: request.model,
+      max_tokens: Math.min(s.maxOutputTokens, room),
       system,
       messages,
       tools,
       tool_choice: lastTurn ? { type: "none" } : { type: "auto" },
-      output_config: { effort: s.effort },
+      output_config: request.output_config,
     };
     if (deps.beforeModelCall && !(await deps.beforeModelCall(params))) {
       stoppedBy = "budget";
@@ -570,13 +628,19 @@ export async function runAgent(
       break;
     }
     const u = res.usage;
-    usage.input_tokens +=
+    const callInput =
       u.input_tokens +
       (u.cache_creation_input_tokens ?? 0) +
       (u.cache_read_input_tokens ?? 0);
+    usage.input_tokens += callInput;
     usage.output_tokens += u.output_tokens;
     // The full content goes back unchanged (thinking blocks included).
     messages.push({ role: "assistant", content: res.content });
+    previous = {
+      input_tokens: callInput,
+      output_tokens: u.output_tokens,
+      messages: messages.length,
+    };
     finalText = textOf(res);
 
     if (res.stop_reason === "refusal") {
@@ -589,7 +653,8 @@ export async function runAgent(
     }
     if (res.stop_reason === "tool_use") {
       if (lastTurn) {
-        stoppedBy = "max_tool_turns";
+        stoppedBy =
+          toolRounds >= s.maxToolTurns ? "max_tool_turns" : "token_cap";
         break;
       }
       const calls = res.content.filter(
@@ -651,6 +716,9 @@ export async function runAgent(
       (stoppedBy ? "No tool was called." : "Answered without calling a tool."),
     ...ex.rules,
     stoppedBy ? `The answer stopped early (${stoppedBy}).` : "",
+    tokenStop
+      ? `The next model call was not made: its input was estimated at ${fmt(tokenStop.estimate)} tokens with ${fmt(tokenStop.left)} of the ${fmt(s.maxTokens)}-token cap left.`
+      : "",
   ]
     .filter(Boolean)
     .join(" ");

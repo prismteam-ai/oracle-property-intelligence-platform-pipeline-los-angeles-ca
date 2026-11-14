@@ -127,7 +127,26 @@ export const BASIS_LABEL: Record<PlaceBasis, string> = {
   postal_city: "postal city",
 };
 
-const coord = (x: number) => x.toFixed(5);
+/**
+ * Coordinates are stated, served by resolve_place and compared at 5 decimals (about 1 m), always through this one
+ * formatter (toFixed(5)), so the number a tool returns, the digits a note states and the center the agent
+ * attributes a search to cannot disagree in the last digit.
+ */
+export const COORD_DECIMALS = 5;
+/** A coordinate as text at 5 decimals: "34.15279". */
+export const coordText = (x: number): string => x.toFixed(COORD_DECIMALS);
+/** A coordinate rounded to 5 decimals (the number coordText prints). */
+export const roundCoord = (x: number): number => Number(coordText(x));
+/** A center with both coordinates rounded to 5 decimals. */
+export const roundCenter = (c: { lat: number; lon: number }) => ({
+  lat: roundCoord(c.lat),
+  lon: roundCoord(c.lon),
+});
+/** True when two coordinates print the same at 5 decimals. */
+export const sameCoord = (a: number, b: number): boolean =>
+  coordText(a) === coordText(b);
+
+const coord = coordText;
 const count = (n: number) => n.toLocaleString("en-US");
 
 /** "median center 34.20155, -118.45361 of 456 parcels": the center (5 decimals) and its parcel count. */
@@ -218,10 +237,8 @@ export class PlaceIndex implements PlaceQueries {
           if (!r || n === 0 || r.lat == null || r.lon == null) return null;
           return {
             basis,
-            center: {
-              lat: round(Number(r.lat), 6),
-              lon: round(Number(r.lon), 6),
-            },
+            // 5 decimals, the precision every note states and resolve_place serves.
+            center: roundCenter({ lat: Number(r.lat), lon: Number(r.lon) }),
             parcel_count: n,
             raw_values: raws,
             spread_miles: round(Number(r.spread_miles ?? 0), 2),

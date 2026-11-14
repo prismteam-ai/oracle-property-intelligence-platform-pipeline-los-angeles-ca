@@ -9,6 +9,7 @@
  * - tools, refusal, place: the prompt's expected tools (and input values), refusal and place outcome.
  */
 import {
+  NOT_RUN_PREFIX,
   idsInText,
   placeKey,
   toolSchemas,
@@ -62,6 +63,8 @@ const SEARCH_TOOLS: ReadonlySet<string> = new Set([
   "long_open_permits",
 ]);
 const same = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+/** Equal at 5 decimals, the precision the agent outputs and states: both sides printed with toFixed(5). */
+const same5 = (a: number, b: number) => a.toFixed(5) === b.toFixed(5);
 const rec = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" ? (v as Record<string, unknown>) : {};
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
@@ -277,7 +280,19 @@ async function compareDirect(
   return { mismatches: out, what };
 }
 
-/** (i) Every tool call's count and IDs equal the direct query's. */
+/**
+ * A tool call the agent closed without running it because the answer stopped (its result is the agent's "not run:
+ * the answer stopped (<reason>)" text): there is no tool result to compare.
+ */
+const notRun = (c: ToolCallRecord): boolean =>
+  c.is_error &&
+  typeof c.result === "string" &&
+  c.result.startsWith(NOT_RUN_PREFIX);
+
+/**
+ * (i) Every tool call's count and IDs equal the direct query's. A call the answer closed without running it is
+ * reported as not run and not compared; the stop itself fails the answer through the refusal (status) check.
+ */
 export async function checkCounts(
   calls: readonly ToolCallRecord[],
   queries: DataQueries,
@@ -287,6 +302,10 @@ export async function checkCounts(
   let ok = true;
   let compared = 0;
   for (const c of calls) {
+    if (notRun(c)) {
+      details.push(`${c.name}: not run (the answer stopped); not compared`);
+      continue;
+    }
     const cmp = await compareDirect(c, queries);
     if (!cmp) {
       details.push(`${c.name}: input does not parse; not compared`);
@@ -548,7 +567,14 @@ export function checkPlace(
               arr(r.raw_values).includes(expected.jurisdiction))) &&
           (expected.parcel_count === undefined ||
             r.parcel_count === expected.parcel_count) &&
-          searches.some((s) => at(s, r.center!)),
+          // At its center: equal when both round to the same 5-decimal value.
+          searches.some(
+            (s) =>
+              typeof s.lat === "number" &&
+              typeof s.lon === "number" &&
+              same5(s.lat, r.center!.lat) &&
+              same5(s.lon, r.center!.lon),
+          ),
       );
       if (!ok)
         details.push(

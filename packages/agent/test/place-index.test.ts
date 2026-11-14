@@ -10,6 +10,8 @@ import {
   haversineMiles,
   placeIndexFor,
   placeKey,
+  roundCoord,
+  sameCoord,
   type RowsDb,
 } from "../src/place-index.ts";
 import { blockNetwork } from "./helpers.ts";
@@ -240,6 +242,26 @@ describe("PlaceIndex.resolve", () => {
       expect(s.spread_miles).toBeGreaterThan(10);
       expect(s.note).toMatch(/too spread out/);
     }
+  });
+  test("§17 A2: the median center is served at 5 decimals, the digits the note states (toFixed(5))", async () => {
+    // Two parcels whose median is 34.152795, -118.135784 (the smoke run's Pasadena center, 6 decimals).
+    const r = await new PlaceIndex(
+      fakeDb([
+        at("PASADENA", null, 34.15279, -118.135783),
+        at("PASADENA", null, 34.1528, -118.135785),
+      ]),
+    ).resolve({ name: "Pasadena" });
+    expect(r).toMatchObject({
+      status: "resolved",
+      center: { lat: 34.15279, lon: -118.13578 },
+    });
+    if (r.status === "resolved")
+      expect(r.note).toContain(
+        `median center ${r.center.lat.toFixed(5)}, ${r.center.lon.toFixed(5)} of 2 parcels`,
+      );
+    expect(roundCoord(34.152795)).toBe(34.15279);
+    expect(sameCoord(34.152795, 34.15279)).toBe(true);
+    expect(sameCoord(34.15279, 34.1528)).toBe(false);
   });
   test("one values query per Db; centers cached per key", async () => {
     const db = fakeDb(PARCELS);

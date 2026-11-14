@@ -22,9 +22,11 @@ import {
   createModelClient,
   isPeopleQuestion,
   lastToolResult,
+  message,
   runAgent,
   textReply,
   toolReply,
+  toolUseBlock,
   type AgentAnswer,
   type AgentSettings,
   type DataQueries,
@@ -43,7 +45,13 @@ import {
   recordingConstructors,
 } from "../../../packages/agent/test/helpers.ts";
 import { Budget } from "../src/eval/budget.ts";
-import { checkAnswer, type AnswerChecks } from "../src/eval/checks.ts";
+import {
+  allPassed,
+  checkAnswer,
+  checkPlace,
+  type AnswerChecks,
+  type ToolCallRecord,
+} from "../src/eval/checks.ts";
 import {
   CHECKOUT_ROOT,
   USAGE,
@@ -593,6 +601,120 @@ describe("checks", () => {
     expect(
       (await checksOf(reuse, await follow(area.lat + 0.01), opts)).place.result,
     ).toBe("fail");
+  });
+});
+
+describe("checks: §17 B1 and B2", () => {
+  test("B1 place: a search at the resolved center equals it when both round to the same 5-decimal value; another center fails", () => {
+    // The smoke run's d: resolve_place returned 34.152795, -118.135784; the model searched at 34.15279, -118.13578.
+    const resolved = (lat: number, lon: number): ToolCallRecord[] => [
+      {
+        id: "toolu_1",
+        name: "resolve_place",
+        input: { name: "Pasadena" },
+        result: {
+          status: "resolved",
+          name: "Pasadena",
+          basis: "jurisdiction",
+          center: { lat: 34.152795, lon: -118.135784 },
+          center_reliable: true,
+          parcel_count: 39990,
+          raw_values: ["PASADENA"],
+        },
+        is_error: false,
+      },
+      {
+        id: "toolu_2",
+        name: "search_aged_roofs",
+        input: { lat, lon, radius_miles: 1, threshold_years: 20 },
+        result: { count: 1, items: [] },
+        is_error: false,
+      },
+    ];
+    const expected = {
+      outcome: "resolved" as const,
+      name: "Pasadena",
+      jurisdiction: "PASADENA",
+      parcel_count: 39990,
+    };
+    expect(
+      checkPlace(resolved(34.15279, -118.13578), expected, undefined).result,
+    ).toBe("pass");
+    expect(
+      checkPlace(resolved(34.152795, -118.135784), expected, undefined).result,
+    ).toBe("pass");
+    const other = checkPlace(
+      resolved(34.15278, -118.13578),
+      expected,
+      undefined,
+    );
+    expect(other.result).toBe("fail");
+    expect(other.details.at(-1)).toBe(
+      "want resolved, jurisdiction PASADENA, 39990 parcels, reliable, and a search at its center",
+    );
+    expect(
+      checkPlace(resolved(34.15279, -118.13568), expected, undefined).result,
+    ).toBe("fail");
+  });
+  test("B2 counts: tool calls the answer closed without running are not run, not compared; the stop still fails the answer", async () => {
+    // As in the smoke run's i: a round of parcel_permits, then a reply cut off at max_tokens mid tool_use (the
+    // last call's input incomplete).
+    const a = await ask(
+      "Which contractors hold permits issued after May 2023?",
+      [
+        toolReply([
+          { name: "parcel_permits", input: { parcel_id: FAKE_PARCELS[0] } },
+        ]),
+        message(
+          [
+            toolUseBlock("parcel_permits", { parcel_id: FAKE_PARCELS[1] }),
+            toolUseBlock("parcel_permits", {}),
+          ],
+          "max_tokens",
+        ),
+      ],
+    );
+    expect(a).toMatchObject({ status: "stopped", stopped_by: "max_tokens" });
+    const c = await checksOf(prompt({ tools: ["parcel_permits"] }), a);
+    expect(c.counts).toEqual({
+      result: "pass",
+      details: [
+        "parcel_permits: equal (permits.forParcel: 2 permits)",
+        "parcel_permits: not run (the answer stopped); not compared",
+        "parcel_permits: not run (the answer stopped); not compared",
+      ],
+    });
+    // The stop itself fails the answer through the status/refusal check.
+    expect(c.refusal).toEqual({
+      result: "fail",
+      details: ["status stopped (max_tokens), 2 model call(s)"],
+    });
+    expect(allPassed(c)).toBe(false);
+  });
+  test("B2 counts: a tool that ran and failed while the direct query succeeds still fails", async () => {
+    const { queries } = fakeQueries();
+    const failing: DataQueries = {
+      ...queries,
+      permits: {
+        ...queries.permits,
+        forParcel: () => Promise.reject(new Error("forParcel failed")),
+      },
+    };
+    const a = await ask(
+      "Permits of parcel 1000000001?",
+      [
+        toolReply([
+          { name: "parcel_permits", input: { parcel_id: FAKE_PARCELS[0] } },
+        ]),
+        textReply("Permit data could not be read."),
+      ],
+      { queries: failing },
+    );
+    const c = await checksOf(prompt({}), a);
+    expect(c.counts.result).toBe("fail");
+    expect(c.counts.details[0]).toMatch(
+      /^parcel_permits: the tool failed; the direct query did not/,
+    );
   });
 });
 

@@ -6,6 +6,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { beforeAll, describe, expect, test } from "vitest";
 import {
   InvalidRequestError,
+  MIN_ANSWER_TOKENS,
+  estimateInputTokens,
   longOpenRuleLine,
   runAgent,
   type AgentAnswer,
@@ -15,6 +17,7 @@ import {
   PEOPLE_REFUSAL_TEXT,
   STANDARD_GAPS,
 } from "../src/policy.ts";
+import { systemPrompt } from "../src/prompt.ts";
 import {
   ScriptedModel,
   lastToolResult,
@@ -114,7 +117,7 @@ const resolvedCenter = (p: Anthropic.MessageCreateParamsNonStreaming) =>
     }
   ).center;
 
-/** The fake's Van Nuys center (34.18651, -118.448912) at 5 decimals, with its parcel count. */
+/** The fake's Van Nuys center (34.18651, -118.44891, 5 decimals) as stated, with its parcel count. */
 const VAN_NUYS_CENTER = "the median center 34.18651, -118.44891 of 467 parcels";
 const VAN_NUYS_STATEMENT = `Resolved 'Van Nuys' (postal city) to ${VAN_NUYS_CENTER}`;
 const VAN_NUYS_NOTE = `${VAN_NUYS_STATEMENT}. Stored postal city names: VAN NUYS | VAN NUYS CALIF | VAN NUYS,.`;
@@ -703,33 +706,165 @@ describe("caps", () => {
     expect(model.requests[1]!.params.tool_choice).toEqual({ type: "none" });
   });
 
-  test("token cap; max_tokens shrinks to the remaining token budget", async () => {
+  test("§17 A3: the input estimate: first call ceil(request characters / 3); later calls the previous call's input + output + ceil(added characters / 3)", () => {
+    expect(MIN_ANSWER_TOKENS).toBe(1_024);
+    expect(estimateInputTokens(undefined, "x".repeat(7))).toBe(
+      Math.ceil(JSON.stringify("x".repeat(7)).length / 3),
+    );
+    const added = [{ role: "user", content: "y".repeat(100) }];
+    expect(
+      estimateInputTokens({ input_tokens: 1000, output_tokens: 50 }, added),
+    ).toBe(1000 + 50 + Math.ceil(JSON.stringify(added).length / 3));
+  });
+
+  test("§17 A3: max_tokens = min(per call, cap − used − the call's input estimate)", async () => {
     const { queries } = fakeQueries();
     const model = new ScriptedModel([
       toolReply([{ name: "run_summary", input: {} }], {
-        input: 600,
+        input: 4_000,
         output: 100,
       }),
+      textReply("Run run-1.", { input: 4_500, output: 50 }),
+    ]);
+    const cap = 10_000;
+    const a = await runAgent(
+      { question: "What run is served?" },
+      { model, queries, settings: { ...SETTINGS, maxTokens: cap } },
+    );
+    expect(a.status).toBe("answered");
+    const [r1, r2] = model.requests.map((r) => r.params);
+    // Call 2's input: call 1's input and output (re-sent) + the tool result added since, at 3 characters a token.
+    const added = r2!.messages.slice(r1!.messages.length + 1);
+    expect(added.map((m) => m.role)).toEqual(["user"]);
+    const estimate2 = 4_000 + 100 + Math.ceil(JSON.stringify(added).length / 3);
+    expect(r2!.max_tokens).toBe(
+      Math.min(SETTINGS.maxOutputTokens, cap - 4_100 - estimate2),
+    );
+    expect(r2!.max_tokens).toBeLessThan(SETTINGS.maxOutputTokens);
+    expect(r2!.tool_choice).toEqual({ type: "auto" });
+  });
+
+  test("§17 A3: a cap too small for even the first call's input stops with token_cap before any call", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([textReply("never reached")]);
+    const a = await runAgent(
+      { question: "What run is served?" },
+      { model, queries, settings: { ...SETTINGS, maxTokens: 1_000 } },
+    );
+    expect(model.requests).toHaveLength(0);
+    expect(a).toMatchObject({
+      status: "stopped",
+      stopped_by: "token_cap",
+      text: "The token budget ran out before the answer was complete.",
+      usage: { input_tokens: 0, output_tokens: 0, model_calls: 0 },
+    });
+    // The estimate is stated (the request's characters / 3, well over the cap).
+    const m =
+      /The next model call was not made: its input was estimated at ([\d,]+) tokens with 1,000 of the 1,000-token cap left\.$/.exec(
+        a.reasoning,
+      );
+    expect(m).not.toBeNull();
+    expect(Number(m![1]!.replace(/,/g, ""))).toBeGreaterThan(1_000);
+  });
+
+  test("§17 A3: when the next call's input leaves no room, the answer stops with token_cap before it (no truncated call)", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([
       toolReply([{ name: "run_summary", input: {} }], {
-        input: 250,
-        output: 100,
+        input: 20_000,
+        output: 500,
       }),
+      textReply("never reached"),
     ]);
     const a = await runAgent(
       { question: "What run is served?" },
+      { model, queries, settings: { ...SETTINGS, maxTokens: 40_000 } },
+    );
+    // used 20,500, left 19,500; the next input is estimated at 20,500 + the tool result: no call.
+    expect(model.requests).toHaveLength(1);
+    expect(model.remaining).toBe(1);
+    expect(a).toMatchObject({ status: "stopped", stopped_by: "token_cap" });
+    expect(a.reasoning).toContain(
+      "The answer stopped early (token_cap). The next model call was not made: its input was estimated at",
+    );
+    expect(a.reasoning).toContain("with 19,500 of the 40,000-token cap left.");
+  });
+
+  test("§17 A3: the smoke run's i-like sequence (cap 40,000) ends in an answered final turn, not max_tokens", async () => {
+    // i: resolve_place, long_open_permits, then a parcel_permits fan-out whose results leave room only for a
+    // final answer. Fixed tool_use IDs, so the probe and the run send identical messages.
+    const fanOut = ["1000000001", "1000000002", "1000000003"];
+    const steps = (call3Input: number) => [
+      message(
+        [toolUseBlock("resolve_place", { name: "Van Nuys" }, "toolu_i_1")],
+        "tool_use",
+        { input: 3_042, output: 211 },
+      ),
+      message(
+        [
+          toolUseBlock(
+            "long_open_permits",
+            {
+              lat: 34.18651,
+              lon: -118.44891,
+              radius_miles: 5,
+              min_open_days: 0,
+            },
+            "toolu_i_2",
+          ),
+        ],
+        "tool_use",
+        { input: 3_466, output: 152 },
+      ),
+      message(
+        fanOut.map((parcel_id, i) =>
+          toolUseBlock("parcel_permits", { parcel_id }, `toolu_i_3_${i}`),
+        ),
+        "tool_use",
+        { input: call3Input, output: 513 },
+      ),
+      textReply("No contractor data after May 2023.", {
+        input: 20_000,
+        output: 300,
+      }),
+    ];
+    const question =
+      "Which contractors hold roofing permits issued after May 2023 near Van Nuys?";
+    // Probe (no cap pressure): the characters the fan-out's results add before call 4.
+    const probe = new ScriptedModel(steps(11_495));
+    await runAgent(
+      { question },
       {
-        model,
-        queries,
-        settings: { ...SETTINGS, maxTokens: 1000, maxOutputTokens: 800 },
+        model: probe,
+        queries: fakeQueries().queries,
+        settings: { ...SETTINGS, maxTokens: 1_000_000 },
       },
     );
-    expect(model.requests.map((r) => r.params.max_tokens)).toEqual([800, 300]);
-    expect(a).toMatchObject({ status: "stopped", stopped_by: "token_cap" });
-    expect(a.usage).toMatchObject({
-      input_tokens: 850,
-      output_tokens: 200,
-      model_calls: 2,
-    });
+    const [, , p3, p4] = probe.requests.map((r) => r.params);
+    const added = Math.ceil(
+      JSON.stringify(p4!.messages.slice(p3!.messages.length + 1)).length / 3,
+    );
+    // Pick call 3's input so that before call 4: cap − used − estimate = 600 (or 601), under MIN_ANSWER_TOKENS.
+    // used = 3,253 + 3,618 + in3 + 513; estimate = in3 + 513 + added.
+    const fixed = 3_253 + 3_618 + 513 + 513 + added;
+    const in3 = Math.floor((40_000 - 600 - fixed) / 2);
+    const room = 40_000 - fixed - 2 * in3;
+    expect([600, 601]).toContain(room);
+
+    const model = new ScriptedModel(steps(in3));
+    const a = await runAgent(
+      { question },
+      { model, queries: fakeQueries().queries, settings: SETTINGS },
+    );
+    expect(model.requests).toHaveLength(4);
+    const last = model.requests[3]!.params;
+    // The final turn: no tools, max_tokens = what is left after the estimated input.
+    expect(last.tool_choice).toEqual({ type: "none" });
+    expect(last.max_tokens).toBe(room);
+    expect(a.status).toBe("answered");
+    expect(a.stopped_by).toBeUndefined();
+    expect(a.text).toBe("No contractor data after May 2023.");
+    expect(a.usage.tool_calls).toBe(5);
   });
 
   test("time budget: the first call's timeout is the budget minus the reserve; a late tool is not run", async () => {
@@ -896,6 +1031,18 @@ describe("descriptions", () => {
   });
 });
 
+describe("system prompt (§17 C1, C2)", () => {
+  test("one instruction each: no permit data outside the City; no contractor data after May 2023", () => {
+    const prompt = systemPrompt(SETTINGS.maxToolTurns);
+    expect(prompt).toContain(
+      "\n- When a place or parcel is outside the City of Los Angeles, say there is no permit data there.\n",
+    );
+    expect(prompt).toContain(
+      "\n- Contractor rows end in May 2023: for permits issued after May 2023, say there is no contractor data instead of reading parcels' permits for it.\n",
+    );
+  });
+});
+
 describe("request contract", () => {
   test("empty or over-long questions are rejected before anything runs", async () => {
     const { queries } = fakeQueries();
@@ -978,6 +1125,137 @@ describe("outside the City of Los Angeles (§15.1 d)", () => {
       lat: PASADENA_RESOLVED.lat,
       lon: PASADENA_RESOLVED.lon,
     });
+  });
+  test("§17 A2: a search at the 5-decimal center resolve_place serves is attributed to the place; the outside-city gap names it", async () => {
+    const { queries } = fakeQueries();
+    // The smoke run's data: Pasadena's median center has 6 decimals (34.152795, -118.135784), every parcel near
+    // it lies outside the City of Los Angeles.
+    const smoke: typeof queries = {
+      ...queries,
+      places: {
+        resolve: async ({ name }) => ({
+          status: "resolved",
+          name,
+          basis: "jurisdiction",
+          center: { lat: 34.152795, lon: -118.135784 },
+          parcel_count: 39990,
+          raw_values: ["PASADENA"],
+          spread_miles: 2.4,
+          center_reliable: true,
+          also_matched: null,
+          note: "(raw)",
+        }),
+      },
+      parcels: {
+        ...queries.parcels,
+        search: async (i) => {
+          const r = await queries.parcels.search(i);
+          return {
+            ...r,
+            items: r.items.map((it) => ({
+              ...it,
+              permit_data_available: false,
+            })),
+          };
+        },
+      },
+    };
+    const model = new ScriptedModel([
+      toolReply([{ name: "resolve_place", input: { name: "Pasadena" } }]),
+      (p) => {
+        // The model searches at the center as served (and as the note states it): 34.15279, -118.13578.
+        const c = resolvedCenter(p);
+        expect(c).toEqual({ lat: 34.15279, lon: -118.13578 });
+        return toolReply([
+          {
+            name: "search_aged_roofs",
+            input: {
+              lat: c.lat,
+              lon: c.lon,
+              radius_miles: 1,
+              threshold_years: 20,
+            },
+          },
+        ]);
+      },
+      textReply("Pasadena is outside the City of Los Angeles: no permit data."),
+    ]);
+    const a = await runAgent(
+      {
+        question:
+          "Which properties within one mile of Pasadena have roofs older than 20 years?",
+      },
+      { model, queries: smoke, settings: SETTINGS },
+    );
+    expect(resolveNote(model, 1)).toContain(
+      "median center 34.15279, -118.13578 of 39,990 parcels",
+    );
+    expect(a.gaps).toContain(
+      "Pasadena is outside the City of Los Angeles: no permit data there.",
+    );
+    expect(a.gaps.some((g) => g.includes("was not supplied"))).toBe(false);
+    expect(a.gaps.some((g) => g.startsWith("34.15279, -118.13578"))).toBe(
+      false,
+    );
+    expect(a.session.area).toEqual({
+      label: "Pasadena",
+      lat: 34.15279,
+      lon: -118.13578,
+      radius_miles: 1,
+      basis: "jurisdiction",
+    });
+    expect(a.reasoning).toContain(
+      "searched parcels within 1 mi of Pasadena built before 2006",
+    );
+  });
+  test("§17 A2: a search at the unrounded center is attributed too; one 5-decimal step away is not", async () => {
+    const { queries } = fakeQueries();
+    const raw: typeof queries = {
+      ...queries,
+      places: {
+        resolve: async ({ name }) => ({
+          status: "resolved",
+          name,
+          basis: "jurisdiction",
+          center: { lat: 34.152795, lon: -118.135784 },
+          parcel_count: 39990,
+          raw_values: ["PASADENA"],
+          spread_miles: 2.4,
+          center_reliable: true,
+          also_matched: null,
+          note: "(raw)",
+        }),
+      },
+    };
+    const ask = (lat: number, lon: number) =>
+      runAgent(
+        { question: "Old roofs within one mile of Pasadena?" },
+        {
+          model: new ScriptedModel([
+            toolReply([{ name: "resolve_place", input: { name: "Pasadena" } }]),
+            toolReply([
+              {
+                name: "search_aged_roofs",
+                input: { lat, lon, radius_miles: 1 },
+              },
+            ]),
+            textReply("Done."),
+          ]),
+          queries: raw,
+          settings: SETTINGS,
+        },
+      );
+    expect((await ask(34.152795, -118.135784)).session.area?.label).toBe(
+      "Pasadena",
+    );
+    const off = await ask(34.15278, -118.13578);
+    expect(off.session.area).toMatchObject({
+      label: "34.15278, -118.13578",
+      basis: "coordinates",
+    });
+    expect(off.gaps).toContain(
+      "The search center 34.15278, -118.13578 was not supplied by the request, the previous search area or resolve_place.",
+    );
   });
   test("a search with permit data adds no such gap", async () => {
     const { queries } = fakeQueries();

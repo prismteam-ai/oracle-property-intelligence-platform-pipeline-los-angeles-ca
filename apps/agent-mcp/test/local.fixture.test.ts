@@ -430,10 +430,20 @@ describe("permit tools over the real permits router (writePermitFixture)", () =>
         building_level: true,
         join_method: "condo-building",
       });
+      // Each item's permit, then the permit that set its parcel's roof year (§17 A1), each cited once.
+      const cited = [
+        ...new Set(
+          direct.items.flatMap((i) => [
+            i.permit_number,
+            ...(i.roof_year_permit_number ? [i.roof_year_permit_number] : []),
+          ]),
+        ),
+      ];
+      expect(cited).toContain(N.P1);
       expect(o.records).toEqual(
-        direct.items.map((i) => ({
+        cited.map((id) => ({
           kind: "permit",
-          id: i.permit_number,
+          id,
           source_name: permitSource.source_name,
           license: "none stated",
           attribution: "LADBS",
@@ -894,9 +904,22 @@ describe("conversation on the permit fixture: pipeline README lines 108 then 110
       limit: 10,
     });
     const permitRecords = a2.records.filter((r) => r.kind === "permit");
-    expect(permitRecords.map((r) => r.id)).toEqual(
-      direct.items.map((i) => i.permit_number),
-    );
+    // The long-open permits with their parcels' roof-year permits (§17 A1), then parcel_permits' own.
+    const forParcel = await permitData.caller.permits.forParcel({
+      parcel_id: "0000000022",
+    });
+    expect(permitRecords.map((r) => r.id)).toEqual([
+      ...new Set([
+        ...direct.items.flatMap((i) => [
+          i.permit_number,
+          ...(i.roof_year_permit_number ? [i.roof_year_permit_number] : []),
+        ]),
+        ...forParcel.permits.map((p) => p.permit_number),
+        ...(forParcel.roof_year_permit_number
+          ? [forParcel.roof_year_permit_number]
+          : []),
+      ]),
+    ]);
     expect(a2.records.filter((r) => r.kind === "contractor")).toEqual([
       {
         kind: "contractor",
@@ -926,7 +949,7 @@ describe("conversation on the permit fixture: pipeline README lines 108 then 110
     expect(cited).toContain(
       `\n- Contractor rows of permits: Fixture LADBS contractors (license: CC BY 4.0; attribution: LADBS), retrieved 2026-11-12T14:00:51.383Z\n  - ${N.P3}\n`,
     );
-    for (const id of direct.items.map((i) => i.permit_number))
+    for (const id of permitRecords.map((r) => r.id))
       expect(cited).toContain(`\n  - ${id}`);
     expect(a2.unverified_ids).toEqual([]);
     const everything = JSON.stringify({ requests: model.requests, a1, a2 });

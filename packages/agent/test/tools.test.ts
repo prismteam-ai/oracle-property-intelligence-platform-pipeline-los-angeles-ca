@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "vitest";
-import { basisWord, onceSources } from "../src/permit-api.ts";
+import { basisWord, onceSources, type DataQueries } from "../src/permit-api.ts";
 import { dropDescriptions } from "../src/policy.ts";
 import {
   TOOL_NAMES,
@@ -458,6 +458,14 @@ describe("runTool", () => {
         attribution: "LADBS",
         collected_at: PERMIT_RETRIEVED,
       },
+      // The permit that set the parcel's roof year (roof_year_permit_number), under the permit source (§17 A1).
+      {
+        kind: "permit",
+        id: FAKE_PERMITS[2],
+        source_name: FAKE_SOURCES.permit,
+        attribution: "LADBS",
+        collected_at: PERMIT_RETRIEVED,
+      },
       {
         kind: "contractor",
         id: FAKE_PERMITS[0],
@@ -466,6 +474,210 @@ describe("runTool", () => {
         attribution: "LADBS",
         collected_at: CONTRACTOR_RETRIEVED,
       },
+    ]);
+  });
+  test("§17 A1: every tool that returns a roof_year_permit_number cites it as a permit record under the permit source", async () => {
+    const ROOF_PERMIT = "15016-20000-25193";
+    const permitRecord = (id: string) => ({
+      kind: "permit",
+      id,
+      source_name: FAKE_SOURCES.permit,
+      attribution: "LADBS",
+      collected_at: PERMIT_RETRIEVED,
+    });
+    const { queries, calls } = fakeQueries();
+    const withRoofPermit: DataQueries = {
+      ...queries,
+      parcels: {
+        search: async (i) => {
+          const r = await queries.parcels.search(i);
+          return {
+            ...r,
+            items: r.items.map((it, n) =>
+              n === 1
+                ? {
+                    ...it,
+                    roof_age_basis: ROOF_AGE_BASIS.permit,
+                    effective_roof_year: 2015,
+                    roof_year_permit_number: ROOF_PERMIT,
+                  }
+                : it,
+            ),
+          };
+        },
+        detail: async (i) => {
+          const d = await queries.parcels.detail(i);
+          return {
+            ...d,
+            property: {
+              ...d.property,
+              roof_age_basis: ROOF_AGE_BASIS.permit,
+              roof_year_permit_number: ROOF_PERMIT,
+            },
+          };
+        },
+      },
+      permits: {
+        ...queries.permits,
+        longOpen: async (i) => {
+          const r = await queries.permits.longOpen(i);
+          return {
+            ...r,
+            items: r.items.map((it, n) =>
+              n === 0 ? { ...it, roof_year_permit_number: ROOF_PERMIT } : it,
+            ),
+          };
+        },
+      },
+      explorer: queries.explorer,
+      places: queries.places,
+    };
+    // search_aged_roofs: the parcel, then the permit that set its roof year; sources read for that citation.
+    const search = await runTool(
+      "search_aged_roofs",
+      { lat: 34.2, lon: -118.45 },
+      withRoofPermit,
+    );
+    expect(search.records.map((r) => `${r.kind}:${r.id}`)).toEqual([
+      `parcel:${FAKE_PARCELS[0]}`,
+      `parcel:${FAKE_PARCELS[1]}`,
+      `permit:${ROOF_PERMIT}`,
+      `parcel:${FAKE_PARCELS[2]}`,
+    ]);
+    expect(search.records[2]).toEqual(permitRecord(ROOF_PERMIT));
+    expect(calls.filter((c) => c.fn === "explorer.sources")).toHaveLength(1);
+    // parcel_detail: the parcel and its roof-year permit.
+    const detail = await runTool(
+      "parcel_detail",
+      { parcel_id: FAKE_PARCELS[0] },
+      withRoofPermit,
+    );
+    expect(detail.records).toEqual([
+      {
+        kind: "parcel",
+        id: FAKE_PARCELS[0],
+        source_name: FAKE_SOURCES.parcel,
+        collected_at: "2026-11-11T16:17:40.932Z",
+      },
+      permitRecord(ROOF_PERMIT),
+    ]);
+    expect(detail.gaps).toEqual([]);
+    // long_open_permits: each item's permit, then its parcel's roof-year permit (cited once).
+    const longOpen = await runTool(
+      "long_open_permits",
+      { lat: 34.2, lon: -118.45 },
+      withRoofPermit,
+    );
+    expect(longOpen.records).toEqual(
+      [FAKE_PERMITS[0]!, ROOF_PERMIT, FAKE_PERMITS[2]!].map(permitRecord),
+    );
+  });
+  test("§17 A1: a parcel whose roof year is a proxy cites no permit and reads no sources", async () => {
+    const { queries, calls } = fakeQueries();
+    const search = await runTool(
+      "search_aged_roofs",
+      { lat: 34.2, lon: -118.45 },
+      queries,
+    );
+    const detail = await runTool(
+      "parcel_detail",
+      { parcel_id: FAKE_PARCELS[0] },
+      queries,
+    );
+    expect(
+      [...search.records, ...detail.records].every((r) => r.kind === "parcel"),
+    ).toBe(true);
+    expect(calls.filter((c) => c.fn === "explorer.sources")).toEqual([]);
+  });
+  test("§17 A1: no permit source in the run: the roof-year permit is not cited and the gap says so", async () => {
+    const { queries } = fakeQueries();
+    const noPermitSource: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        detail: async (i) => {
+          const d = await queries.parcels.detail(i);
+          return {
+            ...d,
+            property: {
+              ...d.property,
+              roof_year_permit_number: FAKE_PERMITS[0],
+            },
+          };
+        },
+      },
+      explorer: {
+        ...queries.explorer,
+        sources: async () => {
+          const src = await queries.explorer.sources();
+          return {
+            ...src,
+            sources: src.sources.filter((x) => x.source_kind !== "permit"),
+          };
+        },
+      },
+    };
+    const detail = await runTool(
+      "parcel_detail",
+      { parcel_id: FAKE_PARCELS[0] },
+      noPermitSource,
+    );
+    expect(detail.records.map((r) => r.kind)).toEqual(["parcel"]);
+    expect(detail.gaps).toEqual([
+      "No permit source is listed in the run's sources: the permits are listed without a citation.",
+    ]);
+  });
+  test("§17 A2: resolve_place serves every center at 5 decimals, the precision its note states", async () => {
+    const { queries } = fakeQueries();
+    // A data layer with 6-decimal centers (the smoke run's Pasadena center, 34.152795, -118.135784).
+    const sixDecimals: DataQueries = {
+      ...queries,
+      places: {
+        resolve: async ({ name }) =>
+          name === "Pasadena"
+            ? {
+                status: "resolved",
+                name,
+                basis: "jurisdiction",
+                center: { lat: 34.152795, lon: -118.135784 },
+                parcel_count: 39990,
+                raw_values: ["PASADENA"],
+                spread_miles: 2.4,
+                center_reliable: true,
+                also_matched: {
+                  basis: "postal_city",
+                  center: { lat: 34.147812, lon: -118.144516 },
+                  parcel_count: 41000,
+                  raw_values: ["PASADENA"],
+                  spread_miles: 2.6,
+                },
+                note: "(raw)",
+              }
+            : queries.places.resolve({ name }),
+      },
+    };
+    const o = await runTool("resolve_place", { name: "Pasadena" }, sixDecimals);
+    const r = o.content as {
+      center: { lat: number; lon: number };
+      also_matched: { center: { lat: number; lon: number } };
+      note: string;
+    };
+    expect(r.center).toEqual({ lat: 34.15279, lon: -118.13578 });
+    expect(r.also_matched.center).toEqual({ lat: 34.14781, lon: -118.14452 });
+    expect(r.note).toContain("median center 34.15279, -118.13578 of 39,990");
+    expect(r.note).toContain("median center 34.14781, -118.14452 of 41,000");
+    const la = await runTool(
+      "resolve_place",
+      { name: "Los Angeles" },
+      sixDecimals,
+    );
+    expect(
+      (la.content as { candidates: Array<{ center: unknown }> }).candidates.map(
+        (c) => c.center,
+      ),
+    ).toEqual([
+      { lat: 34.05224, lon: -118.24368 },
+      { lat: 34.098, lon: -118.32674 },
     ]);
   });
   test("a permit route error is an error result, never an exception", async () => {

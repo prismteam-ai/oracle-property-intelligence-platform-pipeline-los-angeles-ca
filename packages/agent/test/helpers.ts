@@ -41,8 +41,11 @@ export const SETTINGS: AgentSettings = {
 };
 
 export const VAN_NUYS = { lat: 34.199, lon: -118.487, label: "Van Nuys" };
-/** The center the fake resolve_place returns for "Van Nuys" (deliberately not VAN_NUYS). */
-export const VAN_NUYS_RESOLVED = { lat: 34.18651, lon: -118.448912 };
+/**
+ * The center the fake resolve_place returns for "Van Nuys" (deliberately not VAN_NUYS), at 5 decimals as
+ * places.resolve serves centers since design brief §17 A2 (PlaceIndex rounds them; the tool rounds them again).
+ */
+export const VAN_NUYS_RESOLVED = { lat: 34.18651, lon: -118.44891 };
 /** The center the fake resolve_place returns for "Pasadena" (a jurisdiction outside the City of Los Angeles). */
 export const PASADENA_RESOLVED = { lat: 34.1478, lon: -118.1445 };
 /** A parcel the fake permits.forParcel serves outside the City of Los Angeles (jurisdiction PASADENA). */
