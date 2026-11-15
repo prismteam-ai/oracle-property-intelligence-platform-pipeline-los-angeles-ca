@@ -1843,9 +1843,18 @@ describe("scope and the no-tool-call rule (approvals §3e.75 a, b)", () => {
 
   test("the system prompt (exact lines): the scope rule, the coverage line, the ownership-duration line, the May 2023 line and the within-window line", () => {
     const system = systemPrompt(SETTINGS.maxToolTurns);
-    // Approvals §3e.80 and §3e.83.1: the May 2023 line (i) and the within-window line (a2), in this order.
+    // Approvals §3e.80 and §3e.83.1: the May 2023 line (i) and the within-window line (a2), in this order; §3e.94
+    // item 1: the within-window items carry their contractors, so parcel_permits is not needed for them.
     expect(system).toContain(
-      "\n- Contractor rows end in May 2023: for permits issued after May 2023, call run_summary and state the contractor window from it (there is no contractor data after May 2023) instead of reading parcels' permits.\n- When a question asks for long-open permits and their contractors, set with_contractor_window in long_open_permits: the result also lists the longest-open permits issued within the contractor window, labeled, with the day limit and the two dates it uses. Then call parcel_permits for the listed parcels as needed.\n",
+      "\n- Contractor rows end in May 2023: for permits issued after May 2023, call run_summary and state the contractor window from it (there is no contractor data after May 2023) instead of reading parcels' permits.\n- When a question asks for long-open permits and their contractors, set with_contractor_window in long_open_permits: the result also lists the longest-open permits issued within the contractor window, labeled, with the day limit and the two dates it uses. Each of its items carries its permit's contractor rows and contractor_status: for every listed permit, name its contractor (business name and license number) or say its status (owner-builder, none stated, not read); parcel_permits is not needed for them.\n",
+    );
+    expect(system).not.toContain("Then call parcel_permits");
+    // §3e.94 items 2 and 3: one line each.
+    expect(system).toContain(
+      "\n- Which or how many aged-roof parcels have long-open roofing permits: set long_open_permit in search_aged_roofs. Its count is of parcels, not permits; say so, as its long_open_permit text states it.\n",
+    );
+    expect(system).toContain(
+      "\n- A listed parcel whose roof_age_basis is PERMIT has its roof year from a permit: name the permit source (its citation's roof_year_source) as well as the parcel's source.\n",
     );
     // The old coverage wording (any coverage question, run_summary first) is gone.
     expect(system).not.toContain(
@@ -1953,5 +1962,72 @@ describe("coverage questions (approvals §3e.78.1)", () => {
     expect(PEOPLE_REFUSAL_TEXT).toContain(
       "Owner names and contact details are neither collected nor served.",
     );
+  });
+});
+
+describe("approvals §3e.94: the reasoning states the long-open parcel count and the within-window contractors", () => {
+  test("search_aged_roofs with long_open_permit: the parcels counted, of how many, and that they are parcels, not permits", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([
+        {
+          name: "search_aged_roofs",
+          input: {
+            lat: VAN_NUYS.lat,
+            lon: VAN_NUYS.lon,
+            radius_miles: 1,
+            threshold_years: 15,
+            long_open_permit: true,
+          },
+        },
+      ]),
+      textReply(`At least 2 parcels: ${FAKE_PARCELS[0]}, ${FAKE_PARCELS[2]}.`),
+    ]);
+    const a = await runAgent(
+      {
+        question: "How many aged roofs here have long-open permits?",
+        center: VAN_NUYS,
+      },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    expect(a.reasoning).toContain(
+      "Searched parcels within 1 mi of Van Nuys built before 2011 (roofs older than 15 years): 42 match, of which at least 2 parcels (not permits) have a long-open roofing permit (open at least 1,826 days) among the nearest checked, 2 listed",
+    );
+    expect(
+      a.gaps.some((g) => g.startsWith("At least 2 of the 42 parcels")),
+    ).toBe(true);
+    expect(a.unverified_ids).toEqual([]);
+  });
+
+  test("long_open_permits with with_contractor_window: the contractor statuses of the within-window list", async () => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([
+        {
+          name: "long_open_permits",
+          input: {
+            lat: VAN_NUYS.lat,
+            lon: VAN_NUYS.lon,
+            radius_miles: 5,
+            with_contractor_window: true,
+          },
+        },
+      ]),
+      textReply(`Permit ${FAKE_PERMITS[0]}: ACME ROOFING, INC.`),
+    ]);
+    const a = await runAgent(
+      {
+        question: "Long-open permits and their contractors here?",
+        center: VAN_NUYS,
+      },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.reasoning).toContain(
+      "listed the long-open permits issued within the contractor window (open at most 5,062 days): 57 match, 2 listed, each with its permit's contractor rows (1 named, 1 not read)",
+    );
+    expect(
+      a.records.filter((r) => r.kind === "contractor").map((r) => r.id),
+    ).toEqual([FAKE_PERMITS[0]]);
   });
 });

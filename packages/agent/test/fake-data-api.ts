@@ -54,6 +54,7 @@ export function fakeDataApi(
   const handlers: Record<string, (input: never) => Promise<unknown>> = {
     "parcels.search": (i) => queries.parcels.search(i),
     "parcels.detail": (i) => queries.parcels.detail(i),
+    "parcels.points": (i) => queries.parcels.points(i),
     "explorer.runSummary": () => queries.explorer.runSummary(),
     "explorer.sources": () => queries.explorer.sources(),
     "permits.longOpen": (i) => queries.permits.longOpen(i),

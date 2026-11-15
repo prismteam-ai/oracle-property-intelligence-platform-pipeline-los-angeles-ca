@@ -38,6 +38,7 @@ import {
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 // The agent package's fakes (relative path, like the API fixture in local.fixture.test.ts).
 import {
+  FAKE_LONG_OPEN,
   FAKE_PARCELS,
   FAKE_PERMITS,
   OUTSIDE_PARCEL,
@@ -241,7 +242,7 @@ describe("prompts file (eval/prompts.json)", () => {
   const byCase = (c: string) => prompts.filter((p) => p.case === c);
 
   test("sixteen entries, valid: cases a–i, then j–n (approvals §3e.75 d) and o (§3e.78.1)", () => {
-    expect(prompts.length).toBe(16);
+    expect(prompts.length).toBe(17);
     expect(new Set(prompts.map((p) => p.case))).toEqual(new Set(PROMPT_CASES));
     expect(new Set(prompts.map((p) => p.id)).size).toBe(prompts.length);
   });
@@ -1693,13 +1694,13 @@ describe("CLI and output folder", () => {
       .trim()
       .split("\n");
     expect(tsv[0]).toBe(
-      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms",
+      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms",
     );
     expect(tsv.slice(1)).toEqual([
-      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
-      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
-      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
-      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
+      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
+      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
+      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
+      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
     ]);
     const md = readFileSync(join(out, "results.md"), "utf8");
     expect(md).toContain("data run run-1");
@@ -2025,7 +2026,7 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byId = (id: string) => prompts.find((p) => p.id === id)!;
 
-  test("a2 (§3e.83.1): one long_open_permits call with with_contractor_window returns both labeled lists, the limit computed in code; then parcel_permits per listed parcel: every check passes", async () => {
+  test("a2 (§3e.83.1, §3e.94 item 1): one long_open_permits call with with_contractor_window returns both labeled lists, the limit computed in code, every within-window item with its contractor: no parcel_permits round; every check passes", async () => {
     const a1 = byId("a1-readme-108-van-nuys");
     const a2 = byId("a2-readme-110-follow-up");
     const first = await ask(
@@ -2043,19 +2044,8 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
           input: { ...at, limit: 5, with_contractor_window: true },
         },
       ]),
-      (p) => {
-        const r = lastToolResult(p, "long_open_permits") as {
-          within_contractor_window: { items: { parcel_id: string }[] };
-        };
-        return toolReply(
-          r.within_contractor_window.items.map((it) => ({
-            name: "parcel_permits",
-            input: { parcel_id: it.parcel_id },
-          })),
-        );
-      },
       textReply(
-        `The longest-open permits were issued before the contractor window (2013-01-02 to 2023-05-19). Within it, permit ${FAKE_PERMITS[0]} on parcel ${FAKE_PARCELS[0]} lists ACME ROOFING, INC. (license 123456, C-39).`,
+        `The longest-open permits were issued before the contractor window (2013-01-02 to 2023-05-19). Within it:\n- Permit ${FAKE_PERMITS[0]} on parcel ${FAKE_PARCELS[0]} lists ACME ROOFING, INC. (license 123456, C-39).\n- Permit ${FAKE_PERMITS[2]} on parcel ${FAKE_PARCELS[2]}: its contractor was not read.`,
       ),
     ]);
     const { queries, calls } = fakeQueries();
@@ -2068,8 +2058,8 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
       { model, queries, settings: SETTINGS },
     );
     expect(answer.status).toBe("answered");
-    // Two tool rounds and the final call: three model calls.
-    expect(answer.usage.model_calls).toBe(3);
+    // One tool round and the final call: two model calls.
+    expect(answer.usage.model_calls).toBe(2);
     expect(model.remaining).toBe(0);
     expect(
       (model.requests[0]!.params.system as string).includes(
@@ -2096,8 +2086,14 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
     expect(r.within_contractor_window!.label).toBe(
       "Longest-open permits issued within the contractor window (open at least 1,826 days and at most 5,062 days)",
     );
-    // Data calls, one at a time: the window read once (the prompt's, shared), two long-open reads, one permits read
-    // per listed parcel.
+    // Each within-window item with its contractor status, read in the tool (the fake lists permit 2 on no parcel).
+    expect(
+      (r.within_contractor_window!.items as Array<Record<string, unknown>>).map(
+        (it) => it.contractor_status,
+      ),
+    ).toEqual(["named", "not read"]);
+    // Data calls: the window read once (the prompt's, shared), two long-open reads one at a time, then one permits
+    // read per listed parcel, in the tool.
     const fns = calls.map((c) => c.fn);
     expect(fns.filter((f) => f === "explorer.sources")).toHaveLength(1);
     const longOpen = calls.filter((c) => c.fn === "permits.longOpen");
@@ -2123,6 +2119,14 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
     expect(c.license_status).toEqual({
       result: "pass",
       details: ["no license status stated"],
+    });
+    expect(c.contractors).toEqual({
+      result: "pass",
+      details: [
+        "2 of 2 within-window permits named in the text",
+        `${FAKE_PERMITS[0]} (named): contractor named`,
+        `${FAKE_PERMITS[2]} (not read): contractor named`,
+      ],
     });
     expect(allPassed(c)).toBe(true);
   });
@@ -2155,7 +2159,61 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
       previousArea: area,
     });
     expect(c.tools.result).toBe("fail");
-    expect(c.tools.details).toContain("parcel_permits not called");
+    // §3e.94 item 1: parcel_permits is no longer required; the call without with_contractor_window fails tools, and
+    // with no within-window list the contractors check fails too.
+    expect(c.tools.details).toContain(
+      'no long_open_permits call with {"radius_miles":5,"min_open_days":1826,"with_contractor_window":true}',
+    );
+    expect(c.contractors).toEqual({
+      result: "fail",
+      details: [
+        "no within-window list (long_open_permits with with_contractor_window)",
+      ],
+    });
+  });
+
+  test("a2 as answered on the hosted agent (15 Nov): within-window permits listed without a contractor fail the contractors check", async () => {
+    const a1 = byId("a1-readme-108-van-nuys");
+    const a2 = byId("a2-readme-110-follow-up");
+    const first = await ask(
+      a1.question,
+      vanNuysSearch((ps) => `Parcels: ${ps.join(", ")}.`),
+    );
+    const area = first.session.area!;
+    const answer = await ask(
+      a2.question,
+      [
+        toolReply([
+          {
+            name: "long_open_permits",
+            input: {
+              lat: area.lat,
+              lon: area.lon,
+              radius_miles: 5,
+              with_contractor_window: true,
+            },
+          },
+        ]),
+        textReply(
+          `Within the contractor window:\n| Permit | Parcel | Contractor |\n| ${FAKE_PERMITS[0]} | ${FAKE_PARCELS[0]} | ACME ROOFING INC |\n| ${FAKE_PERMITS[2]} | ${FAKE_PARCELS[2]} | |`,
+        ),
+      ],
+      { history: first.history, session: first.session },
+    );
+    const c = await checksOf(a2, answer, {
+      previousLength: first.history.length,
+      previousArea: area,
+    });
+    expect(c.tools.result).toBe("pass");
+    expect(c.contractors).toEqual({
+      result: "fail",
+      details: [
+        "2 of 2 within-window permits named in the text",
+        `${FAKE_PERMITS[0]} (named): contractor named`,
+        `${FAKE_PERMITS[2]} (not read): contractor NOT named`,
+      ],
+    });
+    expect(allPassed(c)).toBe(false);
   });
 
   test("a2 must not state a license status: the hosted answer's expiry sentence fails, a license number and class pass; n/a without the expectation", () => {
@@ -2427,3 +2485,94 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
 
 /** A point near Van Nuys that no resolve_place call produced (prompt i's search without a resolution). */
 const VAN_NUYS_POINT = { lat: 34.199, lon: -118.487 };
+
+describe("prompt p and the long-open filter (approvals §3e.94 item 2), with the scripted model", () => {
+  const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
+  const byId = (id: string) => prompts.find((p) => p.id === id)!;
+  test("p: resolve_place, then search_aged_roofs with long_open_permit: the counts check compares the parcel count and IDs with parcels.points' marks; every check passes", async () => {
+    const p = byId("p-long-open-parcels-van-nuys");
+    expect(p.expected.tool_inputs?.search_aged_roofs).toEqual({
+      radius_miles: 1,
+      threshold_years: 15,
+      long_open_permit: true,
+    });
+    const { queries } = fakeQueries();
+    const answer = await ask(
+      p.question,
+      vanNuysSearch(
+        () =>
+          `At least 2 parcels (parcels, not permits) have a long-open roofing permit: ${FAKE_LONG_OPEN.join(", ")}.`,
+        { radius_miles: 1, threshold_years: 15, long_open_permit: true },
+      ),
+      { queries },
+    );
+    const c = await checksOf(p, answer, { queries });
+    expect(c.counts).toEqual({
+      result: "pass",
+      details: [
+        "resolve_place: equal (places.resolve: resolved)",
+        "search_aged_roofs: equal (parcels.points: 2 of 42 parcels marked long-open, 2 IDs)",
+      ],
+    });
+    expect(c.tools.result).toBe("pass");
+    expect(c.contractors.result).toBe("n/a");
+    expect(allPassed(c)).toBe(true);
+    // The same search without the filter fails tools (the expected input) and is compared with parcels.search.
+    const plain = await ask(
+      p.question,
+      vanNuysSearch((ps) => `Parcels: ${ps.join(", ")}.`, {
+        radius_miles: 1,
+        threshold_years: 15,
+      }),
+    );
+    const c2 = await checksOf(p, plain);
+    expect(c2.tools.result).toBe("fail");
+    expect(c2.counts.details).toContain(
+      "search_aged_roofs: equal (parcels.search: count 42, 3 IDs)",
+    );
+  });
+
+  test("counts: a long-open count or list that differs from parcels.points' marks fails", async () => {
+    const p = byId("p-long-open-parcels-van-nuys");
+    const answer = await ask(
+      p.question,
+      vanNuysSearch(() => `Parcels: ${FAKE_LONG_OPEN.join(", ")}.`, {
+        radius_miles: 1,
+        threshold_years: 15,
+        long_open_permit: true,
+      }),
+    );
+    const { queries } = fakeQueries();
+    const oneMarked: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async (i) => {
+          const r = await queries.parcels.points(i);
+          return { ...r, long_open_permit: [1, 0, 0] };
+        },
+      },
+    };
+    const c = await checksOf(p, answer, { queries: oneMarked });
+    expect(c.counts.result).toBe("fail");
+    expect(c.counts.details.join(" ")).toContain("count: tool 2 ≠ direct 1");
+  });
+
+  test("contractors_named needs long_open_permits among the expected tools", () => {
+    const a2 = byId("a2-readme-110-follow-up");
+    const bad = promptsFileSchema.safeParse([
+      {
+        ...a2,
+        expected: {
+          ...a2.expected,
+          tools: ["parcel_permits"],
+          tool_inputs: {},
+        },
+      },
+    ]);
+    expect(bad.success).toBe(false);
+    expect(JSON.stringify(bad.error?.issues)).toContain(
+      "contractors_named needs long_open_permits in tools",
+    );
+  });
+});

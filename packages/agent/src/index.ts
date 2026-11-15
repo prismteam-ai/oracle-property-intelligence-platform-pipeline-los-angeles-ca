@@ -117,6 +117,7 @@ export {
   type DataQueries,
   type LongOpenInput,
   type PermitQueries,
+  type PointsInput,
   type SearchInput,
   type SourceList,
 } from "./permit-api.ts";
@@ -171,6 +172,7 @@ export {
 } from "./policy.ts";
 export { systemPrompt } from "./prompt.ts";
 export {
+  CONTRACTOR_READS_MS,
   DEFAULT_MIN_OPEN_DAYS,
   LONG_OPEN_SCOPE,
   MAX_OPEN_DAYS,
@@ -181,6 +183,9 @@ export {
   sourceRef,
   toolInputJsonSchema,
   toolSchemas,
+  type ContractorStatus,
+  type ContractorSummary,
+  type LongOpenParcelsStated,
   type SourceRef,
   type ToolFact,
   type ToolName,

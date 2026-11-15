@@ -20,6 +20,7 @@ import {
   type ContractorWindow,
 } from "@oracle-la/agent";
 import { beforeAll, describe, expect, test as vitestTest } from "vitest";
+import { checkCounts } from "../src/eval/checks.ts";
 import { GAPS } from "../src/eval/prompts.ts";
 import {
   DEFAULT_REPO_ROOT,
@@ -44,6 +45,8 @@ const SETTINGS: AgentSettings = {
   effort: "low",
 };
 const VAN_NUYS = { lat: 34.199, lon: -118.487 };
+/** The Van Nuys center resolve_place gives on the served run. */
+const VAN_NUYS_CENTER = { lat: 34.20155, lon: -118.45361 };
 const CONTRACTOR_SOURCE =
   "LADBS roofing permits, contractor view (data.lacity.org 8guu-8f5m)";
 const WINDOW: ContractorWindow = {
@@ -188,6 +191,178 @@ describe.skipIf(!hasRealData)("the agent on the real latest run (P19)", () => {
       checked += rows.length;
     }
     expect(checked).toBeGreaterThan(0);
+  });
+
+  /** The CRM pin of the 15 Nov hosted check (approvals §3e.94 item 2). */
+  const CRM_PIN = { lat: 34.20008, lon: -118.48111 };
+
+  test("§3e.94 item 2: search_aged_roofs with long_open_permit at the CRM pin, 1 mi, 15 years: 144 of 3,948 parcels, the CRM legend's count (parcels.points marks and parcels.match agree); items equal parcels.search's", async () => {
+    const filter = { ...CRM_PIN, radius_miles: 1, threshold_years: 15 };
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...filter, long_open_permit: true },
+      data.queries,
+    );
+    expect(o.ok).toBe(true);
+    const c = o.content as {
+      count: number;
+      long_open_permit: Record<string, unknown>;
+      items: Array<Record<string, unknown>>;
+    };
+    expect(c.count).toBe(144);
+    expect(c.long_open_permit).toMatchObject({
+      unit: "parcels",
+      count: 144,
+      of: 3_948,
+      checked: 3_948,
+      complete: true,
+      min_open_days: 1826,
+    });
+    expect(String(c.long_open_permit.text)).toMatch(
+      /^144 of the 3,948 parcels that match the roof-age rule have a long-open roofing permit .* This counts parcels, not permits/,
+    );
+    // The CRM legend's count (the drawn points' marks) and its lead list's (parcels.match, long_open_permit, 72 IDs
+    // per call) are the same 144 parcels.
+    const points = await data.caller.parcels.points(filter);
+    const marked = points.id.filter((_, i) => points.long_open_permit[i] === 1);
+    expect(marked).toHaveLength(144);
+    const matched: string[] = [];
+    for (let i = 0; i < points.id.length; i += 72)
+      matched.push(
+        ...(
+          await data.caller.parcels.match({
+            ...filter,
+            long_open_permit: true,
+            parcel_ids: points.id.slice(i, i + 72),
+          })
+        ).parcel_ids,
+      );
+    expect(new Set(matched)).toEqual(new Set(marked));
+    // The listed parcels are the nearest marked ones, with the search item's own facts (distance included).
+    expect(c.items.map((it) => it.parcel_id)).toEqual(marked.slice(0, 10));
+    // The search's pages, nearest first, until every listed parcel is found.
+    const byId = new Map<string, Record<string, unknown>>();
+    for (
+      let offset = 0;
+      c.items.some((it) => !byId.has(String(it.parcel_id))) && offset < 3_948;
+      offset += 100
+    )
+      for (const it of (
+        await data.caller.parcels.search({ ...filter, limit: 100, offset })
+      ).items)
+        byId.set(it.parcel_id, it as unknown as Record<string, unknown>);
+    for (const it of c.items) {
+      const s = byId.get(String(it.parcel_id))!;
+      expect(s).toBeDefined();
+      for (const k of [
+        "address",
+        "year_built",
+        "effective_roof_year",
+        "roof_age_years",
+        "roof_year_permit_number",
+        "permit_data_available",
+        "distance_miles",
+      ] as const)
+        expect(it[k]).toEqual(s[k]);
+    }
+    // The eval's counts check compares the same.
+    const counts = await checkCounts(
+      [
+        {
+          id: "t1",
+          name: "search_aged_roofs",
+          input: { ...filter, long_open_permit: true },
+          result: o.content,
+          is_error: false,
+        },
+      ],
+      data.queries,
+    );
+    expect(counts).toEqual({
+      result: "pass",
+      details: [
+        "search_aged_roofs: equal (parcels.points: 144 of 3948 parcels marked long-open, 10 IDs)",
+      ],
+    });
+  });
+
+  test("§3e.94 item 1: long_open_permits with with_contractor_window at Van Nuys, 5 mi, limit 10: every within-window item carries its permit's contractor rows, as permits.forParcel serves them", async () => {
+    const o = await runTool(
+      "long_open_permits",
+      {
+        ...VAN_NUYS_CENTER,
+        radius_miles: 5,
+        limit: 10,
+        with_contractor_window: true,
+      },
+      data.queries,
+    );
+    expect(o.ok).toBe(true);
+    const w = (
+      o.content as {
+        within_contractor_window: {
+          contractor_source: { source_name: string };
+          items: Array<Record<string, unknown>>;
+        };
+      }
+    ).within_contractor_window;
+    expect(w.items).toHaveLength(10);
+    expect(w.contractor_source.source_name).toBe(CONTRACTOR_SOURCE);
+    const statuses: Record<string, number> = {};
+    for (const it of w.items) {
+      const direct = await data.caller.permits.forParcel({
+        parcel_id: String(it.parcel_id),
+      });
+      const permit = direct.permits.find(
+        (p) => p.permit_number === it.permit_number,
+      )!;
+      expect(permit).toBeDefined();
+      const rows = (it.contractors as Array<Record<string, unknown>>).map(
+        (c) => [
+          c.contractors_business_name,
+          c.license_identifier,
+          c.canonical_business_name,
+        ],
+      );
+      expect(rows).toEqual(
+        permit.contractors.map((c) => [
+          c.contractors_business_name,
+          c.license_identifier,
+          c.canonical_business_name ?? null,
+        ]),
+      );
+      statuses[String(it.contractor_status)] =
+        (statuses[String(it.contractor_status)] ?? 0) + 1;
+    }
+    expect(statuses["not read"]).toBeUndefined();
+    expect(statuses.named).toBeGreaterThan(0);
+    expect(o.records.filter((r) => r.kind === "contractor").length).toBe(
+      (statuses.named ?? 0) + (statuses["owner-builder"] ?? 0),
+    );
+  });
+
+  test("§3e.94 item 3: search_aged_roofs at Van Nuys, 5 mi: a listed row with a PERMIT roof year cites the LADBS permit source too", async () => {
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...VAN_NUYS_CENTER, radius_miles: 5, threshold_years: 15, limit: 25 },
+      data.queries,
+    );
+    const items = (o.content as { items: Array<Record<string, unknown>> })
+      .items;
+    const permitRows = items.filter((it) => it.roof_age_basis === "PERMIT");
+    expect(permitRows.length).toBeGreaterThan(0);
+    const permitSource = (await data.caller.explorer.sources()).sources
+      .filter((s) => s.source_kind === "permit")
+      .map((s) => s.source_name)
+      .join("; ");
+    expect(permitSource).toMatch(/LADBS/);
+    for (const it of permitRows)
+      expect(it.citation).toMatchObject({
+        source_name: expect.any(String),
+        roof_year_source: { source_name: permitSource },
+      });
+    for (const it of items.filter((x) => x.roof_age_basis === "PROXY"))
+      expect(it.citation).not.toHaveProperty("roof_year_source");
   });
 });
 

@@ -11,6 +11,7 @@ import type {
   ParcelPermits,
   PermitContractor,
   PermitFields,
+  PointsResult,
   RoofAgeBasis,
   RunSummary,
   SearchItem,
@@ -172,6 +173,12 @@ const sourceRow = (
   coverage: null,
   ...extra,
 });
+
+/** The parcels the fake parcels.points marks long-open (long_open_permit 1). */
+export const FAKE_LONG_OPEN: readonly string[] = [
+  FAKE_PARCELS[0]!,
+  FAKE_PARCELS[2]!,
+];
 
 /** The fake search's count with an ownership basis (42 without one). */
 export const OWNERSHIP_COUNT = 17;
@@ -346,6 +353,34 @@ export function fakeQueries(): {
           ownership: basis ? apiOwnershipRule(basis) : null,
           items,
           next_offset: items.length,
+        };
+      },
+      /**
+       * The search's parcels as map points, nearest first: the first and third marked long-open (FAKE_LONG_OPEN).
+       * Only the three are drawn of the search's count (42, or 17 with an ownership basis), so truncated is true.
+       */
+      async points(input): Promise<PointsResult> {
+        rec("parcels.points", input);
+        const basis = input.ownership_basis;
+        const count = basis ? OWNERSHIP_COUNT : 42;
+        return {
+          count,
+          encoding: "columnar-v1",
+          precision: 5,
+          id: [...FAKE_PARCELS],
+          lat: FAKE_PARCELS.map(() => input.lat),
+          lon: FAKE_PARCELS.map(() => input.lon),
+          permit_data_available: [1, 1, 1],
+          long_open_permit: FAKE_PARCELS.map((id) =>
+            FAKE_LONG_OPEN.includes(id) ? 1 : 0,
+          ),
+          long_open: {
+            min_open_days: input.min_open_days ?? 1826,
+            max_open_days: input.max_open_days ?? null,
+          },
+          ownership: basis ? apiOwnershipRule(basis) : null,
+          truncated: count > FAKE_PARCELS.length,
+          max_points: FAKE_PARCELS.length,
         };
       },
       async detail(input): Promise<ParcelDetail> {

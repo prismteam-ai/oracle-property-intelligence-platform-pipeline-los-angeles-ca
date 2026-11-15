@@ -1,19 +1,28 @@
 import { OWNERSHIP_BASIS, OWNERSHIP_PROXY_NOTE } from "@oracle-la/api/contract";
-import { beforeAll, describe, expect, test } from "vitest";
+import type {
+  LongOpenResult,
+  ParcelPermits,
+  PermitContractor,
+} from "@oracle-la/api/contract";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { ownershipRuleLine } from "../src/ownership.ts";
 import { basisWord, onceSources, type DataQueries } from "../src/permit-api.ts";
 import { dropDescriptions } from "../src/policy.ts";
 import {
+  CONTRACTOR_READS_MS,
   TOOL_NAMES,
   anthropicTools,
   daysBetween,
   runTool,
   toolSchemas,
 } from "../src/tools.ts";
-import { DataApiUnavailableError } from "../src/http-data.ts";
+import { DataApiUnavailableError, httpDataQueries } from "../src/http-data.ts";
+import { FAKE_API_URL, fakeDataApi } from "./fake-data-api.ts";
 import {
   CONTRACTOR_COVERAGE,
   CONTRACTOR_RETRIEVED,
+  CONTRACTOR_RETRIEVED as CONTRACTOR_CITED_AT,
+  FAKE_LONG_OPEN,
   FAKE_PARCELS,
   FAKE_PERMITS,
   FAKE_SOURCES,
@@ -27,6 +36,9 @@ import {
 } from "./helpers.ts";
 
 beforeAll(blockNetwork);
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** Every key at any depth of a JSON value. */
 function keysDeep(v: unknown, out: string[] = []): string[] {
@@ -86,6 +98,7 @@ describe("tool definitions for the model", () => {
         threshold_years: 15,
         limit: 10,
         ownership_filter: false,
+        long_open_permit: false,
       },
     );
     expect(toolSchemas.long_open_permits.parse({ lat: 34, lon: -118 })).toEqual(
@@ -505,6 +518,7 @@ describe("runTool", () => {
     const withRoofPermit: DataQueries = {
       ...queries,
       parcels: {
+        points: queries.parcels.points,
         search: async (i) => {
           const r = await queries.parcels.search(i);
           return {
@@ -562,6 +576,22 @@ describe("runTool", () => {
     ]);
     expect(search.records[2]).toEqual(permitRecord(ROOF_PERMIT));
     expect(calls.filter((c) => c.fn === "explorer.sources")).toHaveLength(1);
+    // Approvals §3e.94 item 3: the PERMIT row's own citation names the permit source too (not only the roll's).
+    const citations = (
+      search.content as { items: Array<{ citation: unknown }> }
+    ).items.map((it) => it.citation);
+    expect(citations[1]).toEqual({
+      source_name: FAKE_SOURCES.parcel,
+      collected_at: "2026-11-11T16:17:40.932Z",
+      roof_year_source: {
+        source_name: FAKE_SOURCES.permit,
+        retrieved: PERMIT_RETRIEVED,
+      },
+    });
+    expect(citations[0]).toEqual({
+      source_name: FAKE_SOURCES.parcel,
+      collected_at: "2026-11-11T16:17:40.932Z",
+    });
     // parcel_detail: the parcel and its roof-year permit.
     const detail = await runTool(
       "parcel_detail",
@@ -578,6 +608,12 @@ describe("runTool", () => {
       permitRecord(ROOF_PERMIT),
     ]);
     expect(detail.gaps).toEqual([]);
+    expect(
+      (detail.content as { roof_year_source?: unknown }).roof_year_source,
+    ).toEqual({
+      source_name: FAKE_SOURCES.permit,
+      retrieved: PERMIT_RETRIEVED,
+    });
     // long_open_permits: each item's permit, then its parcel's roof-year permit (cited once).
     const longOpen = await runTool(
       "long_open_permits",
@@ -1096,10 +1132,13 @@ describe("long_open_permits: with_contractor_window (approvals §3e.83.1)", () =
     );
     expect(o.ok).toBe(true);
     expect(most).toBe(1);
+    // Then the contractor rows of the within-window list: one permits.forParcel per listed parcel.
     expect(calls.map((c) => c.fn)).toEqual([
       "permits.longOpen",
       "explorer.sources",
       "permits.longOpen",
+      "permits.forParcel",
+      "permits.forParcel",
     ]);
     expect(calls[0]!.input).not.toHaveProperty("max_open_days");
     expect(calls[2]!.input).toMatchObject({
@@ -1134,9 +1173,11 @@ describe("long_open_permits: with_contractor_window (approvals §3e.83.1)", () =
       truncated: true,
     });
     // Both lists' truncation gaps, each naming its list; the IDs of both lists are known.
+    // The fake's parcels list permits 0 and 1 only, so permit 2's contractor is not read, and said so.
     expect(o.gaps).toEqual([
       "Results truncated: the longest-open list returned 2 of 57 long-open permits (longest open first).",
       "Results truncated: the within-window list returned 2 of 57 long-open permits (longest open first).",
+      `The contractor of permit ${FAKE_PERMITS[2]} (parcel ${FAKE_PARCELS[2]}) was not read (permit ${FAKE_PERMITS[2]} is not among parcel ${FAKE_PARCELS[2]}'s permits (permits.forParcel)); it is listed without its contractor.`,
     ]);
     expect(o.ids).toEqual(
       expect.arrayContaining([FAKE_PERMITS[0], FAKE_PARCELS[0]]),
@@ -1242,5 +1283,452 @@ describe("long_open_permits: with_contractor_window (approvals §3e.83.1)", () =
     expect(below.gaps).toContain(
       "No permit issued within the contractor window (from 2013-01-02) can be open 6,000 days on 2026-11-12: the limit of 5,062 days is below the minimum, so no within-window list is given.",
     );
+  });
+});
+
+describe("long_open_permits: the contractor of every within-window item (approvals §3e.94 item 1)", () => {
+  const at = { lat: 34.2, lon: -118.45, radius_miles: 5 };
+  const [P0, P1, P2] = FAKE_PARCELS as [string, string, string];
+  const OTHER = "16010-10000-00009";
+  const AFTER = "24016-10000-00001";
+  const row = (extra: Partial<PermitContractor>): PermitContractor => ({
+    contractors_business_name: "ACME ROOFING INC",
+    license_identifier: "123456",
+    contractor_identity_key: "123456",
+    canonical_business_name: "ACME ROOFING, INC.",
+    name_variant_count: 2,
+    identity_permit_count: 9,
+    source_license_type: "C39",
+    license_class: "C-39",
+    license_class_note: null,
+    is_owner_builder: false,
+    license_expiration_date: "2024-01-31",
+    city_name: "VAN NUYS",
+    state_code: "CA",
+    ...extra,
+  });
+  const OWNER_BUILDER = row({
+    contractors_business_name: "OWNER-BUILDER",
+    license_identifier: null,
+    contractor_identity_key: null,
+    canonical_business_name: null,
+    name_variant_count: 0,
+    license_class: null,
+    source_license_type: "Owner-Builder",
+    license_class_note: "owner-builder",
+    is_owner_builder: true,
+  });
+  /**
+   * The within-window call lists four permits on three parcels: permit 0 (P0, a named contractor), permit 2 (P2, an
+   * owner-builder), OTHER (P0 again, no contractor row) and AFTER (P1, issued after the rows end, no row).
+   */
+  function within(
+    base: DataQueries,
+    forParcel?: DataQueries["permits"]["forParcel"],
+  ) {
+    const reads: string[] = [];
+    const q: DataQueries = {
+      ...base,
+      permits: {
+        longOpen: async (i): Promise<LongOpenResult> => {
+          const r = await base.permits.longOpen(i);
+          if (i.max_open_days === undefined) return r;
+          const [a, b] = r.items as [
+            LongOpenResult["items"][number],
+            LongOpenResult["items"][number],
+          ];
+          return {
+            ...r,
+            count: 4,
+            items: [
+              a,
+              b,
+              { ...a, permit_number: OTHER },
+              {
+                ...a,
+                permit_number: AFTER,
+                parcel_id: P1,
+                permit_issue_date: "2024-01-02",
+              },
+            ],
+          };
+        },
+        forParcel:
+          forParcel ??
+          (async ({ parcel_id }): Promise<ParcelPermits> => {
+            reads.push(parcel_id);
+            const r = await base.permits.forParcel({ parcel_id });
+            const [p0] = r.permits as [ParcelPermits["permits"][number]];
+            const permits =
+              parcel_id === P0
+                ? [
+                    {
+                      ...p0,
+                      contractors: [
+                        row({
+                          description: "SECRET",
+                        } as Partial<PermitContractor>),
+                      ],
+                    },
+                    { ...p0, permit_number: OTHER, contractors: [] },
+                  ]
+                : parcel_id === P2
+                  ? [
+                      {
+                        ...p0,
+                        permit_number: FAKE_PERMITS[2]!,
+                        contractors: [OWNER_BUILDER],
+                      },
+                    ]
+                  : [{ ...p0, permit_number: AFTER, contractors: [] }];
+            return { ...r, parcel_id, permits };
+          }),
+      },
+    };
+    return { q, reads };
+  }
+  type Within = {
+    contractor_source: unknown;
+    contractors: string;
+    items: Array<Record<string, unknown>>;
+  };
+  const withinOf = (o: { content: unknown }) =>
+    (o.content as { within_contractor_window: Within })
+      .within_contractor_window;
+
+  test("every item carries its contractor rows and status; one permits.forParcel per listed parcel; contractor rows cited under the contractor source", async () => {
+    const { queries, calls } = fakeQueries();
+    const { q, reads } = within(queries);
+    const o = await runTool(
+      "long_open_permits",
+      { ...at, with_contractor_window: true },
+      q,
+    );
+    expect(o.ok).toBe(true);
+    expect(reads).toEqual([P0, P2, P1]);
+    const w = withinOf(o);
+    expect(
+      w.items.map((it) => [it.permit_number, it.contractor_status]),
+    ).toEqual([
+      [FAKE_PERMITS[0], "named"],
+      [FAKE_PERMITS[2], "owner-builder"],
+      [OTHER, "none stated"],
+      [AFTER, "after the contractor window"],
+    ]);
+    // The license identity of each row: business name, license number, class, canonical name, variant count.
+    expect(w.items[0]!.contractors).toEqual([
+      {
+        contractors_business_name: "ACME ROOFING INC",
+        license_identifier: "123456",
+        license_class: "C-39",
+        license_class_note: null,
+        is_owner_builder: false,
+        canonical_business_name: "ACME ROOFING, INC.",
+        name_variant_count: 2,
+      },
+    ]);
+    expect(w.items[1]!.contractors).toEqual([
+      {
+        contractors_business_name: "OWNER-BUILDER",
+        license_identifier: null,
+        license_class: null,
+        license_class_note: "owner-builder",
+        is_owner_builder: true,
+        canonical_business_name: null,
+        name_variant_count: 0,
+      },
+    ]);
+    expect(w.items[2]!.contractors).toEqual([]);
+    // No expiration date and no description reach the result.
+    expect(JSON.stringify(o.content)).not.toContain("2024-01-31");
+    expect(JSON.stringify(o.content)).not.toContain("SECRET");
+    expect(w.contractors).toBe(
+      "Contractor of each listed permit: 1 named, 1 owner-builder, 1 none stated, 1 after the contractor window.",
+    );
+    expect(w.contractor_source).toEqual({
+      source_name: FAKE_SOURCES.contractor,
+      license: "CC BY 4.0",
+      attribution: "LADBS",
+      retrieved: CONTRACTOR_CITED_AT,
+    });
+    expect(
+      o.records.filter((r) => r.kind === "contractor").map((r) => r.id),
+    ).toEqual([FAKE_PERMITS[0], FAKE_PERMITS[2]]);
+    expect(o.gaps.join(" ")).not.toContain("not read");
+    expect(o.fact).toMatchObject({
+      within_window: {
+        status: "read",
+        contractors: {
+          named: 1,
+          "owner-builder": 1,
+          "none stated": 1,
+          "after the contractor window": 1,
+          "not read": 0,
+        },
+      },
+    });
+    // The longest-open list (before the window) carries no contractor fields.
+    const longest = (
+      o.content as { longest_open: { items: Array<Record<string, unknown>> } }
+    ).longest_open;
+    expect(longest.items.every((it) => !("contractor_status" in it))).toBe(
+      true,
+    );
+    expect(calls.filter((c) => c.fn === "explorer.sources")).toHaveLength(1);
+  });
+
+  test("a failed read: that parcel's items are not read, with why and a gap; the others keep their contractors", async () => {
+    const { queries } = fakeQueries();
+    const base = within(queries).q.permits.forParcel;
+    const { q } = within(queries, async (i) => {
+      if (i.parcel_id === P2)
+        throw new DataApiUnavailableError("permits.forParcel", "busy", 503);
+      return base(i);
+    });
+    const o = await runTool(
+      "long_open_permits",
+      { ...at, with_contractor_window: true },
+      q,
+    );
+    expect(o.ok).toBe(true);
+    const item = withinOf(o).items[1]!;
+    expect(item).toMatchObject({
+      permit_number: FAKE_PERMITS[2],
+      contractor_status: "not read",
+      contractor_not_read: "data API busy: permits.forParcel not read",
+      contractors: null,
+    });
+    expect(o.gaps).toContain(
+      `The contractor of permit ${FAKE_PERMITS[2]} (parcel ${P2}) was not read (data API busy: permits.forParcel not read); it is listed without its contractor.`,
+    );
+    expect(withinOf(o).items[0]!.contractor_status).toBe("named");
+  });
+
+  test(`reads still running after CONTRACTOR_READS_MS (${CONTRACTOR_READS_MS} ms, one call's worst case) are stated as not read`, async () => {
+    expect(CONTRACTOR_READS_MS).toBe(10_500);
+    vi.useFakeTimers();
+    const { queries } = fakeQueries();
+    const base = within(queries).q.permits.forParcel;
+    const { q } = within(queries, (i) =>
+      i.parcel_id === P1 ? new Promise<ParcelPermits>(() => {}) : base(i),
+    );
+    const pending = runTool(
+      "long_open_permits",
+      { ...at, with_contractor_window: true },
+      q,
+    );
+    await vi.advanceTimersByTimeAsync(CONTRACTOR_READS_MS);
+    const o = await pending;
+    expect(o.ok).toBe(true);
+    expect(withinOf(o).items.map((it) => it.contractor_status)).toEqual([
+      "named",
+      "owner-builder",
+      "none stated",
+      "not read",
+    ]);
+    expect(withinOf(o).items[3]!.contractor_not_read).toBe(
+      "permits.forParcel not read within 10.5 s",
+    );
+  });
+
+  test("through the HTTP adapter: the reads overlap, never more than 2 data calls in flight", async () => {
+    const { queries } = fakeQueries();
+    const { q: inner } = within(queries);
+    const api = fakeDataApi(inner, { delayMs: 20 });
+    const q = httpDataQueries({
+      apiUrl: FAKE_API_URL,
+      apiToken: "test-bearer-token-not-secret",
+      fetch: api.fetch,
+    });
+    const o = await runTool(
+      "long_open_permits",
+      { ...at, with_contractor_window: true },
+      q,
+    );
+    expect(o.ok).toBe(true);
+    expect(
+      api.requests.filter((r) => r.route === "permits.forParcel"),
+    ).toHaveLength(3);
+    expect(api.peak()).toBe(2);
+    expect(withinOf(o).items.map((it) => it.contractor_status)).toEqual([
+      "named",
+      "owner-builder",
+      "none stated",
+      "after the contractor window",
+    ]);
+  });
+});
+
+describe("search_aged_roofs: long_open_permit (approvals §3e.94 item 2)", () => {
+  const VN = { lat: 34.2, lon: -118.45, radius_miles: 1, threshold_years: 15 };
+  type Stated = {
+    count: number;
+    returned: number;
+    long_open_permit?: Record<string, unknown>;
+    items: Array<Record<string, unknown>>;
+  };
+  /** The fake with every parcel drawn: the search counts the three parcels points draws. */
+  function complete(base: DataQueries): DataQueries {
+    return {
+      ...base,
+      parcels: {
+        detail: base.parcels.detail,
+        search: async (i) => ({ ...(await base.parcels.search(i)), count: 3 }),
+        points: async (i) => ({
+          ...(await base.parcels.points(i)),
+          count: 3,
+          truncated: false,
+        }),
+      },
+    };
+  }
+
+  test("the schema: long_open_permit, boolean, off by default", () => {
+    expect(
+      toolSchemas.search_aged_roofs.parse({ lat: 34.2, lon: -118.45 }),
+    ).toMatchObject({
+      long_open_permit: false,
+    });
+  });
+
+  test("off: no parcels.points call and no long_open_permit in the result", async () => {
+    const { queries, calls } = fakeQueries();
+    const o = await runTool("search_aged_roofs", VN, queries);
+    expect(calls.map((c) => c.fn)).not.toContain("parcels.points");
+    expect(o.content).not.toHaveProperty("long_open_permit");
+    expect(o.fact).toMatchObject({ long_open: null });
+  });
+
+  test("on: the search (count and rule) and parcels.points with the same filter, then the marked parcels nearest first; the count is of parcels, not permits", async () => {
+    const { queries, calls } = fakeQueries();
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...VN, long_open_permit: true },
+      complete(queries),
+    );
+    expect(o.ok).toBe(true);
+    expect(calls.slice(0, 2)).toEqual([
+      { fn: "parcels.search", input: { ...VN, offset: 0, limit: 1 } },
+      { fn: "parcels.points", input: { ...VN, min_open_days: 1826 } },
+    ]);
+    expect(
+      calls.filter((c) => c.fn === "parcels.detail").map((c) => c.input),
+    ).toEqual(FAKE_LONG_OPEN.map((parcel_id) => ({ parcel_id })));
+    const c = o.content as Stated;
+    expect(c.count).toBe(2);
+    expect(c.items.map((it) => it.parcel_id)).toEqual(FAKE_LONG_OPEN);
+    expect(c.long_open_permit).toEqual({
+      unit: "parcels",
+      count: 2,
+      of: 3,
+      checked: 3,
+      complete: true,
+      min_open_days: 1826,
+      text: "2 of the 3 parcels that match the roof-age rule have a long-open roofing permit (an issued LADBS roofing-work permit still open at least 1,826 days). This counts parcels, not permits: a parcel with several long-open permits counts once, and a building-level (condominium) permit marks every unit it links.",
+    });
+    // The item's facts from the parcel's detail, as the search computes them (the fake parcel lies at 34.2, -118.48).
+    expect(c.items[0]).toMatchObject({
+      address: "1 TEST ST",
+      year_built: 1950,
+      effective_roof_year: 1950,
+      roof_age_years: 76,
+      roof_age_basis: "PROXY",
+      permit_data_available: true,
+      distance_miles: 1.714,
+      citation: { source_name: FAKE_SOURCES.parcel },
+    });
+    expect(o.fact).toMatchObject({
+      count: 2,
+      long_open: { count: 2, of: 3, min_open_days: 1826, complete: true },
+    });
+  });
+
+  test("on, with more parcels than the data API draws: a lower bound, stated as such and as a gap", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...VN, long_open_permit: true, limit: 1 },
+      queries,
+    );
+    const c = o.content as Stated;
+    expect(c.long_open_permit).toMatchObject({
+      count: 2,
+      of: 42,
+      checked: 3,
+      complete: false,
+    });
+    const text = String(c.long_open_permit!.text);
+    expect(text).toMatch(
+      /^At least 2 of the 42 parcels that match the roof-age rule have a long-open roofing permit/,
+    );
+    expect(text).toContain("only the nearest 3 were checked");
+    expect(o.gaps).toContain(text);
+    expect(o.gaps).toContain(
+      "Results truncated: search_aged_roofs returned 1 of 2 matching parcels (nearest first).",
+    );
+  });
+
+  test("on, with the ownership filter: both calls carry its basis, and the text says so", async () => {
+    const { queries, calls } = fakeQueries();
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...VN, long_open_permit: true, ownership_filter: true },
+      queries,
+    );
+    expect(o.ok).toBe(true);
+    expect(calls.find((c) => c.fn === "parcels.points")!.input).toMatchObject({
+      ownership_basis: "both",
+    });
+    expect(String((o.content as Stated).long_open_permit!.text)).toContain(
+      "parcels that match the roof-age rule and the ownership filter",
+    );
+  });
+
+  test("points that disagree with the search, or carry no long-open marks, are an error, never shown as filtered", async () => {
+    const { queries } = fakeQueries();
+    const noMarks: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async (i) => {
+          const p = await queries.parcels.points(i);
+          return {
+            ...p,
+            long_open_permit: undefined as unknown as typeof p.long_open_permit,
+          };
+        },
+      },
+    };
+    expect(
+      await runTool(
+        "search_aged_roofs",
+        { ...VN, long_open_permit: true },
+        noMarks,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: "the data API's parcels.points did not mark the long-open parcels",
+    });
+    const otherCount: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async (i) => ({
+          ...(await queries.parcels.points(i)),
+          count: 41,
+        }),
+      },
+    };
+    expect(
+      await runTool(
+        "search_aged_roofs",
+        { ...VN, long_open_permit: true },
+        otherCount,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error:
+        "the data API's parcels.points counted 41 parcels and its search 42",
+    });
   });
 });

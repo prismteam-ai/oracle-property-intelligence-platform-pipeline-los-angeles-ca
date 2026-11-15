@@ -11,10 +11,12 @@
  * - ownership: an answer through the ownership filter states its basis and weakness and never implies the owner
  *   is known;
  * - license_status: the answer text never says a contractor license expired or is invalid (nothing in the data
- *   states a license's status).
+ *   states a license's status);
+ * - contractors: every within-window permit the text names has its contractor named as the tool returned it.
  */
 import type { OwnershipBasis } from "@oracle-la/api/contract";
 import {
+  DEFAULT_MIN_OPEN_DAYS,
   DEFAULT_OWNERSHIP_BASIS,
   NOT_RUN_PREFIX,
   NO_TOOL_CALL_TEXT,
@@ -49,6 +51,7 @@ export const CHECK_NAMES = [
   "place",
   "ownership",
   "license_status",
+  "contractors",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 
@@ -224,7 +227,7 @@ async function compareDirect(
     case "search_aged_roofs":
       direct = async () => {
         // With the ownership filter on, the basis the tool sends ("both" unless one is named; tools.ts).
-        const d = await q.parcels.search({
+        const filter = {
           lat: n("lat"),
           lon: n("lon"),
           radius_miles: n("radius_miles"),
@@ -236,6 +239,26 @@ async function compareDirect(
                   DEFAULT_OWNERSHIP_BASIS,
               }
             : {}),
+        };
+        if (input.long_open_permit === true) {
+          // The long-open filter: the parcels parcels.points marks long-open (the CRM legend's count), nearest
+          // first, and the first `limit` of them.
+          const p = await q.parcels.points({
+            ...filter,
+            min_open_days: DEFAULT_MIN_OPEN_DAYS,
+          });
+          const marked = p.id.filter((_, i) => p.long_open_permit[i] === 1);
+          cmp("count", r.count, marked.length);
+          cmp("long_open_permit unit", rec(r.long_open_permit).unit, "parcels");
+          cmpList(
+            "parcel IDs",
+            ids(r.items, "parcel_id"),
+            marked.slice(0, n("limit")),
+          );
+          return `parcels.points: ${marked.length} of ${p.count} parcels marked long-open, ${Math.min(marked.length, n("limit"))} IDs`;
+        }
+        const d = await q.parcels.search({
+          ...filter,
           offset: 0,
           limit: n("limit"),
         });
@@ -661,6 +684,107 @@ export function checkLicenseStatus(
   );
 }
 
+/** Upper case letters and digits only: "A - 1 All-American Roofing, Inc." → "A1ALLAMERICANROOFINGINC". */
+const squash = (s: string): string => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+/** What the text must say for a within-window permit, per contractor status (tools.ts ContractorStatus). */
+export const CONTRACTOR_STATUS_TEXT: Record<string, RegExp> = {
+  "owner-builder": /owner[\s-]?builder/i,
+  "none stated":
+    /\bno contractor\b|\bnone (?:stated|listed|named)\b|\bnot (?:stated|listed|named)\b|\bno (?:license|contractor row)/i,
+  "after the contractor window":
+    /\bno contractor\b|\bafter\b[^.!?\n]*\bwindow\b|\bnot (?:stated|listed|named)\b/i,
+  "not read":
+    /\bnot read\b|\bcould(?:n['’]t| not) be read\b|\bunavailable\b|\bnot available\b|\bfailed\b/i,
+};
+
+/**
+ * (vii) With expected.contractors_named (approvals §3e.94 item 1): a long_open_permits call with
+ * with_contractor_window listed the within-window permits; the text names at least one of them; and for each one it
+ * names, the text from that permit number to the next listed permit number names its contractor: for a named one a
+ * business or canonical name (letters and digits compared) or a license number of its rows; otherwise its status in
+ * words (owner-builder, no contractor stated, not read). n/a without the expectation.
+ */
+export function checkContractors(
+  answer: AgentAnswer,
+  calls: readonly ToolCallRecord[],
+  expected: EvalPrompt["expected"],
+): CheckResult {
+  if (!expected.contractors_named)
+    return check(["no contractor expectation"], null);
+  const items = calls
+    .filter(
+      (c) =>
+        c.name === "long_open_permits" &&
+        !c.is_error &&
+        parsedInput(c)?.with_contractor_window === true,
+    )
+    .flatMap((c) => arr(rec(rec(c.result).within_contractor_window).items))
+    .map(rec)
+    .filter((it) => typeof it.permit_number === "string");
+  if (!items.length)
+    return check(
+      ["no within-window list (long_open_permits with with_contractor_window)"],
+      false,
+    );
+  const text = answer.text;
+  const at = items
+    .map((it) => ({ it, i: text.indexOf(String(it.permit_number)) }))
+    .filter((x) => x.i >= 0)
+    .sort((a, b) => a.i - b.i);
+  if (!at.length)
+    return check(
+      [
+        `none of the ${items.length} within-window permits is named in the text`,
+      ],
+      false,
+    );
+  const details: string[] = [];
+  let ok = true;
+  // A permit's part of the text: from the start of its line (or the permit number, when the previous listed permit is
+  // on the same line) to the start of the next listed permit's line (or that permit number, on the same line).
+  const lineStart = (i: number) => text.lastIndexOf("\n", i - 1) + 1;
+  at.forEach(({ it, i }, k) => {
+    const prev = at[k - 1];
+    const next = at[k + 1];
+    const start = prev && lineStart(i) <= prev.i ? i : lineStart(i);
+    const end = !next
+      ? text.length
+      : lineStart(next.i) > i
+        ? lineStart(next.i)
+        : next.i;
+    const segment = text.slice(start, end);
+    const status = String(it.contractor_status);
+    const rows = arr(it.contractors).map(rec);
+    const named =
+      status === "named"
+        ? rows.some((c) =>
+            [
+              c.contractors_business_name,
+              c.canonical_business_name,
+              c.license_identifier,
+            ].some(
+              (v) =>
+                typeof v === "string" &&
+                squash(v).length > 0 &&
+                squash(segment).includes(squash(v)),
+            ),
+          )
+        : (CONTRACTOR_STATUS_TEXT[status]?.test(segment) ?? false);
+    if (!named) ok = false;
+    details.push(
+      `${String(it.permit_number)} (${status}): ${named ? "contractor named" : "contractor NOT named"}`,
+    );
+  });
+  return check(
+    [
+      `${at.length} of ${items.length} within-window permits named in the text`,
+      ...details,
+    ],
+    ok,
+  );
+}
+
 interface Resolution {
   status?: unknown;
   name?: unknown;
@@ -813,6 +937,7 @@ export async function checkAnswer(args: {
       place: checkPlace(calls, prompt.expected.place, args.previousArea),
       ownership: checkOwnership(answer, calls, prompt.expected),
       license_status: checkLicenseStatus(answer, prompt.expected),
+      contractors: checkContractors(answer, calls, prompt.expected),
     },
   };
 }

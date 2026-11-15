@@ -20,6 +20,9 @@ import type {
   OwnershipBasis,
   ParcelDetail,
   ParcelPermit,
+  ParcelPermits,
+  PointsResult,
+  SearchItem,
   SourceKind,
 } from "@oracle-la/api/contract";
 import { z } from "zod";
@@ -28,10 +31,16 @@ import {
   OWNERSHIP_BASES,
   ownershipStated,
 } from "./ownership.ts";
-import { unavailableIn } from "./http-data.ts";
+import {
+  CALL_TIMEOUT_MS,
+  MAX_ATTEMPTS,
+  RETRY_BASE_MS,
+  unavailableIn,
+} from "./http-data.ts";
 import { contractorWindow } from "./contractor-coverage.ts";
 import { basisWord, type DataQueries, type SourceList } from "./permit-api.ts";
 import {
+  haversineMiles,
   resolutionNote,
   roundCenter,
   type PlaceCandidate,
@@ -59,6 +68,15 @@ export const MAX_OPEN_DAYS: typeof API_MAX_OPEN_DAYS = 36_525;
  * no roofing input and filters nothing itself; its reasoning says "roofing work only".
  */
 export const LONG_OPEN_SCOPE = "roofing work only";
+
+/**
+ * How long long_open_permits waits for the contractor rows of its within-window list: one data call's worst case
+ * through the HTTP adapter (two 5 s attempts and a jitter wait of at most 500 ms), whatever the number of listed
+ * parcels. The reads go through the adapter's bulkhead (at most 2 in flight); a read not finished by then is stated
+ * as not read, so the reads add at most this long to an answer and leave the rest of its time budget to the model.
+ */
+export const CONTRACTOR_READS_MS =
+  CALL_TIMEOUT_MS * MAX_ATTEMPTS + RETRY_BASE_MS * 2;
 
 const lat = z
   .number()
@@ -121,6 +139,12 @@ export const toolSchemas = {
       .describe(
         'With ownership_filter on: "recording" (no recorded document in 10 years), "base_year" (no reassessment in 10 years) or "both" (the default)',
       ),
+    long_open_permit: z
+      .boolean()
+      .default(false)
+      .describe(
+        `Keep only parcels with a long-open roofing permit (an issued LADBS roofing-work permit open at least ${DEFAULT_MIN_OPEN_DAYS.toLocaleString("en-US")} days). The count is then of parcels, not permits. Off by default; on when the question asks which or how many of the aged-roof parcels have long-open permits`,
+      ),
   }),
   long_open_permits: z.strictObject({
     lat,
@@ -153,7 +177,7 @@ export const toolSchemas = {
       .boolean()
       .default(false)
       .describe(
-        "Also list the longest-open permits issued within the contractor window, whose contractors the data can name: a second labeled list in the same result, with its day limit and dates stated. Off by default; on when the question asks for long-open permits and their contractors",
+        "Also list the longest-open permits issued within the contractor window, each with its contractor rows: a second labeled list in the same result, with its day limit and dates stated. Off by default; on when the question asks for long-open permits and their contractors",
       ),
   }),
   parcel_detail: z.strictObject({ parcel_id: parcelId }),
@@ -173,20 +197,26 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   search_aged_roofs:
     "Parcels within a radius of a center whose roof age is older than a threshold in years. Roof age counts from " +
     "the effective roof year: the assessor year-built proxy (roof_age_basis PROXY) or a finaled roofing permit " +
-    "(PERMIT). Returns the count, the rule text and up to `limit` parcels nearest first, each with its source citation. " +
+    "(PERMIT). Returns the count, the rule text and up to `limit` parcels nearest first, each with its source citation " +
+    "(for a PERMIT roof year also the permit source). " +
     "Optional ownership filter, off by default: ownership_filter keeps parcels whose owner is unchanged for 10 years " +
     'or more by a County-roll proxy, on ownership_basis "recording", "base_year" or "both" (the default); the result ' +
-    "states the basis, its weakness and that the bases are proxies from the County roll, not sales records.",
+    "states the basis, its weakness and that the bases are proxies from the County roll, not sales records. Optional " +
+    "long_open_permit, off by default: keeps only the parcels with a long-open roofing permit (the CRM map's rule); " +
+    "the result's long_open_permit states the parcel count, of how many aged-roof parcels, and that it counts parcels, not permits.",
   long_open_permits:
     "City of Los Angeles (LADBS) roofing-work permits, issued and still open, within a radius: open at least " +
     "min_open_days days (optionally at most max_open_days), longest open first, each counted once at its nearest " +
     "parcel. Durations are in days only. Each item has its permit number, parcel ID, status, open days, the " +
     "roofing_work and roof_coating_only flags and its parcel's roof year; the permit source is cited once. With " +
     "with_contractor_window, a second list follows: the longest-open permits issued within the contractor window " +
-    "(at most the stated number of days open), each list labeled.",
+    "(at most the stated number of days open), each list labeled; each of its items carries its permit's contractor " +
+    "rows (business name, license number, license class, canonical name, name variant count, owner-builder) and " +
+    "contractor_status: named, owner-builder, none stated or not read (with why).",
   parcel_detail:
     "One parcel's property facts (address, year built, effective roof year and basis, use type, coordinates, " +
-    "whether permit data covers it) and its provenance: source name and collection time (the source's URLs, terms " +
+    "whether permit data covers it) and its provenance: source name and collection time (for a PERMIT roof year also " +
+    "the permit source; the source's URLs, terms " +
     "and license are in run_summary; page files and hashes stay in the data API, explorer.sources pages and " +
     "explorer.records). No owner fields exist.",
   parcel_permits:
@@ -221,6 +251,14 @@ export type ToolFact =
       no_permit_data: number;
       /** The ownership basis the search applied; null: no ownership filter. */
       ownership_basis: OwnershipBasis | null;
+      /** With long_open_permit: the parcels with a long-open roofing permit, of how many; null: no such filter. */
+      long_open: {
+        count: number;
+        of: number;
+        min_open_days: number;
+        /** False when only the nearest parcels were checked (the count is a lower bound). */
+        complete: boolean;
+      } | null;
     }
   | {
       tool: "long_open_permits";
@@ -360,6 +398,131 @@ const basis = (label: unknown) => ({
   roof_age_basis_label: str(label),
 });
 
+const num = (n: number) => n.toLocaleString("en-US");
+
+/** One listed row of search_aged_roofs: a search item, or with long_open_permit the same fields from the detail. */
+type Row = Pick<SearchItem, "parcel_id"> &
+  Partial<Omit<SearchItem, "parcel_id">>;
+
+/** A row whose roof year comes from a permit: its citation names the permit source too. */
+const fromPermit = (r: Row): boolean =>
+  typeof r.roof_year_permit_number === "string" ||
+  basisWord(r.roof_age_basis) === "PERMIT";
+
+/** A number, or a numeric string (DuckDB may serve a year as one), else null. */
+const numberOrNull = (v: unknown): number | null => {
+  const n =
+    typeof v === "number"
+      ? v
+      : typeof v === "string" && v.trim() !== ""
+        ? Number(v)
+        : NaN;
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * A long-open parcel's row from its parcels.detail (v_property), with the search item's fields as the search
+ * computes them: roof_age_years = roll year − effective roof year, distance_miles the haversine distance from the
+ * center rounded to 3 decimals. A detail not read gives the parcel ID only.
+ */
+function rowFromDetail(
+  parcel_id: string,
+  d: Read<ParcelDetail>,
+  center: { lat: number; lon: number },
+): Row {
+  if (!d.ok) return { parcel_id };
+  const p = d.value.property;
+  const rollYear = numberOrNull(p.roll_year);
+  const roofYear = numberOrNull(p.effective_roof_year);
+  const lat = numberOrNull(p.latitude);
+  const lon = numberOrNull(p.longitude);
+  return {
+    parcel_id,
+    address: str(p.address),
+    year_built: numberOrNull(p.year_built),
+    ...(roofYear !== null ? { effective_roof_year: roofYear } : {}),
+    ...(roofYear !== null && rollYear !== null
+      ? { roof_age_years: rollYear - roofYear }
+      : {}),
+    roof_age_basis: p.roof_age_basis as SearchItem["roof_age_basis"],
+    roof_year_permit_number: str(p.roof_year_permit_number),
+    permit_data_available: p.permit_data_available === true,
+    land_base_year: numberOrNull(p.land_base_year),
+    ...(lat !== null && lon !== null
+      ? {
+          distance_miles:
+            Math.round(haversineMiles(center, { lat, lon }) * 1000) / 1000,
+        }
+      : {}),
+  };
+}
+
+/** The long-open filter of search_aged_roofs as its result states it. */
+export interface LongOpenParcelsStated {
+  /** What the count counts. */
+  unit: "parcels";
+  /** Parcels with a long-open roofing permit (among those checked). */
+  count: number;
+  /** The parcels that match the roof-age rule (and the ownership filter, when on): the search's count. */
+  of: number;
+  /** How many of them were checked: all, or the nearest MAX_POINTS when the data API's map points are truncated. */
+  checked: number;
+  complete: boolean;
+  min_open_days: number;
+  text: string;
+}
+
+/**
+ * The parcels parcels.points marks long-open (long_open_permit 1), nearest first, and the count as stated: of
+ * parcels, not permits. The points are the search's parcels (the same filter); a different count, a missing column
+ * or another window is an error, never shown as filtered. When the points are truncated (more parcels than the
+ * data API draws) only the nearest are checked: the count is a lower bound, stated as such.
+ */
+function longOpenParcels(
+  p: PointsResult,
+  aged: number,
+  ownership: boolean,
+): { ids: string[]; count: number; stated: LongOpenParcelsStated } {
+  const marks = p.long_open_permit as unknown;
+  if (!Array.isArray(marks) || marks.length !== p.id.length)
+    throw new Error(
+      "the data API's parcels.points did not mark the long-open parcels",
+    );
+  if (
+    p.long_open?.min_open_days !== DEFAULT_MIN_OPEN_DAYS ||
+    p.long_open.max_open_days !== null
+  )
+    throw new Error(
+      `the data API's parcels.points applied a long-open window other than at least ${num(DEFAULT_MIN_OPEN_DAYS)} days`,
+    );
+  if (p.count !== aged)
+    throw new Error(
+      `the data API's parcels.points counted ${p.count} parcels and its search ${aged}`,
+    );
+  const ids = p.id.filter((_, i) => marks[i] === 1);
+  const complete = !p.truncated;
+  const rule = `an issued LADBS roofing-work permit still open at least ${num(DEFAULT_MIN_OPEN_DAYS)} days`;
+  const unit =
+    "This counts parcels, not permits: a parcel with several long-open permits counts once, and a building-level (condominium) permit marks every unit it links.";
+  const matching = `parcels that match the roof-age rule${ownership ? " and the ownership filter" : ""}`;
+  const text = complete
+    ? `${num(ids.length)} of the ${num(aged)} ${matching} have a long-open roofing permit (${rule}). ${unit}`
+    : `At least ${num(ids.length)} of the ${num(aged)} ${matching} have a long-open roofing permit (${rule}): only the nearest ${num(p.id.length)} were checked (the data API marks at most ${num(p.max_points)} parcels), so the count is a lower bound; a smaller radius gives a full count. ${unit}`;
+  return {
+    ids,
+    count: ids.length,
+    stated: {
+      unit: "parcels",
+      count: ids.length,
+      of: aged,
+      checked: p.id.length,
+      complete,
+      min_open_days: DEFAULT_MIN_OPEN_DAYS,
+      text,
+    },
+  };
+}
+
 /** Allowlisted permit fields shared by long_open_permits and parcel_permits (the contract's PermitFields). */
 const PERMIT_FIELDS: Record<string, string> = {
   ...fields("permit_number", "permit_status_class"),
@@ -476,39 +639,52 @@ const run = {
     const ownership: OwnershipBasis | null = input.ownership_filter
       ? (input.ownership_basis ?? DEFAULT_OWNERSHIP_BASIS)
       : null;
-    const res = await q.parcels.search({
+    const filter = {
       lat: input.lat,
       lon: input.lon,
       radius_miles: input.radius_miles,
       threshold_years: input.threshold_years,
       ...(ownership ? { ownership_basis: ownership } : {}),
-      offset: 0,
-      limit: input.limit,
-    });
+    };
+    // With long_open_permit: the search for its count and rule only (one item), and parcels.points with the same
+    // filter for the parcels marked long-open, nearest first (the CRM map's highlight and legend). Two calls, in
+    // flight together.
+    const [res, points] = await Promise.all([
+      q.parcels.search({
+        ...filter,
+        offset: 0,
+        limit: input.long_open_permit ? 1 : input.limit,
+      }),
+      input.long_open_permit
+        ? q.parcels.points({ ...filter, min_open_days: DEFAULT_MIN_OPEN_DAYS })
+        : null,
+    ]);
     // The count and items are only as filtered as the API says it filtered them.
-    if ((res.ownership?.basis ?? null) !== ownership)
-      throw new Error(
-        `the data API applied ownership basis ${res.ownership?.basis ?? "none"}, not ${ownership ?? "none"}`,
+    for (const [route, applied] of [
+      ["", res.ownership],
+      ...(points ? [["parcels.points ", points.ownership] as const] : []),
+    ] as const)
+      if ((applied?.basis ?? null) !== ownership)
+        throw new Error(
+          `the data API ${route}applied ownership basis ${applied?.basis ?? "none"}, not ${ownership ?? "none"}`,
+        );
+    const longOpen = points
+      ? longOpenParcels(points, res.count, ownership !== null)
+      : null;
+    // The roof-age facts come from the search item itself (with long_open_permit, from the parcel's detail, read
+    // for its citation anyway); the detail call is for the provenance citation. explorer.sources is read only when an
+    // item's roof year comes from a permit (its citation's source). A read that fails is stated as a gap with the
+    // reason (e.g. "data API busy: parcels.detail not read"), never dropped.
+    const readDetail = (parcel_id: string) =>
+      q.parcels.detail({ parcel_id }).then(
+        (d): Read<ParcelDetail> => ({ ok: true, value: d }),
+        (err: unknown): Read<ParcelDetail> => ({
+          ok: false,
+          why: notRead("parcels.detail", err),
+        }),
       );
-    // The roof-age facts come from the search item itself; the detail call is only for the provenance citation.
-    // explorer.sources is read only when an item's roof year comes from a permit (its citation's source). A read
-    // that fails is stated as a gap with the reason (e.g. "data API busy: parcels.detail not read"), never dropped.
-    const roofYearPermits = strings(
-      ...res.items.map((it) => it.roof_year_permit_number),
-    );
-    const [details, src] = await Promise.all([
-      Promise.all(
-        res.items.map((it) =>
-          q.parcels.detail({ parcel_id: it.parcel_id }).then(
-            (d): Read<ParcelDetail> => ({ ok: true, value: d }),
-            (err: unknown): Read<ParcelDetail> => ({
-              ok: false,
-              why: notRead("parcels.detail", err),
-            }),
-          ),
-        ),
-      ),
-      roofYearPermits.length
+    const readSources = (rows: readonly Row[]) =>
+      rows.some(fromPermit)
         ? q.explorer.sources().then(
             (s): Read<SourceList> => ({ ok: true, value: s }),
             (err: unknown): Read<SourceList> => ({
@@ -516,8 +692,22 @@ const run = {
               why: notRead("explorer.sources", err),
             }),
           )
-        : null,
-    ]);
+        : null;
+    let rows: Row[];
+    let details: Array<Read<ParcelDetail>>;
+    let src: Read<SourceList> | null;
+    if (longOpen) {
+      const listed = longOpen.ids.slice(0, input.limit);
+      details = await Promise.all(listed.map(readDetail));
+      rows = listed.map((id, i) => rowFromDetail(id, details[i]!, input));
+      src = await readSources(rows);
+    } else {
+      rows = res.items;
+      [details, src] = await Promise.all([
+        Promise.all(rows.map((it) => readDetail(it.parcel_id))),
+        readSources(rows),
+      ]);
+    }
     const permitRef = src?.ok ? sourceRef(src.value, "permit") : null;
     const records: Citation[] = [];
     const gaps: string[] = [];
@@ -525,15 +715,18 @@ const run = {
       gaps.push(
         `${src.why}; the permits that set roof years are listed without a citation.`,
       );
-    else if (roofYearPermits.length && !permitRef)
-      gaps.push(noSourceGap("permit"));
+    else if (src && !permitRef) gaps.push(noSourceGap("permit"));
     let proxy = 0;
     let permit = 0;
-    const items = res.items.map((it, i) => {
-      const b = basis(it.roof_age_basis);
-      if (b.roof_age_basis === "PROXY") proxy++;
-      if (b.roof_age_basis === "PERMIT") permit++;
+    let read = 0;
+    const items = rows.map((it, i) => {
       const detail = details[i];
+      // With long_open_permit a parcel whose detail was not read has no roof-age facts: not counted as unknown.
+      const known = !longOpen || detail?.ok === true;
+      const b = basis(it.roof_age_basis);
+      if (known) read++;
+      if (known && b.roof_age_basis === "PROXY") proxy++;
+      if (known && b.roof_age_basis === "PERMIT") permit++;
       const citation = detail?.ok
         ? parcelCitation(it.parcel_id, detail.value.provenance)
         : null;
@@ -548,9 +741,18 @@ const run = {
         );
       const roofYear = roofYearCitation(permitRef, it.roof_year_permit_number);
       if (roofYear) records.push(roofYear);
+      // A roof year set by a permit (basis PERMIT) is cited under the permit source too, not only the parcel's.
+      const roofYearSource =
+        b.roof_age_basis === "PERMIT" && permitRef
+          ? {
+              source_name: permitRef.source_name,
+              retrieved: permitRef.retrieved,
+            }
+          : null;
+      const row = it as unknown as Record<string, unknown>;
       return {
         ...project(
-          it as unknown as Record<string, unknown>,
+          row,
           fields(
             "parcel_id",
             "address",
@@ -561,7 +763,7 @@ const run = {
         ),
         ...b,
         ...project(
-          it as unknown as Record<string, unknown>,
+          row,
           fields(
             "roof_year_permit_number",
             "permit_data_available",
@@ -569,27 +771,30 @@ const run = {
           ),
         ),
         // The roll's land base year, which the "base_year" and "both" bases read, only with the filter on.
-        ...(ownership
-          ? project(
-              it as unknown as Record<string, unknown>,
-              fields("land_base_year"),
-            )
-          : {}),
-        citation: citation
-          ? {
-              source_name: citation.source_name,
-              collected_at: citation.collected_at,
-            }
-          : null,
+        ...(ownership ? project(row, fields("land_base_year")) : {}),
+        citation:
+          citation || roofYearSource
+            ? {
+                ...(citation
+                  ? {
+                      source_name: citation.source_name,
+                      collected_at: citation.collected_at,
+                    }
+                  : {}),
+                ...(roofYearSource ? { roof_year_source: roofYearSource } : {}),
+              }
+            : null,
         // Why the citation is missing when its read failed (the item is still listed).
         ...(detail && !detail.ok ? { citation_not_read: detail.why } : {}),
       };
     });
-    const unknown = items.length - proxy - permit;
-    const truncated = res.count > items.length;
+    const unknown = read - proxy - permit;
+    const count = longOpen ? longOpen.count : res.count;
+    const truncated = count > items.length;
+    if (longOpen && !longOpen.stated.complete) gaps.push(longOpen.stated.text);
     if (truncated)
       gaps.push(
-        `Results truncated: search_aged_roofs returned ${items.length} of ${res.count} matching parcels (nearest first).`,
+        `Results truncated: search_aged_roofs returned ${items.length} of ${count} matching parcels (nearest first).`,
       );
     if (proxy > 0)
       gaps.push(
@@ -600,22 +805,24 @@ const run = {
         `${unknown} of ${items.length} listed parcels have no recognized roof-age basis (neither PROXY nor PERMIT).`,
       );
     const content = {
-      count: res.count,
+      count,
       returned: items.length,
       rule: res.rule.text,
       basis:
         proxy === items.length
           ? "PROXY (assessor year built, not a roof installation date)"
-          : `per item: ${proxy} PROXY, ${permit} PERMIT${unknown ? `, ${unknown} unknown` : ""}`,
+          : `per item: ${proxy} PROXY, ${permit} PERMIT${unknown ? `, ${unknown} unknown` : ""}${read < items.length ? `, ${items.length - read} not read` : ""}`,
       // The ownership filter applied: its basis, text, weakness and the proxy note (ownership.ts).
       ...(ownership ? { ownership: ownershipStated(ownership) } : {}),
+      // The long-open filter applied: the parcel count, of how many, and its unit (parcels, not permits).
+      ...(longOpen ? { long_open_permit: longOpen.stated } : {}),
       items,
       truncated,
     };
     return {
       content,
       records: dedupeCitations(records),
-      ids: res.items.flatMap((it) =>
+      ids: rows.flatMap((it) =>
         strings(it.parcel_id, it.roof_year_permit_number),
       ),
       gaps,
@@ -627,13 +834,20 @@ const run = {
         threshold_years: input.threshold_years,
         built_before_year: res.rule.built_before_year,
         roll_year: res.rule.roll_year,
-        count: res.count,
+        count,
         returned: items.length,
         proxy_count: proxy,
-        no_permit_data: res.items.filter(
-          (it) => it.permit_data_available === false,
-        ).length,
+        no_permit_data: rows.filter((it) => it.permit_data_available === false)
+          .length,
         ownership_basis: ownership,
+        long_open: longOpen
+          ? {
+              count: longOpen.count,
+              of: res.count,
+              min_open_days: DEFAULT_MIN_OPEN_DAYS,
+              complete: longOpen.stated.complete,
+            }
+          : null,
       },
     };
   },
@@ -707,15 +921,29 @@ const run = {
     let second: ReturnType<typeof longOpenList> | null = null;
     let withinContent: Record<string, unknown>;
     let withinFact: WithinWindowFact;
+    let contractorRecords: Citation[] = [];
+    let contractorGaps: string[] = [];
     if (within.status === "read") {
       second = longOpenList(within.res, ref, "the within-window list");
+      // Each within-window item with its permit's contractor rows, read here (approvals §3e.94 item 1).
+      const c = await withContractors(
+        q,
+        within.res.items,
+        second.items,
+        sourceRef(src, "contractor"),
+        within.window.last,
+      );
+      contractorRecords = c.records;
+      contractorGaps = c.gaps;
       withinContent = {
         label: `Longest-open permits issued within the contractor window (open at least ${days(input.min_open_days)} and at most ${days(within.maxOpenDays)})`,
         count: within.res.count,
         returned: second.items.length,
         max_open_days: within.maxOpenDays,
         rule: within.res.rule.text,
-        items: second.items,
+        contractor_source: c.source,
+        contractors: c.summaryText,
+        items: c.items,
         truncated: second.truncated,
       };
       withinFact = {
@@ -723,6 +951,7 @@ const run = {
         max_open_days: within.maxOpenDays,
         count: within.res.count,
         returned: second.items.length,
+        contractors: c.summary,
       };
     } else {
       withinContent = {
@@ -747,11 +976,16 @@ const run = {
         },
         within_contractor_window: withinContent,
       },
-      records: dedupeCitations([...first.records, ...(second?.records ?? [])]),
+      records: dedupeCitations([
+        ...first.records,
+        ...(second?.records ?? []),
+        ...contractorRecords,
+      ]),
       ids: [...first.ids, ...(second?.ids ?? [])],
       gaps: [
         ...first.gaps,
         ...(second?.gaps ?? []),
+        ...contractorGaps,
         ...(withinFact.status === "not_listed" ? [withinFact.gap] : []),
       ],
       fact: { ...fact(res, first.items), within_window: withinFact },
@@ -764,22 +998,34 @@ const run = {
   ): Promise<Produced> {
     const d = await q.parcels.detail({ parcel_id: input.parcel_id });
     const citation = parcelCitation(input.parcel_id, d.provenance);
-    // The permit that set the roof year is cited under the permit source (explorer.sources, read only then).
+    // The permit that set the roof year is cited under the permit source (explorer.sources, read only then), and a
+    // PERMIT roof year names that source next to the parcel's provenance.
     const roofYearPermit = str(d.property.roof_year_permit_number);
-    const permitRef = roofYearPermit
+    const b = basis(d.property.roof_age_basis);
+    const fromPermitSource =
+      roofYearPermit !== null || b.roof_age_basis === "PERMIT";
+    const permitRef = fromPermitSource
       ? sourceRef(await q.explorer.sources(), "permit")
       : null;
     return {
       content: {
         property: {
           ...project(d.property, PROPERTY_FIELDS),
-          ...basis(d.property.roof_age_basis),
+          ...b,
         },
         provenance: project(d.provenance, PROVENANCE_FIELDS),
+        ...(b.roof_age_basis === "PERMIT" && permitRef
+          ? {
+              roof_year_source: {
+                source_name: permitRef.source_name,
+                retrieved: permitRef.retrieved,
+              },
+            }
+          : {}),
       },
       records: present([citation, roofYearCitation(permitRef, roofYearPermit)]),
       ids: [input.parcel_id, ...strings(d.property.roof_year_permit_number)],
-      gaps: roofYearPermit && !permitRef ? [noSourceGap("permit")] : [],
+      gaps: fromPermitSource && !permitRef ? [noSourceGap("permit")] : [],
       fact: { tool: "parcel_detail", parcel_id: input.parcel_id },
     };
   },
@@ -988,8 +1234,159 @@ function longOpenList(
 
 /** The within-window list of long_open_permits, as the agent's reasoning states it. */
 export type WithinWindowFact =
-  | { status: "read"; max_open_days: number; count: number; returned: number }
+  | {
+      status: "read";
+      max_open_days: number;
+      count: number;
+      returned: number;
+      /** How many listed permits got each contractor status. */
+      contractors: ContractorSummary;
+    }
   | { status: "not_listed"; gap: string };
+
+/**
+ * A within-window item's contractor: named (at least one contractor row that is not an owner-builder), owner-builder
+ * (every row is one), none stated (no contractor row; "after the contractor window" when the permit was issued after
+ * the rows end) or not read (the read failed, timed out or did not list the permit; why is stated).
+ */
+export type ContractorStatus =
+  | "named"
+  | "owner-builder"
+  | "none stated"
+  | "after the contractor window"
+  | "not read";
+export type ContractorSummary = Record<ContractorStatus, number>;
+
+/** The contractor fields a within-window item carries (the identity of each row: its license). */
+const ITEM_CONTRACTOR_FIELDS = fields(
+  "contractors_business_name",
+  "license_identifier",
+  "license_class",
+  "license_class_note",
+  "is_owner_builder",
+  "canonical_business_name",
+  "name_variant_count",
+);
+
+/**
+ * The within-window items with their permits' contractor rows: permits.forParcel once per listed parcel, all
+ * started at once through the data layer (the HTTP adapter's bulkhead keeps at most 2 in flight), waited for at
+ * most CONTRACTOR_READS_MS. Every item states its contractor_status; a read that failed, did not finish in time or
+ * did not list the permit is "not read" with why (and a gap), never left out. Contractor rows are cited under the
+ * contractor source, once per permit.
+ */
+async function withContractors(
+  q: DataQueries,
+  res: readonly LongOpenItem[],
+  items: ReadonlyArray<Record<string, unknown>>,
+  contractorRef: SourceRef | null,
+  windowLast: string | null,
+): Promise<{
+  items: Array<Record<string, unknown>>;
+  records: Citation[];
+  gaps: string[];
+  source: SourceRef | null;
+  summary: ContractorSummary;
+  summaryText: string;
+}> {
+  const parcels = [...new Set(res.map((p) => p.parcel_id))];
+  const reads = new Map<string, Read<ParcelPermits>>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const all = Promise.all(
+    parcels.map((parcel_id) =>
+      q.permits.forParcel({ parcel_id }).then(
+        (v) => void reads.set(parcel_id, { ok: true, value: v }),
+        (err: unknown) =>
+          void reads.set(parcel_id, {
+            ok: false,
+            why: notRead("permits.forParcel", err),
+          }),
+      ),
+    ),
+  );
+  await Promise.race([
+    all,
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CONTRACTOR_READS_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+  // What was read by now; a read still running is not read (its late result is not used).
+  const done = new Map(reads);
+  const summary: ContractorSummary = {
+    named: 0,
+    "owner-builder": 0,
+    "none stated": 0,
+    "after the contractor window": 0,
+    "not read": 0,
+  };
+  const records: Citation[] = [];
+  const gaps: string[] = [];
+  const out = res.map((p, i) => {
+    const item = items[i] ?? {};
+    const r = done.get(p.parcel_id) ?? {
+      ok: false as const,
+      why: `permits.forParcel not read within ${CONTRACTOR_READS_MS / 1000} s`,
+    };
+    const permit = r.ok
+      ? r.value.permits.find((x) => x.permit_number === p.permit_number)
+      : undefined;
+    const why = !r.ok
+      ? r.why
+      : !permit
+        ? `permit ${p.permit_number} is not among parcel ${p.parcel_id}'s permits (permits.forParcel)`
+        : null;
+    if (why !== null) {
+      summary["not read"]++;
+      gaps.push(
+        `The contractor of permit ${p.permit_number} (parcel ${p.parcel_id}) was not read (${why}); it is listed without its contractor.`,
+      );
+      return {
+        ...item,
+        contractor_status: "not read" satisfies ContractorStatus,
+        contractor_not_read: why,
+        contractors: null,
+      };
+    }
+    const rows = Array.isArray(permit!.contractors) ? permit!.contractors : [];
+    const status: ContractorStatus = rows.length
+      ? rows.every((c) => c.is_owner_builder === true)
+        ? "owner-builder"
+        : "named"
+      : windowLast !== null &&
+          typeof p.permit_issue_date === "string" &&
+          p.permit_issue_date > windowLast
+        ? "after the contractor window"
+        : "none stated";
+    summary[status]++;
+    if (rows.length && contractorRef)
+      records.push(cite("contractor", contractorRef, p.permit_number));
+    return {
+      ...item,
+      contractor_status: status,
+      contractors: rows.map((c) =>
+        project(
+          c as unknown as Record<string, unknown>,
+          ITEM_CONTRACTOR_FIELDS,
+        ),
+      ),
+    };
+  });
+  if (!contractorRef && summary.named + summary["owner-builder"] > 0)
+    gaps.push(noSourceGap("contractor"));
+  const summaryText = (Object.keys(summary) as ContractorStatus[])
+    .filter((k) => summary[k] > 0)
+    .map((k) => `${summary[k]} ${k}`)
+    .join(", ");
+  return {
+    items: out,
+    records,
+    gaps,
+    source: contractorRef,
+    summary,
+    summaryText: `Contractor of each listed permit: ${summaryText || "no permit listed"}.`,
+  };
+}
 
 const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 /** Whole days from one YYYY-MM-DD date to another (UTC); null when either is not such a date. */

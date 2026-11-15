@@ -19,16 +19,21 @@
     "id": "a2-readme-110-follow-up",
     "case": "a",
     "group": "a-readme-van-nuys",
-    "note": "Pipeline README line 110, asked in the same conversation: \"that area\" is a1's place and radius.",
+    "note": "Pipeline README line 110, asked in the same conversation: \"that area\" is a1's place and radius. Approvals §3e.94 item 1: the within-window items of long_open_permits (with_contractor_window) carry their contractors, so parcel_permits is no longer required (still allowed), and the text must name the contractor of every within-window permit it names (check contractors).",
     "question": "Which properties near that area have open roofing permits that have been open for many years, and who is the listed contractor?",
     "expected": {
-      "tools": ["long_open_permits", "parcel_permits"],
+      "tools": ["long_open_permits"],
       "tool_inputs": {
-        "long_open_permits": { "radius_miles": 5, "min_open_days": 1826 }
+        "long_open_permits": {
+          "radius_miles": 5,
+          "min_open_days": 1826,
+          "with_contractor_window": true
+        }
       },
       "gaps": [],
       "refused": false,
       "no_license_status": true,
+      "contractors_named": true,
       "place": { "outcome": "reused_previous_area" }
     }
   },
@@ -240,6 +245,26 @@
       "gaps": ["bbb", "bbb_no_source"],
       "refused": false,
       "place": { "outcome": "none" }
+    }
+  },
+  {
+    "id": "p-long-open-parcels-van-nuys",
+    "case": "p",
+    "group": "p-long-open-parcels",
+    "note": "Approvals §3e.94 item 2: how many aged-roof parcels have a long-open roofing permit, answered with search_aged_roofs' long_open_permit (the CRM legend's rule, parcels.points). The count is of parcels, not permits: on the served run 286 of the 4,823 aged-roof parcels within one mile of the Van Nuys center (34.20155, -118.45361); the counts check compares it with the direct parcels.points marks.",
+    "question": "Within one mile of Van Nuys, how many properties with roofs older than 15 years have a roofing permit that has been open for more than five years?",
+    "expected": {
+      "tools": ["resolve_place", "search_aged_roofs"],
+      "tool_inputs": {
+        "search_aged_roofs": {
+          "radius_miles": 1,
+          "threshold_years": 15,
+          "long_open_permit": true
+        }
+      },
+      "gaps": [],
+      "refused": false,
+      "place": { "outcome": "resolved", "name": "Van Nuys" }
     }
   }
 ]

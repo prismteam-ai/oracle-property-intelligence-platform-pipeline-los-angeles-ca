@@ -779,6 +779,60 @@ describe("MCP server over the SDK's in-memory transport", () => {
       await server.close();
     }
   });
+
+  test("approvals §3e.94: the MCP server shares the tool layer: long_open_permit and with_contractor_window are in its schemas, and search_aged_roofs' long-open filter answers like parcels.points' marks", async () => {
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer(permitData.queries);
+    await server.connect(serverSide);
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientSide);
+    try {
+      const { tools } = await client.listTools();
+      const props = (name: string) =>
+        Object.keys(
+          tools.find((t) => t.name === name)!.inputSchema.properties ?? {},
+        );
+      expect(props("search_aged_roofs")).toContain("long_open_permit");
+      expect(props("long_open_permits")).toContain("with_contractor_window");
+      const filter = {
+        lat: P.lat,
+        lon: P.lon,
+        radius_miles: 5,
+        threshold_years: 15,
+      };
+      const res = await client.callTool({
+        name: "search_aged_roofs",
+        arguments: { ...filter, long_open_permit: true },
+      });
+      expect(res.isError).toBeFalsy();
+      const content = res.content as Array<{ type: string; text: string }>;
+      const body = JSON.parse(content[0]!.text) as {
+        result: {
+          count: number;
+          long_open_permit: { unit: string; count: number; of: number };
+          items: Array<{ parcel_id: string }>;
+        };
+      };
+      const points = await permitData.caller.parcels.points(filter);
+      const marked = points.id.filter(
+        (_, i) => points.long_open_permit[i] === 1,
+      );
+      expect(marked.length).toBeGreaterThan(0);
+      expect(marked.length).toBeLessThan(points.count);
+      expect(body.result.long_open_permit).toMatchObject({
+        unit: "parcels",
+        count: marked.length,
+        of: points.count,
+      });
+      expect(body.result.count).toBe(marked.length);
+      expect(body.result.items.map((i) => i.parcel_id)).toEqual(
+        marked.slice(0, 10),
+      );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });
 
 describe("runAgent end to end on the fixture (scripted model)", () => {

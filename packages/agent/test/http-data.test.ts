@@ -103,6 +103,16 @@ describe("parity and the request", () => {
     expect(await q.places.resolve({ name: "Van Nuys" })).toEqual(
       await direct.places.resolve({ name: "Van Nuys" }),
     );
+    const points = {
+      lat: 34.2,
+      lon: -118.45,
+      radius_miles: 1,
+      threshold_years: 15,
+      min_open_days: 1826,
+    };
+    expect(await q.parcels.points(points)).toEqual(
+      await direct.parcels.points(points),
+    );
     expect(api.requests.map((r) => r.route)).toEqual([
       "parcels.search",
       "parcels.detail",
@@ -111,6 +121,7 @@ describe("parity and the request", () => {
       "permits.longOpen",
       "permits.forParcel",
       "places.resolve",
+      "parcels.points",
     ]);
     // One HTTP request per call (no batching), each with the caller's own token.
     for (const r of api.requests)

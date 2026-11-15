@@ -6,13 +6,14 @@
  * structurally (checked at compile time in apps/agent-mcp/test/local.fixture.test.ts). Every response type is the
  * contract's own, imported as a type, so drift in the API fails the typecheck here. The members are function-typed
  * properties (not methods) so their inputs are checked contravariantly: an input the API would not accept fails.
- * The contract exports no input types, so the two inputs below are the lane's, copied from the routers' zod inputs.
+ * The contract exports no input types, so the three inputs below are the lane's, copied from the routers' zod inputs.
  */
 import type {
   LongOpenResult,
   OwnershipBasis,
   ParcelDetail,
   ParcelPermits,
+  PointsResult,
   RoofAgeBasis,
   RunSummary,
   SearchResult,
@@ -30,6 +31,22 @@ export interface SearchInput {
   ownership_basis?: OwnershipBasis;
   offset?: number;
   limit?: number;
+}
+
+/**
+ * Input of parcels.points (apps/api/src/routers/parcels.ts: the search filter and the open-duration window of
+ * permits.longOpen, the API applying its own defaults and bounds). The tools read its long_open_permit column only:
+ * the parcels of the search filter (nearest first, at most MAX_POINTS) marked 1 when one of their permits is a
+ * long-open roofing permit under the window, the rule of the CRM map's highlight and legend.
+ */
+export interface PointsInput {
+  lat: number;
+  lon: number;
+  radius_miles?: number;
+  threshold_years?: number;
+  ownership_basis?: OwnershipBasis;
+  min_open_days?: number;
+  max_open_days?: number;
 }
 
 /**
@@ -60,6 +77,7 @@ export interface ApiQueries {
   parcels: {
     search: (input: SearchInput) => Promise<SearchResult>;
     detail: (input: { parcel_id: string }) => Promise<ParcelDetail>;
+    points: (input: PointsInput) => Promise<PointsResult>;
   };
   explorer: {
     runSummary: () => Promise<RunSummary>;

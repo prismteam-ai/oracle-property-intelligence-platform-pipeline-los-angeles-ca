@@ -23,7 +23,9 @@ export const DEFAULT_PROMPTS_FILE = fileURLToPath(
  * The cases of design brief §15.1 a–i, then the scope and abuse cases of approvals §3e.75 d: j off-topic, k a
  * writing task, l an instruction to ignore the rules (each refused by the no-tool-call rule), m who is the owner
  * (refused by the people guard), n how long without an ownership change (answered through the ownership filter);
- * then o, a coverage question of approvals §3e.78.1 (answered from run_summary: BBB ratings are not available, and why).
+ * then o, a coverage question of approvals §3e.78.1 (answered from run_summary: BBB ratings are not available, and why);
+ * then p, how many aged-roof parcels have a long-open roofing permit (approvals §3e.94 item 2: search_aged_roofs with
+ * long_open_permit, a count of parcels).
  */
 export const PROMPT_CASES = [
   "a",
@@ -41,6 +43,7 @@ export const PROMPT_CASES = [
   "m",
   "n",
   "o",
+  "p",
 ] as const;
 
 /**
@@ -222,6 +225,12 @@ export const promptSchema = z.strictObject({
      * return no expiration date and no license is checked against the state license board.
      */
     no_license_status: z.literal(true).optional(),
+    /**
+     * True (approvals §3e.94 item 1): a long_open_permits call with with_contractor_window listed the within-window
+     * permits, the text names at least one of them, and for every one it names, the text names its contractor as the
+     * tool returned it (check "contractors").
+     */
+    contractors_named: z.literal(true).optional(),
     place: placeSchema,
   }),
 });
@@ -261,6 +270,15 @@ export const promptsFileSchema = z
           code: "custom",
           path: [i, "expected", "ownership"],
           message: "ownership needs search_aged_roofs in tools",
+        });
+      if (
+        p.expected.contractors_named &&
+        !p.expected.tools.includes("long_open_permits")
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "expected", "contractors_named"],
+          message: "contractors_named needs long_open_permits in tools",
         });
       for (const t of p.expected.forbidden_tools ?? [])
         if (p.expected.tools.includes(t))

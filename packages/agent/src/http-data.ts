@@ -290,6 +290,7 @@ export function httpDataQueries(opts: HttpDataQueriesOptions): DataQueries & {
     parcels: {
       search: (input) => call(api.parcels.search.query(input)),
       detail: (input) => call(api.parcels.detail.query(input)),
+      points: (input) => call(api.parcels.points.query(input)),
     },
     explorer: {
       runSummary: () => call(api.explorer.runSummary.query()),

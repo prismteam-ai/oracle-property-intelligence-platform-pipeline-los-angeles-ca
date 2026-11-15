@@ -42,6 +42,7 @@ import {
   LONG_OPEN_SCOPE,
   anthropicTools,
   runTool,
+  type ContractorSummary,
   type ToolOutcome,
 } from "./tools.ts";
 
@@ -479,7 +480,11 @@ function explain(
     switch (f.tool) {
       case "search_aged_roofs":
         reasoning.push(
-          `searched parcels within ${f.radius_miles} mi of ${label} built before ${f.built_before_year} (roofs older than ${f.threshold_years} years)${f.ownership_basis ? `, owner unchanged for 10 years or more by the "${f.ownership_basis}" basis` : ""}: ${fmt(f.count)} match, ${f.returned} listed`,
+          `searched parcels within ${f.radius_miles} mi of ${label} built before ${f.built_before_year} (roofs older than ${f.threshold_years} years)${f.ownership_basis ? `, owner unchanged for 10 years or more by the "${f.ownership_basis}" basis` : ""}: ${
+            f.long_open
+              ? `${fmt(f.long_open.of)} match, of which ${f.long_open.complete ? "" : "at least "}${fmt(f.long_open.count)} parcels (not permits) have a long-open roofing permit (open at least ${fmt(f.long_open.min_open_days)} days)${f.long_open.complete ? "" : " among the nearest checked"}`
+              : `${fmt(f.count)} match`
+          }, ${f.returned} listed`,
         );
         assumptions.push(
           f.proxy_count === f.returned
@@ -501,7 +506,7 @@ function explain(
         // with_contractor_window: the second list, within the contractor window (its limit computed by the tool).
         if (f.within_window?.status === "read") {
           reasoning.push(
-            `listed the long-open permits issued within the contractor window (open at most ${fmt(f.within_window.max_open_days)} days): ${fmt(f.within_window.count)} match, ${f.within_window.returned} listed`,
+            `listed the long-open permits issued within the contractor window (open at most ${fmt(f.within_window.max_open_days)} days): ${fmt(f.within_window.count)} match, ${f.within_window.returned} listed, each with its permit's contractor rows (${contractorPhrase(f.within_window.contractors)})`,
           );
           rules.push(
             longOpenRuleLine(f.min_open_days, f.within_window.max_open_days),
@@ -542,6 +547,14 @@ function explain(
     session: area ? { area } : {},
     centerKnown,
   };
+}
+
+/** "8 named, 1 owner-builder, 1 not read": the contractor statuses of the within-window list, those that occur. */
+function contractorPhrase(c: ContractorSummary): string {
+  const said = (Object.keys(c) as Array<keyof ContractorSummary>)
+    .filter((k) => c[k] > 0)
+    .map((k) => `${c[k]} ${k}`);
+  return said.length ? said.join(", ") : "none listed";
 }
 
 function sentence(fragments: readonly string[]): string {
