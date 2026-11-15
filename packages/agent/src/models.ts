@@ -43,7 +43,7 @@ export function modelId(provider: Provider, key: ModelKey): string {
 }
 
 /**
- * Price table for the eval's spend limit (design brief §15.1), USD per million tokens. Source (read
+ * Price table for the eval's spend limit, USD per million tokens. Source (read
  * 2026-11-13T23:34:25Z): Anthropic, "Pricing", https://platform.claude.com/docs/en/about-claude/pricing.md,
  * columns base input, 5m cache writes, cache hits,
  * output: "| Claude Sonnet 5.5 | $2 / MTok | $2.50 / MTok | $4 / MTok | $0.10 / MTok | $10 / MTok |"; "| Claude

@@ -12,7 +12,7 @@ import { AgentAnswerView } from "./AgentAnswer.tsx";
 import { readNumber } from "./numeric.ts";
 import { createWarmup, HOLD_MAX_MS, type Warmup } from "./warmup.ts";
 
-/** Hosting plan revision 2 §1: the notice under the question box. */
+/** The notice under the question box. */
 export const NOTICE =
   "Your question, the center and the data the agent reads are sent to Anthropic to answer it.";
 
@@ -41,7 +41,7 @@ export function centerFrom(
 }
 
 /**
- * The "Ask the agent" tab (hosting plan §8, revision 2 §1 and §5). Kept mounted while other tabs show, so the
+ * The "Ask the agent" tab. Kept mounted while other tabs show, so the
  * conversation (history, session, signature) lives in component state only, never in storage; "New
  * conversation" drops it. The Send button is never disabled: a question asked during the warm-up is held with a
  * "waking up" status; a question asked while an answer is pending stays in the box with a note.
@@ -90,7 +90,7 @@ export function AskAgent({
     const gen = generation.current;
     setMessage(undefined);
     try {
-      // Re-warm (approvals §3e.78.3): the data API instances may be cold again.
+      // Re-warm: the data API instances may be cold again.
       if (!warmup.running() && warmup.stale()) void warmup.start();
       if (warmup.running()) {
         setStatus("waking");

@@ -1,6 +1,6 @@
 /**
  * The two secrets of the hosted agent, read from SSM Parameter Store (SecureString, alias/aws/ssm) on first use and
- * kept in memory for the container's life (hosting plan revision 2 §1; approvals §3e.74.1, §3e.76): the Anthropic
+ * kept in memory for the container's life: the Anthropic
  * API key and the history signing secret. Only their names come from the environment (KEY_PARAMETER_NAME,
  * HISTORY_SECRET_PARAMETER_NAME); the values never go to disk, an argument, the environment or a log. A read that
  * fails is not kept, so a parameter placed after a cold start is read by the next request. Missing, empty or

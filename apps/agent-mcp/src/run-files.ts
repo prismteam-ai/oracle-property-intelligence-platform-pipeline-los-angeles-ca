@@ -1,5 +1,5 @@
 /**
- * The run history of a repository checkout and the data files its latest run needs (design brief §16). No DuckDB
+ * The run history of a repository checkout and the data files its latest run needs. No DuckDB
  * and no data API here: the eval CLI checks the files with this before it builds a model client or creates its
  * output folder, and local-data.ts checks them before it stages anything, so a checkout without the run's data/
  * (a worktree has runs/ but no data/) fails with a message that names the first missing file and how to point at a

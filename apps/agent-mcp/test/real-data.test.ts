@@ -82,7 +82,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run (P19)", () => {
   test("eval prompt i's question with the scripted model: the contractor gap and the text check pass on the real sources", async () => {
     const text =
       "There is no contractor data for permits issued after May 2023: contractor rows end in May 2023.";
-    // run_summary, as the May 2023 line says (approvals §3e.80).
+    // run_summary, as the May 2023 line says.
     const model = new ScriptedModel([
       toolReply([{ name: "run_summary", input: {} }]),
       textReply(text),
@@ -193,7 +193,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run (P19)", () => {
     expect(checked).toBeGreaterThan(0);
   });
 
-  /** The CRM pin of the 15 Nov hosted check (approvals §3e.94 item 2). */
+  /** The CRM pin of the 15 Nov hosted check. */
   const CRM_PIN = { lat: 34.20008, lon: -118.48111 };
 
   test("§3e.94 item 2: search_aged_roofs with long_open_permit at the CRM pin, 1 mi, 15 years: 144 of 3,948 parcels, the CRM legend's count (parcels.points marks and parcels.match agree); items equal parcels.search's", async () => {

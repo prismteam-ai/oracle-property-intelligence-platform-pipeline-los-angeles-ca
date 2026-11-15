@@ -1,5 +1,5 @@
 /**
- * The one structured log line per request (hosting plan revision 1 §6): counts, tokens, cost, timings and outcome.
+ * The one structured log line per request: counts, tokens, cost, timings and outcome.
  * Built field by field from this allowlist, never by spreading a request or an answer. Never logged: the question,
  * the history, the answer text or markdown, the reasoning and assumptions, tool inputs (coordinates, parcel IDs)
  * and tool results, the center or its label, the bearer token or any header, the key or the signing secret, and

@@ -1,5 +1,5 @@
 /**
- * The agent loop (design brief §7, §11.2, §11.4): a hand-written tool loop with turn, token and time caps, the
+ * The agent loop: a hand-written tool loop with turn, token and time caps, the
  * people guard before any model call, citations, gaps, and deterministic reasoning and assumptions built from the
  * tool calls. One call = one answer; the conversation (history + session area) goes in and comes back out.
  */
@@ -182,9 +182,9 @@ const same = (a: number, b: number) => Math.abs(a - b) < 1e-6;
 const atCenter = (c: { lat: number; lon: number }, lat: number, lon: number) =>
   sameCoord(c.lat, lat) && sameCoord(c.lon, lon);
 
-/** A tool round needs room for its estimated input plus at least this many output tokens (design brief §17 A3). */
+/** A tool round needs room for its estimated input plus at least this many output tokens. */
 export const MIN_ANSWER_TOKENS = 1_024;
-/** Characters per token of the input estimate (design brief §17 A3). */
+/** Characters per token of the input estimate. */
 export const ESTIMATE_CHARS_PER_TOKEN = 3;
 
 /** The previous model call, for the next call's input estimate. */
@@ -195,7 +195,7 @@ export interface PreviousCall {
 }
 
 /**
- * The estimated input tokens of the next model call (design brief §17 A3):
+ * The estimated input tokens of the next model call:
  * - first call of the answer: ceil(request JSON characters / 3), the request being its system prompt, tools and
  *   messages (the whole conversation so far);
  * - later calls: the previous call's input_tokens + output_tokens (its whole input and its reply, both re-sent) +
@@ -350,7 +350,7 @@ function durationAssumption(question: string, minDays: number): string {
 }
 
 /**
- * The long-open rule as every long-open answer states it (design brief §15.3), with the searched minimum (and
+ * The long-open rule as every long-open answer states it, with the searched minimum (and
  * maximum, when one was given).
  */
 export function longOpenRuleLine(
@@ -361,7 +361,7 @@ export function longOpenRuleLine(
   return `Rule: long-open permits are ${LONG_OPEN_SCOPE} (the data API's rule: an issued permit for roofing work, open ${range}; a roof-coating-only permit counts and is flagged).`;
 }
 
-/** The gap of a place or parcel whose jurisdiction no permit source covers (design brief §15.1 d). */
+/** The gap of a place or parcel whose jurisdiction no permit source covers. */
 export const outsideCityGap = (place: string): string =>
   `${place} is outside the City of Los Angeles: no permit data there.`;
 
@@ -781,7 +781,7 @@ export async function runAgent(
   }
   closeDanglingToolUse(messages, stoppedBy ?? "end");
 
-  // The no-tool-call rule (approvals §3e.75 b): a reply of the model with no tool call behind it, in this answer (no
+  // The no-tool-call rule: a reply of the model with no tool call behind it, in this answer (no
   // tool call ran, whether it returned data or an error) or in the conversation (no earlier tool result), is never
   // shown. The fixed text replaces it, the answer is refused, and the turn is not added to the history (the history
   // goes back as it came). A stopped answer counts too when the model wrote text (e.g. a long reply cut at

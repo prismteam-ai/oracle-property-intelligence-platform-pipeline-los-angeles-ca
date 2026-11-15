@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The "Ask the agent" tab (hosting plan §8, revision 2 §1 and §5; approvals §3e.74.2, §3e.78.3, §3e.90.3), on
+ * The "Ask the agent" tab, on
  * jsdom with fake timers (Date included). The agent API is the Explorer's real client (createAgentApi) over a fake
  * fetch: nothing leaves the process, and no request ever reaches a real /agent/answer.
  */

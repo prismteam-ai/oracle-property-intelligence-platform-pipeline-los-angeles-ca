@@ -1,5 +1,5 @@
 /**
- * The agent's tools (design brief §6, §11.1, §13). One zod schema per tool: the model gets its JSON Schema
+ * The agent's tools. One zod schema per tool: the model gets its JSON Schema
  * (z.toJSONSchema, then the SDK's strict-mode transform) and the MCP server registers the same zod object.
  * Every output is an explicit allowlist projection, then the description guard. Tool errors become results with
  * `ok: false`; nothing is thrown out of runTool.
@@ -695,7 +695,7 @@ const PROPERTY_FIELDS: Record<string, string> = {
   ...fields("roll_year", "latitude", "longitude"),
 };
 /**
- * Per record, the source name and collection time only (design brief §15.2). The request URL, page file and
+ * Per record, the source name and collection time only. The request URL, page file and
  * sha256 are not repeated per record: run_summary states each source's URLs once, and the page-level files and
  * hashes stay in the data API (explorer.sources pages, explorer.records).
  */
@@ -1069,7 +1069,7 @@ const run = {
         fact: fact(res, list.items),
       };
     }
-    // with_contractor_window (approvals §3e.83.1): one call at a time, each through the data layer's own per-call
+    // with_contractor_window: one call at a time, each through the data layer's own per-call
     // cap and retry (http-data.ts). The default list first; the window from explorer.sources (the answer's read for
     // the prompt's contractor end: onceSources, no new call in the agent); then the within-window list.
     const res = await longOpen(input.max_open_days);
@@ -1089,7 +1089,7 @@ const run = {
     let contractorGaps: string[] = [];
     if (within.status === "read") {
       second = longOpenList(within.res, ref, "the within-window list");
-      // Each within-window item with its permit's contractor rows, read here (approvals §3e.94 item 1).
+      // Each within-window item with its permit's contractor rows, read here.
       const c = await withContractors(
         q,
         within.res.items,

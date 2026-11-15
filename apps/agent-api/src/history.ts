@@ -1,6 +1,6 @@
 /**
- * The conversation the client holds between questions, signed by the server (hosting plan revision 2 §1; approvals
- * §3e.74.1): HMAC-SHA256 with the history signing secret (its own SSM SecureString, never derived from the API key)
+ * The conversation the client holds between questions, signed by the server:
+ * HMAC-SHA256 with the history signing secret (its own SSM SecureString, never derived from the API key)
  * over {history, session}. The client sends back exactly what it received; a history or session that is unsigned or
  * altered is refused, so a client cannot plant tool results (which would make invented IDs count as verified) or
  * earlier turns. The request body is capped at MAX_BODY_BYTES before it is parsed.

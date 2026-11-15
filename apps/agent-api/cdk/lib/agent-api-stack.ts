@@ -35,7 +35,7 @@ export const HISTORY_SECRET_PARAMETER_NAME =
 export const SERVICE_NAME = "oracle-la-agent";
 /** The clients the agent serves (the handler refuses any other with 403); both are browser clients. */
 export const AGENT_API_CLIENTS = ["crm", "explorer"] as const;
-/** Estimated model spend per UTC day above which the alarm fires (hosting plan §4, §6). */
+/** Estimated model spend per UTC day above which the alarm fires. */
 export const USD_PER_DAY_THRESHOLD = 2;
 /** Estimated model spend within one 5-minute period at or above which the burst alarm fires. */
 export const USD_BURST_THRESHOLD = 1;
@@ -80,7 +80,7 @@ export class AgentApiStack extends cdk.Stack {
       memorySize: 512, // network-bound: model and data API calls, JSON of ~100 KB at most per answer
       // Under the HTTP API's 30 s integration limit; the answer's own budget is AGENT_TIME_BUDGET_MS (25 s).
       timeout: cdk.Duration.seconds(29),
-      reservedConcurrentExecutions: 2, // at most 2 answers at once (hosting plan §4)
+      reservedConcurrentExecutions: 2, // at most 2 answers at once
       tracing: lambda.Tracing.ACTIVE,
       logGroup: new logs.LogGroup(this, "AgentApiLogs", {
         retention: logs.RetentionDays.THREE_MONTHS, // 90 days (kit: apply-engineering-guidelines/rules/observability-logging-tracing.md, "Logging Standards")

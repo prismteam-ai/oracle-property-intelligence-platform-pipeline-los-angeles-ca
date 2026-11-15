@@ -43,7 +43,7 @@ describe("people guard", () => {
     expect(isPeopleQuestion(q)).toBe(false);
   });
 
-  // Approvals §3e.75 c: how long a property has gone without an ownership change, whatever the wording.
+  // How long a property has gone without an ownership change, whatever the wording.
   test.each([
     "Which properties within five miles of Van Nuys have not exchanged ownership in more than 10 years?",
     "Which properties near Van Nuys have had the same owner for 10 years?",

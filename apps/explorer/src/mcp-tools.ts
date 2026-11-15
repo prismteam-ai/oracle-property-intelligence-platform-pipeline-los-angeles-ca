@@ -1,5 +1,5 @@
 /**
- * The MCP tab's data (approvals §3e.74.11): the tools exactly as the local stdio MCP server registers them
+ * The MCP tab's data: the tools exactly as the local stdio MCP server registers them
  * (apps/agent-mcp/src/create-server.ts: one tool per TOOL_NAMES entry, description TOOL_DESCRIPTIONS[name], input
  * schema toolSchemas[name]), imported from the agent's own tool definitions, and one live example run through the
  * same tool code over the hosted data API (httpDataQueries, the adapter the hosted MCP server mode uses), shown in

@@ -1,5 +1,5 @@
 /**
- * Answer policy (design brief §6–§7, §11.4): standard gaps, the people guard, allowlist projection, the
+ * Answer policy: standard gaps, the people guard, allowlist projection, the
  * description guard, citations, unverified IDs and the markdown layout.
  */
 
@@ -54,7 +54,7 @@ const BUSINESS_TERMS = /\bowner[\s-]?builders?\b/gi;
 const OWNER = String.raw`owner(?:s|ship)?`;
 const NOT = String.raw`(?:(?:has|have|had|is|was|were|did|does|do)(?:n['’]t|\s+not|\s+never)|never)`;
 /**
- * How long a property has gone without an ownership change, in the wordings people use (approvals §3e.75 c): about
+ * How long a property has gone without an ownership change, in the wordings people use: about
  * the property, answered through the ownership filter, never about who the owner is. Each phrase is removed before
  * matching, so a question stays refused when a people word or pattern is left outside it ("same owner for 10 years,
  * and who is the owner?" is refused by "the owner").
@@ -126,7 +126,7 @@ export function isPeopleQuestion(question: string): boolean {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// No-tool-call rule (approvals §3e.75 b): runs after the model's last call.
+// No-tool-call rule: runs after the model's last call.
 
 /**
  * The fixed text of an answer whose reply used no tool result, in this turn or in the conversation: the model's

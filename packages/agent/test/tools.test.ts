@@ -233,7 +233,7 @@ describe("runTool", () => {
       jurisdiction: "LOS ANGELES",
       permit_data_available: true,
     });
-    // §15.2: per record, the source name and collection time only; URLs once per source in run_summary, page
+    // Per record, the source name and collection time only; URLs once per source in run_summary, page
     // files and hashes in the data API.
     expect((o.content as { provenance: unknown }).provenance).toEqual({
       source_name: FAKE_SOURCES.parcel,
@@ -285,7 +285,7 @@ describe("runTool", () => {
       items: Array<Record<string, unknown>>;
       truncated: boolean;
     };
-    // The route's rule.text, unchanged (§15.3).
+    // The route's rule.text, unchanged.
     expect(c.rule).toBe("Open at least min_open_days days (fake rule).");
     expect(c.scope).toBe("roofing work only");
     expect(c.source).toEqual({
@@ -496,7 +496,7 @@ describe("runTool", () => {
         attribution: "LADBS",
         collected_at: PERMIT_RETRIEVED,
       },
-      // The permit that set the parcel's roof year (roof_year_permit_number), under the permit source (§17 A1).
+      // The permit that set the parcel's roof year (roof_year_permit_number), under the permit source.
       {
         kind: "permit",
         id: FAKE_PERMITS[2],
@@ -585,7 +585,7 @@ describe("runTool", () => {
     ]);
     expect(search.records[2]).toEqual(permitRecord(ROOF_PERMIT));
     expect(calls.filter((c) => c.fn === "explorer.sources")).toHaveLength(1);
-    // Approvals §3e.94 item 3: the PERMIT row's own citation names the permit source too (not only the roll's).
+    // The PERMIT row's own citation names the permit source too (not only the roll's).
     const citations = (
       search.content as { items: Array<{ citation: unknown }> }
     ).items.map((it) => it.citation);

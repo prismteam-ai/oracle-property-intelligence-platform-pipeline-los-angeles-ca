@@ -1,5 +1,5 @@
 /**
- * Checks of one eval answer (design brief §15.1):
+ * Checks of one eval answer:
  * - counts: for every tool call of the answer, the same query called directly with the same input (schema defaults
  *   applied, mapped the way the tool maps it) gives the same count and the same returned IDs in the same order;
  * - cited: unverified_ids is empty and every parcel ID or permit number in the answer text is cited: among its
@@ -728,7 +728,7 @@ export const CONTRACTOR_STATUS_TEXT: Record<string, RegExp> = {
 };
 
 /**
- * (vii) With expected.contractors_named (approvals §3e.94 item 1): a long_open_permits call with
+ * (vii) With expected.contractors_named: a long_open_permits call with
  * with_contractor_window listed the within-window permits; the text names at least one of them; and for each one it
  * names, the text from that permit number to the next listed permit number names its contractor: for a named one a
  * business or canonical name (letters and digits compared) or a license number of its rows; otherwise its status in

@@ -1,6 +1,6 @@
 /**
  * The HTTP DataQueries adapter: the tools' data read from the hosted data API through @oracle-la/api-client (tRPC
- * over GET), with the caller's own bearer token forwarded (hosting plan revision 1 §1, revision 2 §1). One adapter
+ * over GET), with the caller's own bearer token forwarded. One adapter
  * serves one answer (the hosted agent builds one per request) or one MCP server process.
  *
  * The data API runs with reserved concurrency 5. The boundary follows the kit's external-dependency rule
@@ -30,7 +30,7 @@
 import { createApiClient } from "@oracle-la/api-client";
 import type { DataQueries } from "./permit-api.ts";
 
-/** Data API calls in flight at once per adapter (hosting plan revision 2 §1). */
+/** Data API calls in flight at once per adapter. */
 export const MAX_IN_FLIGHT = 2;
 /** Longest one attempt may take, headers and body (the kit's synchronous exception: 5 s at most). */
 export const CALL_TIMEOUT_MS = 5_000;

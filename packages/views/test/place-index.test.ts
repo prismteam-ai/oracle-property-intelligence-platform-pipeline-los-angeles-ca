@@ -1,5 +1,5 @@
 /**
- * PlaceIndex on a synthetic parcel set (design brief §11.1). The fake `rows` implements the two aggregate queries'
+ * PlaceIndex on a synthetic parcel set. The fake `rows` implements the two aggregate queries'
  * semantics in JS (distinct values with counts; median center and 90th-percentile spread over bound values,
  * quantile_cont = linear interpolation). The same SQL runs on DuckDB in apps/agent-mcp/test and apps/api/test
  * (places.resolve). The module is shared by the data API and the agent.

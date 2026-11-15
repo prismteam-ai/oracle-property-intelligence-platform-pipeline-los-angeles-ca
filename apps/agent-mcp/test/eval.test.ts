@@ -1,8 +1,8 @@
 /**
- * The eval (design brief §15.1) with ScriptedModel and the agent package's fake queries: no network, no key, no
+ * The eval with ScriptedModel and the agent package's fake queries: no network, no key, no
  * provider. Covers the prompts file, each check (pass and fail), the budget stop, and the CLI's output folder
  * (refused inside the repository; files written; stdout is the summary only), and --repo / ORACLE_REPO_DIR with
- * the run's data files checked before any model client or output folder (design brief §16). Scratch folders live
+ * the run's data files checked before any model client or output folder. Scratch folders live
  * under this test folder (fake checkouts and the outputs) and are removed afterwards.
  */
 import {
@@ -263,7 +263,7 @@ describe("prompts file (eval/prompts.json)", () => {
     });
     expect(a[1]!.expected.place).toEqual({ outcome: "reused_previous_area" });
   });
-  test("b–i as the brief lists them", () => {
+  test("b–i: each prompt's expected fields", () => {
     expect(byCase("b")[0]!.question).toBe(CRM_13);
     expect(byCase("c")[0]!.expected.tool_inputs).toEqual({
       search_aged_roofs: { radius_miles: 2, threshold_years: 40 },
@@ -367,7 +367,7 @@ describe("prompts file (eval/prompts.json)", () => {
     expect(
       ok({ place: { outcome: "unknown", name: "X", search_required: false } }),
     ).toBe(false);
-    // resolve_required (§3e.83.3): an optional boolean of resolved, on its own (not tied to search_required).
+    // resolve_required: an optional boolean of resolved, on its own (not tied to search_required).
     expect(
       ok({
         place: { ...place, search_required: false, resolve_required: false },
@@ -1004,7 +1004,7 @@ describe("checks: §19 gaps_text keyword misses on Sonnet run 2", () => {
         toolReply([{ name: "resolve_place", input: { name: "Los Angeles" } }]),
         textReply(text),
       ]);
-    // Sonnet run 2, run-1-f-los-angeles-ambiguous-unreliable.json, the answer text verbatim.
+    // Sonnet's second eval round, run 1 of prompt f, the answer text verbatim.
     const SONNET_RUN2_F =
       'I can\'t run a meaningful three-mile search around "Los Angeles" because the place name doesn\'t give a reliable center.\n\nThe tool matched 803,001 parcels to "Los Angeles". Their median center is 34.10198, -118.39110. The parcels are spread over about 15 miles, so 90% of them lie within 15.15 miles of that point. A three-mile radius around the median would cover an arbitrary part of the city, not "Los Angeles". The postal-city match gives a different center, 34.08860, -118.37806, from 790,999 parcels, and it has the same problem.\n\nPlease give me one of these, and I\'ll list parcels with roofs older than 15 years:\n- A specific point (latitude and longitude).\n- A more specific neighborhood or community name.\n- An address or parcel ID to center on.\n\nIf you want the search around the median center anyway, say so. I\'d then treat it as a point that isn\'t tied to any landmark.';
 
@@ -1068,7 +1068,7 @@ describe("checks: §19 gaps_text keyword misses on Sonnet run 2", () => {
         toolReply([{ name: "resolve_place", input: { name: "Springfield" } }]),
         textReply(text),
       ]);
-    // Sonnet run 2, run-3-e-springfield-unknown.json, the answer text verbatim.
+    // Sonnet's second eval round, run 3 of prompt e, the answer text verbatim.
     const SONNET_RUN2_E =
       "I couldn't find \"Springfield\" in this dataset's parcels, so I didn't run the search. I won't guess a location for it.\n\nYou can give me either of these instead:\n- a latitude and longitude, or\n- a Los Angeles County city or community name, such as Van Nuys or Pasadena.\n\nI'll then search a 5-mile radius for roofs older than 15 years. The default roof-age threshold is 15 years, as you asked. Roof age counts from the assessor's year-built proxy unless a finaled roofing permit exists. Permit data covers only the City of Los Angeles.";
 
@@ -2159,7 +2159,7 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
       previousArea: area,
     });
     expect(c.tools.result).toBe("fail");
-    // §3e.94 item 1: parcel_permits is no longer required; the call without with_contractor_window fails tools, and
+    // parcel_permits is no longer required; the call without with_contractor_window fails tools, and
     // with no within-window list the contractors check fails too.
     expect(c.tools.details).toContain(
       'no long_open_permits call with {"radius_miles":5,"min_open_days":1826,"with_contractor_window":true}',
@@ -2408,7 +2408,7 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
   test('f: "spread over" and "reliably" (Sonnet run 3 on 6432d4a) pass the place_ambiguous_or_unreliable text check', async () => {
     const f = byId("f-los-angeles-ambiguous-unreliable");
     const re = GAPS.place_ambiguous_or_unreliable.inText;
-    // run-3-f-los-angeles-ambiguous-unreliable.json on 6432d4a, the sentences that state the gap.
+    // Run 3 of prompt f in the eval of 6432d4a, the sentences that state the gap.
     expect(
       re.test(
         "Those parcels are spread over about 15 miles (90% lie within 15.15 miles of that point).",
@@ -2436,7 +2436,7 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
 
   test('d (§3e.82.1): "permit data covers only the City of Los Angeles" (run 1 on 6432d4a) passes the outside_city_of_la text check; "only in/for the City of Los Angeles" passes only with "permit(s)" in the same sentence', () => {
     const re = GAPS.outside_city_of_la.inText("Pasadena");
-    // run-1-d-pasadena-outside-city.json on 6432d4a, the sentences that state the gap.
+    // Run 1 of prompt d in the eval of 6432d4a, the sentences that state the gap.
     expect(
       re.test(
         "This probably reflects missing data, not an absence of work. Permit data covers only the City of Los Angeles. Pasadena is a separate city, so the permit tool has no records for these parcels.",
@@ -2467,7 +2467,7 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
 
   test('d (§3e.88.2): "permit data doesn\'t cover <place>" (run 2 on 15f49d8) passes the outside_city_of_la text check; "doesn\'t cover every parcel in <place>" does not', () => {
     const re = GAPS.outside_city_of_la.inText("Pasadena");
-    // run-2-d-pasadena-outside-city.json on 15f49d8, the sentence that states the gap.
+    // Run 2 of prompt d in the eval of 15f49d8, the sentence that states the gap.
     expect(
       re.test(
         "None of them has an open roofing permit, because the City of Los Angeles permit data doesn't cover Pasadena.",

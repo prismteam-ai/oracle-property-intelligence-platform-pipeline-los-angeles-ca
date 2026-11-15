@@ -1,5 +1,5 @@
 /**
- * runAgent with the scripted fake model (design brief §7, §8, §11). No network, no clock dependence.
+ * runAgent with the scripted fake model. No network, no clock dependence.
  * Wording: pipeline README lines 108 and 110 and the CRM README line 13, with "[city xyz]" replaced by "Van Nuys".
  */
 import Anthropic from "@anthropic-ai/sdk";
@@ -541,7 +541,7 @@ describe("CRM README line 13 ([city xyz] → Van Nuys)", () => {
     expect(a.assumptions).toContain(
       '"five years" read as at least 1,826 days open (Math.round(5 × 365.25)).',
     );
-    // §15.3: the rule, stated in the reasoning (its own sentence after the tool steps).
+    // The rule, stated in the reasoning (its own sentence after the tool steps).
     const RULE =
       "Rule: long-open permits are roofing work only (the data API's rule: an issued permit for roofing work, open at least 1,826 days; a roof-coating-only permit counts and is flagged).";
     expect(a.reasoning).toContain(` ${RULE}`);
@@ -1944,13 +1944,13 @@ describe("scope and the no-tool-call rule (approvals §3e.75 a, b)", () => {
 
   test("the system prompt (exact lines): the scope rule, the coverage line, the ownership-duration line, the May 2023 line and the within-window line", () => {
     const system = systemPrompt(SETTINGS.maxToolTurns);
-    // Approvals §3e.80 and §3e.83.1: the May 2023 line (i) and the within-window line (a2), in this order; §3e.94
-    // item 1: the within-window items carry their contractors, so parcel_permits is not needed for them.
+    // The May 2023 line (i) and the within-window line (a2), in this order; the
+    // within-window items carry their contractors, so parcel_permits is not needed for them.
     expect(system).toContain(
       "\n- Contractor rows end in May 2023: for permits issued after May 2023, call run_summary and state the contractor window from it (there is no contractor data after May 2023) instead of reading parcels' permits.\n- When a question asks for long-open permits and their contractors, set with_contractor_window in long_open_permits: the result also lists the longest-open permits issued within the contractor window, labeled, with the day limit and the two dates it uses. Each of its items carries its permit's contractor rows and contractor_status: for every listed permit, name its contractor (business name and license number) or say its status (owner-builder, none stated, not read); parcel_permits is not needed for them.\n",
     );
     expect(system).not.toContain("Then call parcel_permits");
-    // §3e.94 items 2 and 3: one line each.
+    // The long-open parcel filter and the PERMIT-basis citation: one line each.
     expect(system).toContain(
       "\n- Which or how many aged-roof parcels have long-open roofing permits: set long_open_permit in search_aged_roofs. Its count is of parcels, not permits; say so, as its long_open_permit text states it.\n",
     );

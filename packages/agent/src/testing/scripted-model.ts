@@ -1,5 +1,5 @@
 /**
- * ScriptedModel: a deterministic ModelClient for tests (design brief §8). It returns scripted Anthropic.Message
+ * ScriptedModel: a deterministic ModelClient for tests. It returns scripted Anthropic.Message
  * values in order, records every request (deep-copied, so later history growth does not change it), and throws
  * when the script runs out. No network, no SDK client.
  */

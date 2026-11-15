@@ -1,5 +1,5 @@
 /**
- * Model interface and its two providers (design brief §4). Both use the SDK's own request and response types.
+ * Model interface and its two providers. Both use the SDK's own request and response types.
  * Bindings checked against the installed packages: @anthropic-ai/sdk 1.3.0 (ClientOptions in client.d.mts,
  * messages.create(params, { timeout, signal })) and @anthropic-ai/bedrock-sdk 1.1.0 (AnthropicBedrockMantle,
  * BedrockMantleClientOptions.awsRegion, mantle-client.d.ts).

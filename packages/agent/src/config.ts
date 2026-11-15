@@ -1,5 +1,5 @@
 /**
- * Agent configuration from the environment, validated with zod (design brief §2). No default picks a model or a
+ * Agent configuration from the environment, validated with zod. No default picks a model or a
  * provider. Secrets are not part of the configuration: the Anthropic key file's path is not read from the
  * environment either; the caller passes it (the eval's required --key-file option) and the model client factory
  * reads the file (key-file.ts, model-client.ts). No key is read from the environment.

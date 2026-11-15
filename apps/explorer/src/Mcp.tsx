@@ -25,7 +25,7 @@ function summary(r: McpToolResult): string {
 }
 
 /**
- * The "MCP" tab (approvals §3e.74.11): the MCP server's tools from its own definitions, one live example through
+ * The "MCP" tab: the MCP server's tools from its own definitions, one live example through
  * the data API in the tool-result shape, and how to connect a client to the local stdio server. No new AWS resource:
  * the example reads the data API with this site's token, as the Radius query tab does.
  */

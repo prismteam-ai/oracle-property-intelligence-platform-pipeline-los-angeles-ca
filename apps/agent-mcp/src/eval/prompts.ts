@@ -1,5 +1,5 @@
 /**
- * The eval's prompts file (design brief §15.1): apps/agent-mcp/eval/prompts.json, validated here. Each entry is one
+ * The eval's prompts file: apps/agent-mcp/eval/prompts.json, validated here. Each entry is one
  * question with its conversation group (entries of a group run in file order as ONE conversation, history and
  * session carried) and what its answer must show: the tools called (optionally with input values), the gap IDs
  * stated, whether it is refused, and the place outcome.
@@ -20,11 +20,11 @@ export const DEFAULT_PROMPTS_FILE = fileURLToPath(
 );
 
 /**
- * The cases of design brief §15.1 a–i, then the scope and abuse cases of approvals §3e.75 d: j off-topic, k a
+ * The first cases a–i, then the scope and abuse cases: j off-topic, k a
  * writing task, l an instruction to ignore the rules (each refused by the no-tool-call rule), m who is the owner
  * (refused by the people guard), n how long without an ownership change (answered through the ownership filter);
- * then o, a coverage question of approvals §3e.78.1 (answered from run_summary: BBB ratings are not available, and why);
- * then p, how many aged-roof parcels have a long-open roofing permit (approvals §3e.94 item 2: search_aged_roofs with
+ * then o, a coverage question (answered from run_summary: BBB ratings are not available, and why);
+ * then p, how many aged-roof parcels have a long-open roofing permit (search_aged_roofs with
  * long_open_permit, a count of parcels).
  */
 export const PROMPT_CASES = [
@@ -89,7 +89,7 @@ export const GAPS = {
     inText: /\bBBB\b/i,
   },
   /**
-   * BBB ratings not available, and why as the run's sources state it (approvals §3e.78.1): the BBB gap listed, and
+   * BBB ratings not available, and why as the run's sources state it: the BBB gap listed, and
    * the text both says BBB is not available (a sentence naming BBB with a negation) and gives the reason through
    * the sources (a sentence naming BBB with sources, ingestion, collection or LADBS, or "none of the ... sources").
    */
@@ -111,7 +111,7 @@ export const GAPS = {
     inGaps: (g) =>
       /^.+ is outside the City of Los Angeles: no permit data there\.$/.test(g),
     // "permit data does not cover <place>" (also "doesn't" or "doesn’t"): the prompt's expected place name when it
-    // has one, else 1–4 words. Approvals §3e.82.1: "permit data covers only (the) City of Los Angeles", and "only in/for the City of Los
+    // has one, else 1–4 words. Also "permit data covers only (the) City of Los Angeles", and "only in/for the City of Los
     // Angeles" only with "permit" or "permits" in the same sentence (no . ! ? or line break between them).
     // Also "permit data covers (the) City of Los Angeles only" (word order), never "this search covers ...".
     inText: (placeName) =>
@@ -130,8 +130,8 @@ export const GAPS = {
   },
   place_ambiguous_or_unreliable: {
     inGaps: (g) => g.includes("too spread out") || g.includes("is ambiguous:"),
-    // "spread out" or "spread over" (approvals §3e.80: "spread over about 15 miles"). Last alternative (design brief
-    // §19): a negated reliable/usable center or point, e.g. "the place name doesn't give a reliable center": a
+    // "spread out" or "spread over" (e.g. "spread over about 15 miles"). Last alternative:
+    // a negated reliable/usable center or point, e.g. "the place name doesn't give a reliable center": a
     // negation, then "reliable", "reliably" or "usable", then center/centre/point, all in one sentence (no . ! ? or
     // line break between them).
     inText:
@@ -139,7 +139,7 @@ export const GAPS = {
   },
   no_center: {
     inGaps: (g) => g === GAP_NO_CENTER,
-    // "latitude and longitude" (design brief §19): an answer asking for one instead of a center.
+    // "latitude and longitude": an answer asking for one instead of a center.
     inText:
       /\b(?:cent(?:er|re)|point|pin|coordinates|more specific|latitude and longitude)\b/i,
   },
@@ -175,7 +175,7 @@ export const placeSchema = z.discriminatedUnion("outcome", [
      */
     search_required: z.boolean().optional(),
     /**
-     * Default true: a resolve_place call for the name is required. False (prompt i only; approvals §3e.83.3): the
+     * Default true: a resolve_place call for the name is required. False (prompt i only): the
      * call is allowed, not required. With no call for the name the place check is skipped (n/a) and any search is
      * judged only by the expected and forbidden tools; a call made is checked as for any resolved place.
      */
@@ -227,7 +227,7 @@ export const promptSchema = z.strictObject({
      */
     no_license_status: z.literal(true).optional(),
     /**
-     * True (approvals §3e.94 item 1): a long_open_permits call with with_contractor_window listed the within-window
+     * True: a long_open_permits call with with_contractor_window listed the within-window
      * permits, the text names at least one of them, and for every one it names, the text names its contractor as the
      * tool returned it (check "contractors").
      */

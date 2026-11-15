@@ -1,5 +1,5 @@
 /**
- * The eval CLI (design brief §15.1, §16), behind scripts/eval-demo.ts:
+ * The eval CLI, behind scripts/eval-demo.ts:
  *
  *   node scripts/eval-demo.ts --provider <anthropic|bedrock> --model <haiku-5.5|sonnet-5.5> --out <dir>
  *     [--key-file <path>, required for --provider anthropic] [--runs 3] [--max-usd 5] [--prompts <file>]

@@ -1,5 +1,5 @@
 /**
- * The eval's spend limit (design brief §15.1, --max-usd). Spend = the sum over model calls of the API's usage
+ * The eval's spend limit (--max-usd). Spend = the sum over model calls of the API's usage
  * figures (input_tokens, cache_creation_input_tokens, cache_read_input_tokens, output_tokens) × the price table in
  * packages/agent (models.ts; Bedrock × 1.1, an estimate). Before EACH model call (runAgent's beforeModelCall), the
  * call's worst case is computed: ceil(request JSON characters / 2) input tokens at the input price (Haiku's

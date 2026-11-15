@@ -39,7 +39,7 @@ const KINDS: ReadonlyArray<[Citation["kind"], string]> = [
   ["contractor", "Contractor rows (by permit)"],
 ];
 
-/** One answer as §8 of the hosting plan renders it. */
+/** One answer as the agent panels render it. */
 export function AgentAnswerView({ answer }: { answer: AnswerResponse }) {
   const gaps = splitGaps(answer.gaps);
   return (

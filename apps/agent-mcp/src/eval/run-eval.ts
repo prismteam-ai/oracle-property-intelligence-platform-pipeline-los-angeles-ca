@@ -1,5 +1,5 @@
 /**
- * The eval (design brief §15.1): every prompt, conversation by conversation, `runs` times, one model per
+ * The eval: every prompt, conversation by conversation, `runs` times, one model per
  * invocation. Per answer: the checks (checks.ts), its usage and spend (budget.ts), and one transcript JSON in the
  * output folder; at the end (or when the spend limit stops the eval) results.tsv and results.md. Returns the short
  * summary the CLI prints (nothing else goes to stdout) and the exit code: 1 when stopped by the budget or when any

@@ -45,7 +45,7 @@ import {
   type PermitQueries,
 } from "@oracle-la/agent";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-// The API's fixture, imported by relative path like openDb (design brief §1).
+// The API's fixture, imported by relative path like openDb.
 import {
   FIXTURE,
   PERMIT_FIXTURE,
@@ -328,7 +328,7 @@ describe("tools over the real appRouter", () => {
         roof_age_basis_label: ROOF_AGE_BASIS.proxy,
       },
     });
-    // §15.2: the source name and collection time only; page file, request URL and sha256 stay in the data API.
+    // The source name and collection time only; page file, request URL and sha256 stay in the data API.
     const prov = (o.content as { provenance: Record<string, unknown> })
       .provenance;
     expect(Object.keys(prov)).toEqual(["source_name", "source_retrieved_at"]);
@@ -347,7 +347,7 @@ describe("tools over the real appRouter", () => {
         {
           source_name: FIXTURE.source,
           terms_of_use: "https://example.test/terms",
-          // Each source's URLs, once (§15.2).
+          // Each source's URLs, once.
           hub_page: "https://example.test/hub",
           query_url: "https://example.test/query",
           query_urls: null,
@@ -448,7 +448,7 @@ describe("permit tools over the real permits router (writePermitFixture)", () =>
         building_level: true,
         join_method: "condo-building",
       });
-      // Each item's permit, then the permit that set its parcel's roof year (§17 A1), each cited once.
+      // Each item's permit, then the permit that set its parcel's roof year, each cited once.
       const cited = [
         ...new Set(
           direct.items.flatMap((i) => [
@@ -1039,7 +1039,7 @@ describe("conversation on the permit fixture: pipeline README lines 108 then 110
       limit: 10,
     });
     const permitRecords = a2.records.filter((r) => r.kind === "permit");
-    // The long-open permits with their parcels' roof-year permits (§17 A1), then parcel_permits' own.
+    // The long-open permits with their parcels' roof-year permits, then parcel_permits' own.
     const forParcel = await permitData.caller.permits.forParcel({
       parcel_id: "0000000022",
     });

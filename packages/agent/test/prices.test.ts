@@ -1,5 +1,5 @@
 /**
- * The eval's price table (models.ts, design brief §15.1; Anthropic, "Pricing",
+ * The eval's price table (models.ts; Anthropic, "Pricing",
  * https://platform.claude.com/docs/en/about-claude/pricing.md, read 2026-11-13). Pure arithmetic, no network.
  */
 import { describe, expect, test } from "vitest";

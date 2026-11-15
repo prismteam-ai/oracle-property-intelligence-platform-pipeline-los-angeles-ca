@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import type { DataQueries } from "@oracle-la/agent";
 import { appRouter } from "@oracle-la/api/router";
 // openDb is not in @oracle-la/api's package exports ("./router", "./contract"), so it is imported by relative path
-// here; the main session may add an export instead (design brief §1).
+// here; the main session may add an export instead.
 import { openDb, parsePermitFiles } from "../../api/src/db.ts";
 import {
   RUN_HISTORY,

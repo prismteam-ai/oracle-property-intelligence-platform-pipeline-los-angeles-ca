@@ -1,5 +1,5 @@
 /**
- * The system prompt (design brief §6–§7, §11). Stable per run: nothing per request goes here. The contractor
+ * The system prompt. Stable per run: nothing per request goes here. The contractor
  * lines take the contractor rows' end and window from the run's sources (contractor-coverage.ts); without a
  * stated window they keep the documented end (DOCUMENTED_CONTRACTOR_END).
  */
