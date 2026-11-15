@@ -56,7 +56,7 @@ const WINDOW: ContractorWindow = {
   last: "2023-05-19",
 };
 
-describe.skipIf(!hasRealData)("the agent on the real latest run (P19)", () => {
+describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
   let data: LocalData;
   beforeAll(async () => {
     data = await openLocalData();
@@ -196,7 +196,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run (P19)", () => {
   /** The CRM pin of the 15 Nov hosted check. */
   const CRM_PIN = { lat: 34.20008, lon: -118.48111 };
 
-  test("§3e.94 item 2: search_aged_roofs with long_open_permit at the CRM pin, 1 mi, 15 years: 144 of 3,948 parcels, the CRM legend's count (parcels.points marks and parcels.match agree); items equal parcels.search's", async () => {
+  test("search_aged_roofs with long_open_permit at the CRM pin, 1 mi, 15 years: 144 of 3,948 parcels, the CRM legend's count (parcels.points marks and parcels.match agree); items equal parcels.search's", async () => {
     const filter = { ...CRM_PIN, radius_miles: 1, threshold_years: 15 };
     const o = await runTool(
       "search_aged_roofs",
@@ -296,7 +296,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run (P19)", () => {
     });
   });
 
-  test("§3e.94 item 1: long_open_permits with with_contractor_window at Van Nuys, 5 mi, limit 10: every within-window item carries its permit's contractor rows, as permits.forParcel serves them", async () => {
+  test("long_open_permits with with_contractor_window at Van Nuys, 5 mi, limit 10: every within-window item carries its permit's contractor rows, as permits.forParcel serves them", async () => {
     const o = await runTool(
       "long_open_permits",
       {
@@ -351,7 +351,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run (P19)", () => {
     );
   });
 
-  test("§3e.94 item 3: search_aged_roofs at Van Nuys, 5 mi: a listed row with a PERMIT roof year cites the LADBS permit source too", async () => {
+  test("search_aged_roofs at Van Nuys, 5 mi: a listed row with a PERMIT roof year cites the LADBS permit source too", async () => {
     const o = await runTool(
       "search_aged_roofs",
       { ...VAN_NUYS_CENTER, radius_miles: 5, threshold_years: 15, limit: 25 },

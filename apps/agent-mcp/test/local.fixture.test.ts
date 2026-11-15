@@ -844,7 +844,7 @@ describe("MCP server over the SDK's in-memory transport", () => {
     }
   });
 
-  test("approvals §3e.94: the MCP server shares the tool layer: long_open_permit and with_contractor_window are in its schemas, and search_aged_roofs' long-open filter answers like parcels.points' marks", async () => {
+  test("the MCP server shares the tool layer: long_open_permit and with_contractor_window are in its schemas, and search_aged_roofs' long-open filter answers like parcels.points' marks", async () => {
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     const server = createMcpServer(permitData.queries);
     await server.connect(serverSide);
@@ -1093,7 +1093,7 @@ describe("conversation on the permit fixture: pipeline README lines 108 then 110
   });
 });
 
-describe("P19 over the real routers (fixtures)", () => {
+describe("the ownership filter, resolve_place and the contractor window over the real routers (fixtures)", () => {
   test.each(OWNERSHIP_BASES)(
     "search_aged_roofs with ownership basis %s answers as caller.parcels.search with it; the stated texts are the API's",
     async (basis) => {

@@ -756,7 +756,7 @@ describe("caps", () => {
     expect(model.requests[1]!.params.tool_choice).toEqual({ type: "none" });
   });
 
-  test("§17 A3: the input estimate: first call ceil(request characters / 3); later calls the previous call's input + output + ceil(added characters / 3)", () => {
+  test("the input estimate: first call ceil(request characters / 3); later calls the previous call's input + output + ceil(added characters / 3)", () => {
     expect(MIN_ANSWER_TOKENS).toBe(1_024);
     expect(estimateInputTokens(undefined, "x".repeat(7))).toBe(
       Math.ceil(JSON.stringify("x".repeat(7)).length / 3),
@@ -767,7 +767,7 @@ describe("caps", () => {
     ).toBe(1000 + 50 + Math.ceil(JSON.stringify(added).length / 3));
   });
 
-  test("§17 A3: max_tokens = min(per call, cap − used − the call's input estimate)", async () => {
+  test("max_tokens = min(per call, cap − used − the call's input estimate)", async () => {
     const { queries } = fakeQueries();
     const model = new ScriptedModel([
       toolReply([{ name: "run_summary", input: {} }], {
@@ -794,7 +794,7 @@ describe("caps", () => {
     expect(r2!.tool_choice).toEqual({ type: "auto" });
   });
 
-  test("§17 A3: a cap too small for even the first call's input stops with token_cap before any call", async () => {
+  test("a cap too small for even the first call's input stops with token_cap before any call", async () => {
     const { queries } = fakeQueries();
     const model = new ScriptedModel([textReply("never reached")]);
     const a = await runAgent(
@@ -817,7 +817,7 @@ describe("caps", () => {
     expect(Number(m![1]!.replace(/,/g, ""))).toBeGreaterThan(1_000);
   });
 
-  test("§17 A3: when the next call's input leaves no room, the answer stops with token_cap before it (no truncated call)", async () => {
+  test("when the next call's input leaves no room, the answer stops with token_cap before it (no truncated call)", async () => {
     const { queries } = fakeQueries();
     const model = new ScriptedModel([
       toolReply([{ name: "run_summary", input: {} }], {
@@ -840,7 +840,7 @@ describe("caps", () => {
     expect(a.reasoning).toContain("with 38,500 of the 80,000-token cap left.");
   });
 
-  test("§17 A3: an i-like sequence at the default cap (80,000) ends in an answered final turn, not max_tokens", async () => {
+  test("an i-like sequence at the default cap (80,000) ends in an answered final turn, not max_tokens", async () => {
     // i: resolve_place, long_open_permits, then a parcel_permits fan-out whose results leave room only for a
     // final answer. Fixed tool_use IDs, so the probe and the run send identical messages.
     const fanOut = ["1000000001", "1000000002", "1000000003"];
@@ -1085,7 +1085,7 @@ describe("descriptions", () => {
   });
 });
 
-describe("system prompt (§17 C1, C2)", () => {
+describe("system prompt", () => {
   test("one instruction each: no permit data outside the City; no contractor data after May 2023", () => {
     const prompt = systemPrompt(SETTINGS.maxToolTurns);
     expect(prompt).toContain(
@@ -1114,7 +1114,7 @@ describe("request contract", () => {
   });
 });
 
-describe("long-open rule line (§15.3)", () => {
+describe("long-open rule line", () => {
   test("states the searched minimum, and the maximum when one was given", () => {
     expect(longOpenRuleLine(1826, null)).toBe(
       "Rule: long-open permits are roofing work only (the data API's rule: an issued permit for roofing work, open at least 1,826 days; a roof-coating-only permit counts and is flagged).",
@@ -1142,7 +1142,7 @@ describe("long-open rule line (§15.3)", () => {
   });
 });
 
-describe("outside the City of Los Angeles (§15.1 d)", () => {
+describe("outside the City of Los Angeles", () => {
   test("d with only the filtered call (long_open_permit at Pasadena): the place's gap from the matching parcels, the count not available, nothing listed", async () => {
     const { queries } = fakeQueries();
     let result: Record<string, unknown> | undefined;
@@ -1272,7 +1272,7 @@ describe("outside the City of Los Angeles (§15.1 d)", () => {
       lon: PASADENA_RESOLVED.lon,
     });
   });
-  test("§17 A2: a search at the 5-decimal center resolve_place serves is attributed to the place; the outside-city gap names it", async () => {
+  test("a search at the 5-decimal center resolve_place serves is attributed to the place; the outside-city gap names it", async () => {
     const { queries } = fakeQueries();
     // The smoke run's data: Pasadena's median center has 6 decimals (34.152795, -118.135784), every parcel near
     // it lies outside the City of Los Angeles.
@@ -1362,7 +1362,7 @@ describe("outside the City of Los Angeles (§15.1 d)", () => {
       "searched parcels within 1 mi of Pasadena built before 2006",
     );
   });
-  test("§17 A2: a search at the unrounded center is attributed too; one 5-decimal step away is not", async () => {
+  test("a search at the unrounded center is attributed too; one 5-decimal step away is not", async () => {
     const { queries } = fakeQueries();
     const raw: typeof queries = {
       ...queries,
@@ -1516,7 +1516,7 @@ function withSources(
 const CONTRACTOR_Q =
   "Which contractors are listed on roofing permits issued after May 2023 within five miles of Van Nuys?";
 
-describe("the contractor rows' window from explorer.sources (P19)", () => {
+describe("the contractor rows' window from explorer.sources", () => {
   test("the system prompt and the contractor gap name the source and its window; the standard sentence is unchanged", async () => {
     const { queries, calls } = fakeQueries();
     const model = new ScriptedModel([
@@ -1629,7 +1629,7 @@ describe("the contractor rows' window from explorer.sources (P19)", () => {
   });
 });
 
-describe("the ownership filter in an answer (P19)", () => {
+describe("the ownership filter in an answer", () => {
   const Q =
     "Which properties within five miles of Van Nuys with roofs older than 15 years have kept the same ownership for 10 years?";
 
@@ -1694,7 +1694,7 @@ describe("the ownership filter in an answer (P19)", () => {
     expect(a.reasoning).not.toMatch(/ownership|owner unchanged/i);
   });
 
-  test('the people guard (§3e.75 c): "ownership" and "same owner" wording reach the model, "who is the owner" is refused before any call', async () => {
+  test('the people guard: "ownership" and "same owner" wording reach the model, "who is the owner" is refused before any call', async () => {
     const { queries } = fakeQueries();
     for (const question of [
       Q,
@@ -1731,7 +1731,7 @@ describe("the ownership filter in an answer (P19)", () => {
   });
 });
 
-describe("the contractor identity in an answer (P19)", () => {
+describe("the contractor identity in an answer", () => {
   test("parcel_permits gives the model each license's key, canonical name and variant count; the prompt says a nameless license gets no name", async () => {
     const { queries } = fakeQueries();
     const model = new ScriptedModel([
@@ -1761,7 +1761,7 @@ describe("the contractor identity in an answer (P19)", () => {
   });
 });
 
-describe("scope and the no-tool-call rule (approvals §3e.75 a, b)", () => {
+describe("scope and the no-tool-call rule", () => {
   const OFF_DATA = [
     ["general knowledge", "What is the capital of France?", "Paris."],
     [
@@ -2003,7 +2003,7 @@ describe("scope and the no-tool-call rule (approvals §3e.75 a, b)", () => {
   });
 });
 
-describe("coverage questions (approvals §3e.78.1)", () => {
+describe("coverage questions", () => {
   const BBB_Q = "Do you have BBB ratings for the contractors?";
   const BBB_TEXT =
     "BBB ratings are not available: none of the run's sources is a BBB source. The contractor rows come from LADBS's contractor view, with business names, license numbers and license classes only.";
@@ -2066,7 +2066,7 @@ describe("coverage questions (approvals §3e.78.1)", () => {
   });
 });
 
-describe("approvals §3e.94: the reasoning states the long-open parcel count and the within-window contractors", () => {
+describe("the reasoning states the long-open parcel count and the within-window contractors", () => {
   test("search_aged_roofs with long_open_permit: the parcels counted, of how many, and that they are parcels, not permits", async () => {
     const { queries } = fakeQueries();
     const model = new ScriptedModel([

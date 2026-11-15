@@ -241,7 +241,7 @@ describe("prompts file (eval/prompts.json)", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byCase = (c: string) => prompts.filter((p) => p.case === c);
 
-  test("sixteen entries, valid: cases a–i, then j–n (approvals §3e.75 d) and o (§3e.78.1)", () => {
+  test("sixteen entries, valid: cases a–i, then the scope and abuse cases j–n and the coverage case o", () => {
     expect(prompts.length).toBe(17);
     expect(new Set(prompts.map((p) => p.case))).toEqual(new Set(PROMPT_CASES));
     expect(new Set(prompts.map((p) => p.id)).size).toBe(prompts.length);
@@ -305,7 +305,7 @@ describe("prompts file (eval/prompts.json)", () => {
       "contractor_license_after_may_2023",
     ]);
   });
-  test("i (§3e.80): run_summary required, parcel_permits forbidden, Van Nuys allowed (not required) with no search required; the note says why", () => {
+  test("i: run_summary required, parcel_permits forbidden, Van Nuys allowed (not required) with no search required; the note says why", () => {
     const i = byCase("i")[0]!;
     expect(i.expected).toEqual({
       tools: ["run_summary"],
@@ -350,7 +350,7 @@ describe("prompts file (eval/prompts.json)", () => {
     ).toBe(false);
     expect(bad([one])).toBe(true);
   });
-  test("the schema (§18): forbidden_tools optional tool names; search_required an optional boolean of resolved", () => {
+  test("the schema: forbidden_tools optional tool names; search_required an optional boolean of resolved", () => {
     const one = structuredClone(prompts[0]!);
     const ok = (expected: Record<string, unknown>) =>
       promptsFileSchema.safeParse([
@@ -674,8 +674,8 @@ describe("checks", () => {
   });
 });
 
-describe("checks: §17 B1 and B2", () => {
-  test("B1 place: a search at the resolved center equals it when both round to the same 5-decimal value; another center fails", () => {
+describe("checks: place and counts", () => {
+  test("place: a search at the resolved center equals it when both round to the same 5-decimal value; another center fails", () => {
     // The smoke run's d: resolve_place returned 34.152795, -118.135784; the model searched at 34.15279, -118.13578.
     const resolved = (lat: number, lon: number): ToolCallRecord[] => [
       {
@@ -726,7 +726,7 @@ describe("checks: §17 B1 and B2", () => {
       checkPlace(resolved(34.15279, -118.13568), expected, undefined).result,
     ).toBe("fail");
   });
-  test("B2 counts: tool calls the answer closed without running are not run, not compared; the stop still fails the answer", async () => {
+  test("counts: tool calls the answer closed without running are not run, not compared; the stop still fails the answer", async () => {
     // As in the smoke run's i: a round of parcel_permits, then a reply cut off at max_tokens mid tool_use (the
     // last call's input incomplete).
     const a = await ask(
@@ -761,7 +761,7 @@ describe("checks: §17 B1 and B2", () => {
     });
     expect(allPassed(c)).toBe(false);
   });
-  test("B2 counts: a tool that ran and failed while the direct query succeeds still fails", async () => {
+  test("counts: a tool that ran and failed while the direct query succeeds still fails", async () => {
     const { queries } = fakeQueries();
     const failing: DataQueries = {
       ...queries,
@@ -788,7 +788,7 @@ describe("checks: §17 B1 and B2", () => {
   });
 });
 
-describe("checks: §18 prompt i option 1 and the outside-city text", () => {
+describe("checks: prompt i with no search required and a forbidden tool, and the outside-city text", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byId = (id: string) => prompts.find((p) => p.id === id)!;
   const promptI = byId("i-contractors-after-may-2023");
@@ -834,7 +834,7 @@ describe("checks: §18 prompt i option 1 and the outside-city text", () => {
     expect([c.gaps.result, c.gaps_text.result]).toEqual(["pass", "pass"]);
     expect(allPassed(c)).toBe(true);
   });
-  test("prompt i with only resolve_place now fails tools: run_summary not called (§3e.80)", async () => {
+  test("prompt i with only resolve_place now fails tools: run_summary not called", async () => {
     const a = await ask(promptI.question, [
       toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
       textReply(NO_CONTRACTOR_DATA),
@@ -844,7 +844,7 @@ describe("checks: §18 prompt i option 1 and the outside-city text", () => {
     expect(c.tools.details).toContain("run_summary not called");
     expect(c.place.result).toBe("pass");
   });
-  test("prompt i with the contractor window from explorer.sources (P19): the gap names the source and window; every check still passes", async () => {
+  test("prompt i with the contractor window from explorer.sources: the gap names the source and window; every check still passes", async () => {
     const a = await ask(promptI.question, [
       toolReply([{ name: "run_summary", input: {} }]),
       textReply(NO_CONTRACTOR_DATA),
@@ -993,7 +993,7 @@ describe("checks: §18 prompt i option 1 and the outside-city text", () => {
   });
 });
 
-describe("checks: §19 gaps_text keyword misses on Sonnet run 2", () => {
+describe("checks: gaps_text keyword misses on Sonnet run 2", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byId = (id: string) => prompts.find((p) => p.id === id)!;
 
@@ -1725,7 +1725,7 @@ describe("CLI and output folder", () => {
   });
 });
 
-describe("scope and abuse prompts j–n (approvals §3e.75 d), with the scripted model", () => {
+describe("scope and abuse prompts j–n, with the scripted model", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byCase = (c: string) => prompts.find((p) => p.case === c)!;
 
@@ -1930,7 +1930,7 @@ describe("scope and abuse prompts j–n (approvals §3e.75 d), with the scripted
   });
 });
 
-describe("coverage prompt o (approvals §3e.78.1), with the scripted model", () => {
+describe("coverage prompt o, with the scripted model", () => {
   const p = loadPrompts(DEFAULT_PROMPTS_FILE).find((x) => x.case === "o")!;
   const O_TEXT =
     "BBB ratings are not available: none of the run's sources is a BBB source. The contractor rows come from LADBS's contractor view, with business names, license numbers and license classes only.";
@@ -2022,11 +2022,11 @@ describe("coverage prompt o (approvals §3e.78.1), with the scripted model", () 
   });
 });
 
-describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model", () => {
+describe("the 6432d4a eval failures, with the scripted model", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byId = (id: string) => prompts.find((p) => p.id === id)!;
 
-  test("a2 (§3e.83.1, §3e.94 item 1): one long_open_permits call with with_contractor_window returns both labeled lists, the limit computed in code, every within-window item with its contractor: no parcel_permits round; every check passes", async () => {
+  test("a2: one long_open_permits call with with_contractor_window returns both labeled lists, the limit computed in code, every within-window item with its contractor: no parcel_permits round; every check passes", async () => {
     const a1 = byId("a1-readme-108-van-nuys");
     const a2 = byId("a2-readme-110-follow-up");
     const first = await ask(
@@ -2342,7 +2342,7 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
     expect(allPassed(c)).toBe(true);
   });
 
-  test("i as answered on 6432d4a (no tool call) is replaced by the no-tool-call rule and fails; with run_summary and a search but no resolve_place the place check is skipped (§3e.83.3)", async () => {
+  test("i as answered on 6432d4a (no tool call) is replaced by the no-tool-call rule and fails; with run_summary and a search but no resolve_place the place check is skipped", async () => {
     const i = byId("i-contractors-after-may-2023");
     const none = await ask(i.question, [
       textReply("There is no contractor data after May 2023."),
@@ -2371,7 +2371,7 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
     expect(allPassed(cs)).toBe(true);
   });
 
-  test("i with a resolve_place call (§3e.83.3): the place check applies, so a search away from the resolved center fails place and one at it passes", async () => {
+  test("i with a resolve_place call: the place check applies, so a search away from the resolved center fails place and one at it passes", async () => {
     const i = byId("i-contractors-after-may-2023");
     const at = (dLat: number) =>
       ask(i.question, [
@@ -2434,7 +2434,7 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
     });
   });
 
-  test('d (§3e.82.1): "permit data covers only the City of Los Angeles" (run 1 on 6432d4a) passes the outside_city_of_la text check; "only in/for the City of Los Angeles" passes only with "permit(s)" in the same sentence', () => {
+  test('d: "permit data covers only the City of Los Angeles" (run 1 on 6432d4a) passes the outside_city_of_la text check; "only in/for the City of Los Angeles" passes only with "permit(s)" in the same sentence', () => {
     const re = GAPS.outside_city_of_la.inText("Pasadena");
     // Run 1 of prompt d in the eval of 6432d4a, the sentences that state the gap.
     expect(
@@ -2465,7 +2465,7 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
     ).toBe(false);
   });
 
-  test('d (§3e.88.2): "permit data doesn\'t cover <place>" (run 2 on 15f49d8) passes the outside_city_of_la text check; "doesn\'t cover every parcel in <place>" does not', () => {
+  test('d: "permit data doesn\'t cover <place>" (run 2 on 15f49d8) passes the outside_city_of_la text check; "doesn\'t cover every parcel in <place>" does not', () => {
     const re = GAPS.outside_city_of_la.inText("Pasadena");
     // Run 2 of prompt d in the eval of 15f49d8, the sentence that states the gap.
     expect(
@@ -2508,7 +2508,7 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
 /** A point near Van Nuys that no resolve_place call produced (prompt i's search without a resolution). */
 const VAN_NUYS_POINT = { lat: 34.199, lon: -118.487 };
 
-describe("prompt p and the long-open filter (approvals §3e.94 item 2), with the scripted model", () => {
+describe("prompt p and the long-open filter, with the scripted model", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byId = (id: string) => prompts.find((p) => p.id === id)!;
   test("p: resolve_place, then search_aged_roofs with long_open_permit: the counts check compares the parcel count and IDs with parcels.points' marks; every check passes", async () => {

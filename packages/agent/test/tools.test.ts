@@ -514,7 +514,7 @@ describe("runTool", () => {
       },
     ]);
   });
-  test("§17 A1: every tool that returns a roof_year_permit_number cites it as a permit record under the permit source", async () => {
+  test("every tool that returns a roof_year_permit_number cites it as a permit record under the permit source", async () => {
     const ROOF_PERMIT = "15016-20000-25193";
     const permitRecord = (id: string) => ({
       kind: "permit",
@@ -633,7 +633,7 @@ describe("runTool", () => {
       [FAKE_PERMITS[0]!, ROOF_PERMIT, FAKE_PERMITS[2]!].map(permitRecord),
     );
   });
-  test("§17 A1: a parcel whose roof year is a proxy cites no permit and reads no sources", async () => {
+  test("a parcel whose roof year is a proxy cites no permit and reads no sources", async () => {
     const { queries, calls } = fakeQueries();
     const search = await runTool(
       "search_aged_roofs",
@@ -650,7 +650,7 @@ describe("runTool", () => {
     ).toBe(true);
     expect(calls.filter((c) => c.fn === "explorer.sources")).toEqual([]);
   });
-  test("§17 A1: no permit source in the run: the roof-year permit is not cited and the gap says so", async () => {
+  test("no permit source in the run: the roof-year permit is not cited and the gap says so", async () => {
     const { queries } = fakeQueries();
     const noPermitSource: DataQueries = {
       ...queries,
@@ -688,7 +688,7 @@ describe("runTool", () => {
       "No permit source is listed in the run's sources: the permits are listed without a citation.",
     ]);
   });
-  test("§17 A2: resolve_place serves every center at 5 decimals, the precision its note states", async () => {
+  test("resolve_place serves every center at 5 decimals, the precision its note states", async () => {
     const { queries } = fakeQueries();
     // A data layer with 6-decimal centers (the smoke run's Pasadena center, 34.152795, -118.135784).
     const sixDecimals: DataQueries = {
@@ -796,7 +796,7 @@ describe("runTool", () => {
       ],
     });
   });
-  test("run_summary: each source once with its URLs, terms, license, attribution, page count and window (§15.2)", async () => {
+  test("run_summary: each source once with its URLs, terms, license, attribution, page count and window", async () => {
     const { queries } = fakeQueries();
     const o = await runTool("run_summary", {}, queries);
     const sources = (o.content as { sources: Array<Record<string, unknown>> })
@@ -863,7 +863,7 @@ describe("description guard", () => {
   });
 });
 
-describe("search_aged_roofs: the ownership filter (P19)", () => {
+describe("search_aged_roofs: the ownership filter", () => {
   const VN = { lat: 34.199, lon: -118.487 };
   const searchInput = (calls: Array<{ fn: string; input: unknown }>) =>
     calls.find((c) => c.fn === "parcels.search")!.input as Record<
@@ -1003,7 +1003,7 @@ describe("search_aged_roofs: the ownership filter (P19)", () => {
   });
 });
 
-describe("parcel_permits: the contractor identity (P19)", () => {
+describe("parcel_permits: the contractor identity", () => {
   test("key, canonical name and variant count as served; the permit count and any variant list are not passed on", async () => {
     const { queries } = fakeQueries();
     const o = await runTool(
@@ -1077,7 +1077,7 @@ describe("parcel_permits: the contractor identity (P19)", () => {
   });
 });
 
-describe("long_open_permits: with_contractor_window (approvals §3e.83.1)", () => {
+describe("long_open_permits: with_contractor_window", () => {
   const at = { lat: 34.2, lon: -118.45, radius_miles: 5 };
   type Lists = {
     contractor_window: Record<string, unknown>;
@@ -1295,7 +1295,7 @@ describe("long_open_permits: with_contractor_window (approvals §3e.83.1)", () =
   });
 });
 
-describe("long_open_permits: the contractor of every within-window item (approvals §3e.94 item 1)", () => {
+describe("long_open_permits: the contractor of every within-window item", () => {
   const at = { lat: 34.2, lon: -118.45, radius_miles: 5 };
   const [P0, P1, P2] = FAKE_PARCELS as [string, string, string];
   const OTHER = "16010-10000-00009";
@@ -1570,7 +1570,7 @@ describe("long_open_permits: the contractor of every within-window item (approva
   });
 });
 
-describe("search_aged_roofs: long_open_permit (approvals §3e.94 item 2)", () => {
+describe("search_aged_roofs: long_open_permit", () => {
   const VN = { lat: 34.2, lon: -118.45, radius_miles: 1, threshold_years: 15 };
   type Stated = {
     count: number;

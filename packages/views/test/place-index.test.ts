@@ -248,7 +248,7 @@ describe("PlaceIndex.resolve", () => {
       expect(s.note).toMatch(/too spread out/);
     }
   });
-  test("§17 A2: the median center is served at 5 decimals, the digits the note states (toFixed(5))", async () => {
+  test("the median center is served at 5 decimals, the digits the note states (toFixed(5))", async () => {
     // Two parcels whose median is 34.152795, -118.135784 (the smoke run's Pasadena center, 6 decimals).
     const r = await new PlaceIndex(
       fakeDb([
