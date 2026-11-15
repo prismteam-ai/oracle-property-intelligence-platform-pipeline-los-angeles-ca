@@ -455,6 +455,48 @@ describe("Ask the agent: sending and statuses", () => {
       center: { lat: 34.2, lon: -118.45, label: "coordinates entered" },
     });
   });
+
+  test.each([
+    ["Latitude", "34.20155", { lat: 34.20155, lon: -118.45 }],
+    ["Longitude", "-118.45361", { lat: 34.2, lon: -118.45361 }],
+  ] as const)(
+    "%s: cleared and retyped, it shows what was typed and the question sends it",
+    async (name, typed, sent) => {
+      agent.answerWith(ANSWERED);
+      await openWarm();
+      const lat = screen.getByRole("textbox", { name: "Latitude" });
+      const lon = screen.getByRole("textbox", { name: "Longitude" });
+      fireEvent.change(lat, { target: { value: "34.2" } });
+      fireEvent.change(lon, { target: { value: "-118.45" } });
+      const el = (name === "Latitude" ? lat : lon) as HTMLInputElement;
+      fireEvent.change(el, { target: { value: "" } });
+      expect(el.value).toBe("");
+      fireEvent.change(el, { target: { value: el.value + typed } });
+      expect(el.value).toBe(typed);
+      await ask("Roofs older than 20 years within 2 miles?");
+      expect(agent.answerRequests()[0]!.body).toMatchObject({
+        center: { ...sent, label: "coordinates entered" },
+      });
+    },
+  );
+
+  test("a centre field that is not a plain number in range is refused in the panel; nothing is sent", async () => {
+    await openWarm();
+    const lat = screen.getByRole("textbox", { name: "Latitude" });
+    const lon = screen.getByRole("textbox", { name: "Longitude" });
+    for (const [la, lo, message] of [
+      ["1e1", "-118.45", "Latitude must be a number from -90 to 90."],
+      ["91", "-118.45", "Latitude must be a number from -90 to 90."],
+      ["34.2", "0x10", "Longitude must be a number from -180 to 180."],
+      ["34.2", "-118,45", "Longitude must be a number from -180 to 180."],
+    ] as const) {
+      fireEvent.change(lat, { target: { value: la } });
+      fireEvent.change(lon, { target: { value: lo } });
+      await ask("Roofs older than 20 years within 2 miles?");
+      expect(screen.getByTestId("agent-message").textContent).toBe(message);
+    }
+    expect(agent.answerRequests()).toHaveLength(0);
+  });
 });
 
 describe("Ask the agent: conversation", () => {

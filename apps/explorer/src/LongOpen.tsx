@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type ChangeEvent, type FormEvent } from "react";
 import type {
   ApiClient,
   DEFAULT_MIN_OPEN_DAYS,
@@ -7,12 +7,36 @@ import type {
   ParcelPermits,
 } from "@oracle-la/api-client";
 import { basisLabel } from "./basis.ts";
+import {
+  inputValue,
+  LAT,
+  LON,
+  MAX_DAYS,
+  RADIUS,
+  readAll,
+  readNumber,
+  readOptional,
+  typed,
+  type NumberRule,
+} from "./numeric.ts";
 import { contractorNote, retrieved, type LoadSources } from "./sources.ts";
 import { useQuery } from "./useQuery.ts";
 
 /** The API's default minimum (5 years x 365.25, rounded); typed so a different API default fails the typecheck. */
 export const DEFAULT_MIN_DAYS: typeof DEFAULT_MIN_OPEN_DAYS = 1826;
 const PAGE = 50;
+const MIN_DAYS_RULE: NumberRule = {
+  label: "Open at least (days)",
+  min: 0,
+  max: MAX_DAYS,
+  whole: true,
+};
+const MAX_DAYS_RULE: NumberRule = {
+  label: "Open at most (days, optional)",
+  min: 0,
+  max: MAX_DAYS,
+  whole: true,
+};
 
 /** forParcel results by parcel ID: fetched when a row of that parcel is first expanded, then kept. */
 type ParcelState = { data?: ParcelPermits; error?: string };
@@ -30,11 +54,12 @@ export function LongOpen({
   api: ApiClient;
   loadSources: LoadSources;
 }) {
+  // The fields' text as typed; read only when the search runs.
   const [form, setForm] = useState({
-    lat: 34.199,
-    lon: -118.487,
-    radius_miles: 5,
-    min_open_days: DEFAULT_MIN_DAYS as number,
+    lat: "34.199",
+    lon: "-118.487",
+    radius_miles: "5",
+    min_open_days: String(DEFAULT_MIN_DAYS),
     max_open_days: "",
     sort: "open_days" as "open_days" | "distance",
   });
@@ -53,16 +78,26 @@ export function LongOpen({
 
   const run = async (off: number) => {
     setError(undefined);
+    const read = readAll({
+      lat: readNumber(form.lat, LAT),
+      lon: readNumber(form.lon, LON),
+      radius_miles: readNumber(form.radius_miles, RADIUS),
+      min_open_days: readNumber(form.min_open_days, MIN_DAYS_RULE),
+      max_open_days: readOptional(form.max_open_days, MAX_DAYS_RULE),
+    });
+    // An empty or invalid field: a plain message, nothing sent.
+    if ("error" in read) return setError(read.error);
+    const { max_open_days: max, ...rest } = read.values;
+    if (max !== undefined && max < rest.min_open_days)
+      return setError(
+        `Open at most (${max.toLocaleString("en-US")} days) is below open at least (${rest.min_open_days.toLocaleString("en-US")} days): set a larger maximum or clear it.`,
+      );
     try {
-      const max = form.max_open_days.trim();
       setRes(
         await api.permits.longOpen.query({
-          lat: form.lat,
-          lon: form.lon,
-          radius_miles: form.radius_miles,
-          min_open_days: form.min_open_days,
+          ...rest,
           // Sent only when set: no maximum by default.
-          ...(max === "" ? {} : { max_open_days: Number(max) }),
+          ...(max === undefined ? {} : { max_open_days: max }),
           sort: form.sort,
           offset: off,
           limit: PAGE,
@@ -93,20 +128,27 @@ export function LongOpen({
     }
   };
   const num =
-    (k: "lat" | "lon" | "radius_miles" | "min_open_days") =>
-    (e: { target: { value: string } }) =>
-      setForm((f) => ({ ...f, [k]: Number(e.target.value) }));
+    (k: "lat" | "lon" | "radius_miles" | "min_open_days" | "max_open_days") =>
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const v = typed(e);
+      setForm((f) => ({ ...f, [k]: v }));
+    };
 
   return (
     <section>
       <h2>Long-open roofing permits within a radius</h2>
-      <form className="inline" onSubmit={submit} data-testid="long-open-form">
+      <form
+        className="inline"
+        onSubmit={submit}
+        noValidate
+        data-testid="long-open-form"
+      >
         <label>
           Latitude
           <input
             name="lat"
-            type="number"
-            step="any"
+            inputMode="decimal"
+            autoComplete="off"
             value={form.lat}
             onChange={num("lat")}
           />
@@ -115,8 +157,8 @@ export function LongOpen({
           Longitude
           <input
             name="lon"
-            type="number"
-            step="any"
+            inputMode="decimal"
+            autoComplete="off"
             value={form.lon}
             onChange={num("lon")}
           />
@@ -126,10 +168,11 @@ export function LongOpen({
           <input
             name="radius"
             type="number"
-            step="any"
-            min={0.1}
+            // Whole miles on the arrows (from 1); a decimal from 0.1 can be typed.
+            step={1}
+            min={1}
             max={10}
-            value={form.radius_miles}
+            value={inputValue(form.radius_miles)}
             onChange={num("radius_miles")}
           />
         </label>
@@ -138,8 +181,10 @@ export function LongOpen({
           <input
             name="min_open_days"
             type="number"
+            step={1}
             min={0}
-            value={form.min_open_days}
+            max={MAX_DAYS}
+            value={inputValue(form.min_open_days)}
             onChange={num("min_open_days")}
           />
         </label>
@@ -148,11 +193,11 @@ export function LongOpen({
           <input
             name="max_open_days"
             type="number"
+            step={1}
             min={0}
-            value={form.max_open_days}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, max_open_days: e.target.value }))
-            }
+            max={MAX_DAYS}
+            value={inputValue(form.max_open_days)}
+            onChange={num("max_open_days")}
           />
         </label>
         <label>
@@ -189,7 +234,11 @@ export function LongOpen({
           "Loading source…"
         )}
       </p>
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <p className="error" data-testid="long-open-error" role="alert">
+          {error}
+        </p>
+      )}
       {res && (
         <>
           <p className="note" data-testid="long-open-rule">

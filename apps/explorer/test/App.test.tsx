@@ -976,21 +976,25 @@ describe("Explorer sources, records and long-open permits", () => {
       max_open_days: 7305,
       sort: "distance",
     });
+    // A maximum below the minimum is stopped in the form (NumberFields.test.tsx); a refusal of a valid window
+    // by the API is shown as the API words it.
     h.longOpen
       .mockReset()
-      .mockRejectedValue(
-        new Error("max_open_days must not be below min_open_days"),
-      );
+      .mockRejectedValue(new Error("max_open_days is out of range"));
     fireEvent.change(
       screen.getByRole("spinbutton", { name: "Open at most (days, optional)" }),
-      { target: { value: "10" } },
+      { target: { value: "36525" } },
     );
     fireEvent.click(
       screen.getByRole("button", { name: "Find long-open permits" }),
     );
     expect(
-      await screen.findByText("max_open_days must not be below min_open_days"),
+      await screen.findByText("max_open_days is out of range"),
     ).toBeTruthy();
+    expect(h.longOpen.mock.calls[0]![0]).toMatchObject({
+      min_open_days: 3652,
+      max_open_days: 36525,
+    });
   });
 
   test("permits, the agent and MCP are no longer placeholders; the remaining placeholders are disabled", async () => {

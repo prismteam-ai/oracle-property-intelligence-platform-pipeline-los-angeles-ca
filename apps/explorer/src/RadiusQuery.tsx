@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type ChangeEvent, type FormEvent } from "react";
 import type {
   ApiClient,
   OwnershipBasis,
@@ -11,14 +11,32 @@ import {
   OWNERSHIP_TEXTS,
   PROXY_NOTE,
 } from "./ownership.ts";
+import {
+  inputValue,
+  LAT,
+  LON,
+  RADIUS,
+  readAll,
+  readNumber,
+  typed,
+  type NumberRule,
+} from "./numeric.ts";
+
+const THRESHOLD: NumberRule = {
+  label: "Roof older than (years)",
+  min: 1,
+  max: 120,
+  whole: true,
+};
 
 /** Radius + roof-age query as form and table (no map in the Explorer; the CRM owns the map). */
 export function RadiusQuery({ api }: { api: ApiClient }) {
+  // The fields' text as typed; read only when the search runs.
   const [form, setForm] = useState({
-    lat: 34.199,
-    lon: -118.487,
-    radius_miles: 5,
-    threshold_years: 15,
+    lat: "34.199",
+    lon: "-118.487",
+    radius_miles: "5",
+    threshold_years: "15",
   });
   // The ownership filter: off by default; turned on, "both" is preselected.
   const [ownership, setOwnership] = useState<{
@@ -30,10 +48,18 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
   const [error, setError] = useState<string>();
   const run = async (off: number) => {
     setError(undefined);
+    const read = readAll({
+      lat: readNumber(form.lat, LAT),
+      lon: readNumber(form.lon, LON),
+      radius_miles: readNumber(form.radius_miles, RADIUS),
+      threshold_years: readNumber(form.threshold_years, THRESHOLD),
+    });
+    // An empty or invalid field: a plain message, nothing sent.
+    if ("error" in read) return setError(read.error);
     try {
       setRes(
         await api.parcels.search.query({
-          ...form,
+          ...read.values,
           // Sent only when the filter is on: no ownership filter by default.
           ...(ownership.on ? { ownership_basis: ownership.basis } : {}),
           offset: off,
@@ -49,18 +75,25 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
     e.preventDefault();
     void run(0);
   };
-  const num = (k: keyof typeof form) => (e: { target: { value: string } }) =>
-    setForm((f) => ({ ...f, [k]: Number(e.target.value) }));
+  const num = (k: keyof typeof form) => (e: ChangeEvent<HTMLInputElement>) => {
+    const v = typed(e);
+    setForm((f) => ({ ...f, [k]: v }));
+  };
   return (
     <section>
       <h2>Properties within a radius with roofs older than a threshold</h2>
-      <form className="inline" onSubmit={submit} data-testid="radius-form">
+      <form
+        className="inline"
+        onSubmit={submit}
+        noValidate
+        data-testid="radius-form"
+      >
         <label>
           Latitude
           <input
             name="lat"
-            type="number"
-            step="any"
+            inputMode="decimal"
+            autoComplete="off"
             value={form.lat}
             onChange={num("lat")}
           />
@@ -69,8 +102,8 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
           Longitude
           <input
             name="lon"
-            type="number"
-            step="any"
+            inputMode="decimal"
+            autoComplete="off"
             value={form.lon}
             onChange={num("lon")}
           />
@@ -80,10 +113,11 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
           <input
             name="radius"
             type="number"
-            step="any"
-            min={0.1}
+            // Whole miles on the arrows (from 1); a decimal from 0.1 can be typed.
+            step={1}
+            min={1}
             max={10}
-            value={form.radius_miles}
+            value={inputValue(form.radius_miles)}
             onChange={num("radius_miles")}
           />
         </label>
@@ -92,9 +126,10 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
           <input
             name="threshold"
             type="number"
+            step={1}
             min={1}
             max={120}
-            value={form.threshold_years}
+            value={inputValue(form.threshold_years)}
             onChange={num("threshold_years")}
           />
         </label>
@@ -140,7 +175,11 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
           </>
         )}
       </fieldset>
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <p className="error" data-testid="radius-error" role="alert">
+          {error}
+        </p>
+      )}
       {res && (
         <>
           <p className="note" data-testid="rule">

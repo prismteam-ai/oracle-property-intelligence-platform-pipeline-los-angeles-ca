@@ -9,6 +9,7 @@ import {
   type Conversation,
 } from "./agent-api.ts";
 import { AgentAnswerView } from "./AgentAnswer.tsx";
+import { readNumber } from "./numeric.ts";
 import { createWarmup, HOLD_MAX_MS, type Warmup } from "./warmup.ts";
 
 /** Hosting plan revision 2 §1: the notice under the question box. */
@@ -28,15 +29,15 @@ export function centerFrom(
   lon: string,
 ): { center?: AgentCenter; error?: string } {
   if (!lat.trim() && !lon.trim()) return {};
-  const la = Number(lat),
-    lo = Number(lon);
   if (!lat.trim() || !lon.trim())
     return { error: "Enter both latitude and longitude, or neither." };
-  if (!Number.isFinite(la) || la < -90 || la > 90)
-    return { error: "Latitude must be a number from -90 to 90." };
-  if (!Number.isFinite(lo) || lo < -180 || lo > 180)
-    return { error: "Longitude must be a number from -180 to 180." };
-  return { center: { lat: la, lon: lo, label: "coordinates entered" } };
+  const la = readNumber(lat, { label: "Latitude", min: -90, max: 90 });
+  if ("error" in la) return la;
+  const lo = readNumber(lon, { label: "Longitude", min: -180, max: 180 });
+  if ("error" in lo) return lo;
+  return {
+    center: { lat: la.value, lon: lo.value, label: "coordinates entered" },
+  };
 }
 
 /**
@@ -179,6 +180,7 @@ export function AskAgent({
             <input
               name="center-lat"
               inputMode="decimal"
+              autoComplete="off"
               value={lat}
               onChange={(e) => setLat(e.target.value)}
             />
@@ -188,6 +190,7 @@ export function AskAgent({
             <input
               name="center-lon"
               inputMode="decimal"
+              autoComplete="off"
               value={lon}
               onChange={(e) => setLon(e.target.value)}
             />

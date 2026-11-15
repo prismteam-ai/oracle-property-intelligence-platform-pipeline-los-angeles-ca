@@ -3,6 +3,7 @@ import {
   request,
   test,
   type BrowserContext,
+  type Locator,
   type Page,
 } from "@playwright/test";
 import type {
@@ -52,6 +53,35 @@ const contractorNoteText = (s: SourceRow) =>
     : "");
 /** A cell as the Explorer prints a nullable value. */
 const cell = (v: unknown) => (v === null || v === undefined ? "—" : String(v));
+
+/**
+ * The inputs of the GET requests to a data API procedure, in order (batched calls included: the path lists the
+ * procedures and the input is keyed by position).
+ */
+const trpcInputs = (page: Page, proc: string) => {
+  const inputs: Array<Record<string, unknown>> = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (r.method() !== "GET" || !u.pathname.startsWith("/trpc/")) return;
+    const i = u.pathname.slice("/trpc/".length).split(",").indexOf(proc);
+    if (i < 0) return;
+    const input = JSON.parse(u.searchParams.get("input") ?? "{}");
+    inputs.push(u.searchParams.has("batch") ? input[i] : input);
+  });
+  return inputs;
+};
+/**
+ * Empties a field with the keyboard (it must stay empty), then types the text key by key (it must show exactly
+ * that: before, a cleared number field showed 0 again and "5" came out as "05").
+ */
+const retype = async (field: Locator, text: string) => {
+  await field.click();
+  await field.press("ControlOrMeta+a");
+  await field.press("Backspace");
+  await expect(field).toHaveValue("");
+  await field.pressSequentially(text);
+  await expect(field).toHaveValue(text);
+};
 
 // Serial by default (a failure stops the run); PW_SERIAL=0 runs tests independently (each loads its own config).
 test.describe.configure({
@@ -150,6 +180,24 @@ test.describe("with credentials", () => {
       fmt(summary.run.row_counts.parquet),
     );
     expect(errors).toEqual([]);
+  });
+
+  test("3b. the site's own favicon: /favicon.ico (16 and 32 px) and /favicon.svg are served and linked", async ({
+    page,
+  }) => {
+    const ico = await page.request.get("/favicon.ico");
+    expect(ico.status()).toBe(200);
+    const b = await ico.body();
+    expect([...b.subarray(0, 6)]).toEqual([0, 0, 1, 0, 2, 0]); // an icon with two images
+    const svg = await page.request.get("/favicon.svg");
+    expect(svg.status()).toBe(200);
+    expect(await svg.text()).toMatch(/^<svg /);
+    await page.goto("/");
+    expect(
+      await page
+        .locator('link[rel="icon"]')
+        .evaluateAll((ls) => ls.map((l) => l.getAttribute("href"))),
+    ).toEqual(["/favicon.ico", "/favicon.svg"]);
   });
 
   test("4. API: no header 401, wrong token 403, right token 200", async () => {
@@ -540,6 +588,76 @@ test.describe("with credentials", () => {
     await expect(page.getByTestId("ownership-weakness")).toHaveText(weaknesses);
   });
 
+  test("7b. radius form fields are text entries: each can be emptied and retyped; an empty or invalid field gives a message and sends nothing; the search sends what was typed and the count equals the API", async ({
+    page,
+  }) => {
+    const sent = trpcInputs(page, "parcels.search");
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Radius query" }).click();
+    const search = page.getByRole("button", { name: "Search" });
+    const error = page.getByTestId("radius-error");
+    const lat = page.getByRole("textbox", { name: "Latitude" });
+    const lon = page.getByRole("textbox", { name: "Longitude" });
+    const radius = page.getByRole("spinbutton", { name: "Radius (miles)" });
+    const years = page.getByRole("spinbutton", {
+      name: "Roof older than (years)",
+    });
+    // Each field emptied: a plain message on Search, nothing sent.
+    for (const [field, message] of [
+      [lat, "Latitude is empty"],
+      [lon, "Longitude is empty"],
+      [radius, "Radius (miles) is empty"],
+      [years, "Roof older than (years) is empty"],
+    ] as const) {
+      const before = await field.inputValue();
+      await retype(field, "");
+      await search.click();
+      await expect(error).toContainText(message);
+      await field.fill(before);
+    }
+    // Text the browser cannot read as a number (it shows it, but reports no value), and a value out of
+    // range: a message, nothing sent.
+    await retype(radius, "");
+    await radius.pressSequentially("1e");
+    await search.click();
+    await expect(error).toHaveText(
+      "Radius (miles) must be a number from 0.1 to 10.",
+    );
+    await retype(years, "200");
+    await search.click();
+    await expect(error).toContainText(
+      "Roof older than (years) must be a whole number from 1 to 120.",
+    );
+    expect(sent).toEqual([]);
+    // Retyped: exactly what was typed is shown and sent.
+    const typed = {
+      lat: 34.20155,
+      lon: -118.45361,
+      radius_miles: 1,
+      threshold_years: 20,
+    };
+    await retype(lat, "34.20155");
+    await retype(lon, "-118.45361");
+    await retype(radius, "1");
+    await retype(years, "20");
+    const expected = await apiGet("parcels.search", typed);
+    await search.click();
+    await expect(page.getByTestId("radius-count")).toHaveText(
+      fmt(expected.count),
+    );
+    await expect(error).toHaveCount(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ ...typed, offset: 0 });
+    // The arrows step whole miles (from a typed decimal too) and whole years.
+    await radius.press("ArrowUp");
+    await expect(radius).toHaveValue("2");
+    await retype(radius, "0.5");
+    await radius.press("ArrowUp");
+    await expect(radius).toHaveValue("1");
+    await years.press("ArrowDown");
+    await expect(years).toHaveValue("19");
+  });
+
   test("8. future features are disabled placeholders", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("tab", { name: "Coming next" }).click();
@@ -693,6 +811,62 @@ test.describe("with credentials", () => {
     shown.push(await firstRowContractors(changed.items[0]));
     expect(Math.max(...shown)).toBeGreaterThan(0);
   });
+
+  test("9b. long-open form fields are text entries, including the maximum-days field: emptied and retyped, the search sends what was typed and the count equals the API; an empty minimum or a maximum below it sends nothing", async ({
+    page,
+  }) => {
+    const sent = trpcInputs(page, "permits.longOpen");
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Long-open permits" }).click();
+    const find = page.getByRole("button", { name: "Find long-open permits" });
+    const error = page.getByTestId("long-open-error");
+    const min = page.getByRole("spinbutton", { name: "Open at least (days)" });
+    const max = page.getByRole("spinbutton", {
+      name: "Open at most (days, optional)",
+    });
+    await expect(max).toHaveValue("");
+    await retype(min, "");
+    await find.click();
+    await expect(error).toHaveText(
+      "Open at least (days) is empty: enter a whole number from 0 to 36,525.",
+    );
+    await retype(min, "3000");
+    await retype(max, "100");
+    await find.click();
+    await expect(error).toHaveText(
+      "Open at most (100 days) is below open at least (3,000 days): set a larger maximum or clear it.",
+    );
+    expect(sent).toEqual([]);
+    for (const [name, text] of [
+      ["Latitude", "34.20155"],
+      ["Longitude", "-118.45361"],
+    ] as const)
+      await retype(page.getByRole("textbox", { name }), text);
+    await retype(page.getByRole("spinbutton", { name: "Radius (miles)" }), "2");
+    await retype(max, "5000");
+    const typed = {
+      lat: 34.20155,
+      lon: -118.45361,
+      radius_miles: 2,
+      min_open_days: 3000,
+      max_open_days: 5000,
+    };
+    const expected = await apiGet("permits.longOpen", typed);
+    await find.click();
+    await expect(page.getByTestId("long-open-count")).toHaveText(
+      fmt(expected.count),
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject(typed);
+    // The maximum emptied again: no maximum is sent.
+    await retype(max, "");
+    await find.click();
+    await expect.poll(() => sent.length).toBe(2);
+    expect("max_open_days" in sent[1]!).toBe(false);
+    // The arrows step whole days.
+    await min.press("ArrowUp");
+    await expect(min).toHaveValue("3001");
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -839,6 +1013,36 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
     await expect(page.getByRole("textbox", { name: /question/i })).toHaveValue(
       "",
     );
+  });
+
+  test("11b. the centre fields are text entries: emptied and retyped, the question sends what was typed; an invalid centre is refused in the panel and nothing is sent", async ({
+    page,
+  }) => {
+    const bodies = await mockAnswers(page, [ANSWERED]);
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Ask the agent" }).click();
+    const lat = page.getByRole("textbox", { name: "Latitude" });
+    const lon = page.getByRole("textbox", { name: "Longitude" });
+    await retype(lat, "34.2");
+    await retype(lon, "1e2");
+    await ask(page, QUESTION_1);
+    await expect(page.getByTestId("agent-message")).toHaveText(
+      "Longitude must be a number from -180 to 180.",
+    );
+    expect(bodies).toEqual([]);
+    await retype(lat, "34.20155");
+    await retype(lon, "-118.45361");
+    await ask(page, QUESTION_1);
+    await expect(page.getByTestId("agent-answer")).toHaveAttribute(
+      "data-status",
+      "answered",
+    );
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]!.center).toEqual({
+      lat: 34.20155,
+      lon: -118.45361,
+      label: "coordinates entered",
+    });
   });
 
   test("12. a refused reply is a normal message with its gaps; a stopped reply is a plain message and keeps the question", async ({
