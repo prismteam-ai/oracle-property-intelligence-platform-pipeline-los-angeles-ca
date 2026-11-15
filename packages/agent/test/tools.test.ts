@@ -9,6 +9,7 @@ import { ownershipRuleLine } from "../src/ownership.ts";
 import { basisWord, onceSources, type DataQueries } from "../src/permit-api.ts";
 import { dropDescriptions } from "../src/policy.ts";
 import {
+  CANONICAL_NAME_NOTE,
   CONTRACTOR_READS_MS,
   TOOL_NAMES,
   anthropicTools,
@@ -26,7 +27,9 @@ import {
   FAKE_PARCELS,
   FAKE_PERMITS,
   FAKE_SOURCES,
+  MIXED_CENTER,
   OWNERSHIP_COUNT,
+  PASADENA_RESOLVED,
   PERMIT_RETRIEVED,
   ROOF_AGE_BASIS,
   SECRET_DESCRIPTION,
@@ -414,9 +417,15 @@ describe("runTool", () => {
       "roof_age_basis_label",
       "roof_year_permit_number",
       "permits",
+      "canonical_name_note",
       "bbb",
       "sources",
     ]);
+    // What the canonical name is, once: the latest name on the license's permits, not a registration.
+    expect(c.canonical_name_note).toBe(CANONICAL_NAME_NOTE);
+    expect(c.canonical_name_note).toBe(
+      "canonical_business_name is the latest business name on the license's LADBS permits, not a registered or legal name of the license.",
+    );
     expect(c).toMatchObject({
       parcel_id: "1000000001",
       permit_data_available: true,
@@ -1390,6 +1399,7 @@ describe("long_open_permits: the contractor of every within-window item (approva
   type Within = {
     contractor_source: unknown;
     contractors: string;
+    canonical_name_note: string;
     items: Array<Record<string, unknown>>;
   };
   const withinOf = (o: { content: unknown }) =>
@@ -1407,6 +1417,7 @@ describe("long_open_permits: the contractor of every within-window item (approva
     expect(o.ok).toBe(true);
     expect(reads).toEqual([P0, P2, P1]);
     const w = withinOf(o);
+    expect(w.canonical_name_note).toBe(CANONICAL_NAME_NOTE);
     expect(
       w.items.map((it) => [it.permit_number, it.contractor_status]),
     ).toEqual([
@@ -1591,12 +1602,28 @@ describe("search_aged_roofs: long_open_permit (approvals §3e.94 item 2)", () =>
     });
   });
 
-  test("off: no parcels.points call and no long_open_permit in the result", async () => {
+  test("off: parcels.points with the same filter, in flight with the search, for permit data only; no long_open_permit in the result", async () => {
     const { queries, calls } = fakeQueries();
     const o = await runTool("search_aged_roofs", VN, queries);
-    expect(calls.map((c) => c.fn)).not.toContain("parcels.points");
+    expect(calls.slice(0, 2)).toEqual([
+      { fn: "parcels.search", input: { ...VN, offset: 0, limit: 10 } },
+      { fn: "parcels.points", input: { ...VN, min_open_days: 1826 } },
+    ]);
     expect(o.content).not.toHaveProperty("long_open_permit");
-    expect(o.fact).toMatchObject({ long_open: null });
+    // Every matching parcel checked has permit data: nothing added.
+    expect(o.content).not.toHaveProperty("permit_data");
+    expect(o.gaps.some((g) => g.includes("City of Los Angeles"))).toBe(false);
+    expect(o.fact).toMatchObject({
+      long_open: null,
+      count: 42,
+      matched: 42,
+      matched_permit_data: {
+        checked: 3,
+        with_permit_data: 3,
+        without_permit_data: 0,
+        complete: false,
+      },
+    });
   });
 
   test("on: the search (count and rule) and parcels.points with the same filter, then the marked parcels nearest first; the count is of parcels, not permits", async () => {
@@ -1619,9 +1646,11 @@ describe("search_aged_roofs: long_open_permit (approvals §3e.94 item 2)", () =>
     expect(c.items.map((it) => it.parcel_id)).toEqual(FAKE_LONG_OPEN);
     expect(c.long_open_permit).toEqual({
       unit: "parcels",
+      status: "available",
       count: 2,
       of: 3,
       checked: 3,
+      with_permit_data: 3,
       complete: true,
       min_open_days: 1826,
       text: "2 of the 3 parcels that match the roof-age rule have a long-open roofing permit (an issued LADBS roofing-work permit still open at least 1,826 days). This counts parcels, not permits: a parcel with several long-open permits counts once, and a building-level (condominium) permit marks every unit it links.",
@@ -1730,5 +1759,281 @@ describe("search_aged_roofs: long_open_permit (approvals §3e.94 item 2)", () =>
       error:
         "the data API's parcels.points counted 41 parcels and its search 42",
     });
+  });
+});
+
+describe("search_aged_roofs: permit data of the matching parcels (the City of Los Angeles only)", () => {
+  const filter = { radius_miles: 1, threshold_years: 20 };
+  const PASADENA = { ...PASADENA_RESOLVED, ...filter };
+  const MIXED = { ...MIXED_CENTER, ...filter };
+  type Stated = {
+    count: number | null;
+    returned: number;
+    truncated: boolean;
+    long_open_permit?: Record<string, unknown>;
+    permit_data?: Record<string, unknown>;
+    items: Array<Record<string, unknown>>;
+  };
+  /** The fake with every parcel drawn: the search counts the three parcels points draws. */
+  function complete(base: DataQueries): DataQueries {
+    return {
+      ...base,
+      parcels: {
+        detail: base.parcels.detail,
+        search: async (i) => ({ ...(await base.parcels.search(i)), count: 3 }),
+        points: async (i) => ({
+          ...(await base.parcels.points(i)),
+          count: 3,
+          truncated: false,
+        }),
+      },
+    };
+  }
+  const NOT_AVAILABLE =
+    "Not available: none of the 3 parcels that match the roof-age rule has permit data (all are outside the City of Los Angeles), so whether they have a long-open roofing permit (an issued LADBS roofing-work permit still open at least 1,826 days) is unknown, not 0; the filter can't be evaluated there.";
+
+  test("all outside, long_open_permit: not available (count null, never 0), nothing listed, the outside statement in the result and its gaps", async () => {
+    const { queries, calls } = fakeQueries();
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...PASADENA, limit: 10, long_open_permit: true },
+      complete(queries),
+    );
+    expect(o.ok).toBe(true);
+    const c = o.content as Stated;
+    expect(c.count).toBeNull();
+    expect(c.returned).toBe(0);
+    expect(c.items).toEqual([]);
+    expect(c.truncated).toBe(false);
+    expect(c.long_open_permit).toEqual({
+      unit: "parcels",
+      status: "not_available",
+      count: null,
+      of: 3,
+      checked: 3,
+      with_permit_data: 0,
+      complete: true,
+      min_open_days: 1826,
+      text: NOT_AVAILABLE,
+    });
+    expect(c.permit_data).toEqual({
+      checked: 3,
+      without_permit_data: 3,
+      complete: true,
+      text: "All 3 parcels that match the roof-age rule are outside the City of Los Angeles: no permit data there.",
+    });
+    // The not-available text is the gap; it names no place (the agent adds the place's gap).
+    expect(o.gaps).toEqual([NOT_AVAILABLE]);
+    expect(calls.map((x) => x.fn)).not.toContain("parcels.detail");
+    expect(o.fact).toMatchObject({
+      count: null,
+      matched: 3,
+      returned: 0,
+      matched_permit_data: {
+        checked: 3,
+        with_permit_data: 0,
+        without_permit_data: 3,
+        complete: true,
+      },
+      long_open: { count: null, of: 3, complete: true },
+    });
+  });
+
+  test("all outside among the nearest checked (truncated points): not available among those, stated as such", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...PASADENA, long_open_permit: true },
+      queries,
+    );
+    const c = o.content as Stated;
+    expect(c.count).toBeNull();
+    expect(c.long_open_permit).toMatchObject({
+      status: "not_available",
+      count: null,
+      of: 42,
+      checked: 3,
+      complete: false,
+    });
+    expect(String(c.long_open_permit!.text)).toBe(
+      "Not available: none of the nearest 3 of the 42 parcels that match the roof-age rule has permit data (all are outside the City of Los Angeles; only those were checked: the data API marks at most 3 parcels), so whether they have a long-open roofing permit (an issued LADBS roofing-work permit still open at least 1,826 days) is unknown, not 0; the filter can't be evaluated there. A smaller radius gives a full check.",
+    );
+    expect(o.gaps).toEqual([c.long_open_permit!.text]);
+  });
+
+  test("mixed, long_open_permit: the count is of the parcels with permit data, and how many have none is stated", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...MIXED, long_open_permit: true },
+      complete(queries),
+    );
+    const c = o.content as Stated;
+    expect(c.count).toBe(1);
+    expect(c.items.map((it) => it.parcel_id)).toEqual([FAKE_PARCELS[0]]);
+    expect(c.long_open_permit).toMatchObject({
+      status: "available",
+      count: 1,
+      of: 3,
+      checked: 3,
+      with_permit_data: 2,
+      complete: true,
+      text: "1 of the 2 parcels that match the roof-age rule and have permit data have a long-open roofing permit (an issued LADBS roofing-work permit still open at least 1,826 days). The other 1 of the 3 are outside the City of Los Angeles (no permit data there): whether they have one is unknown. This counts parcels, not permits: a parcel with several long-open permits counts once, and a building-level (condominium) permit marks every unit it links.",
+    });
+    const outside =
+      "1 of the 3 parcels that match the roof-age rule are outside the City of Los Angeles: no permit data there.";
+    expect(c.permit_data).toMatchObject({
+      without_permit_data: 1,
+      text: outside,
+    });
+    expect(o.gaps).toContain(outside);
+    expect(o.fact).toMatchObject({
+      count: 1,
+      matched_permit_data: { with_permit_data: 2, without_permit_data: 1 },
+    });
+  });
+
+  test("a long-open mark on a parcel without permit data is not counted", async () => {
+    const { queries } = fakeQueries();
+    const base = complete(queries);
+    const marked: DataQueries = {
+      ...base,
+      parcels: {
+        ...base.parcels,
+        points: async (i) => ({
+          ...(await base.parcels.points(i)),
+          long_open_permit: [1, 0, 1],
+        }),
+      },
+    };
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...MIXED, long_open_permit: true },
+      marked,
+    );
+    expect((o.content as Stated).count).toBe(1);
+    expect((o.content as Stated).items.map((it) => it.parcel_id)).toEqual([
+      FAKE_PARCELS[0],
+    ]);
+  });
+
+  test("all inside, long_open_permit: the count and text as before, nothing about permit data added", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool(
+      "search_aged_roofs",
+      { lat: 34.2, lon: -118.45, ...filter, long_open_permit: true },
+      complete(queries),
+    );
+    const c = o.content as Stated;
+    expect(c.count).toBe(2);
+    expect(c).not.toHaveProperty("permit_data");
+    expect(String(c.long_open_permit!.text)).toBe(
+      "2 of the 3 parcels that match the roof-age rule have a long-open roofing permit (an issued LADBS roofing-work permit still open at least 1,826 days). This counts parcels, not permits: a parcel with several long-open permits counts once, and a building-level (condominium) permit marks every unit it links.",
+    );
+    expect(o.gaps.some((g) => g.includes("City of Los Angeles"))).toBe(false);
+  });
+
+  test("without the filter: all outside and mixed are stated from the matching parcels, the listed ones unchanged", async () => {
+    const { queries } = fakeQueries();
+    const all = await runTool("search_aged_roofs", PASADENA, complete(queries));
+    expect(all.ok).toBe(true);
+    expect((all.content as Stated).count).toBe(3);
+    expect((all.content as Stated).returned).toBe(3);
+    const allText =
+      "All 3 parcels that match the roof-age rule are outside the City of Los Angeles: no permit data there.";
+    expect((all.content as Stated).permit_data).toMatchObject({
+      without_permit_data: 3,
+      text: allText,
+    });
+    expect(all.gaps).toContain(allText);
+    const mixed = await runTool("search_aged_roofs", MIXED, queries);
+    const mixedText =
+      "1 of the nearest 3 of the 42 parcels that match the roof-age rule (only those were checked: the data API marks at most 3 parcels) are outside the City of Los Angeles: no permit data there.";
+    expect((mixed.content as Stated).count).toBe(42);
+    expect((mixed.content as Stated).permit_data).toEqual({
+      checked: 3,
+      without_permit_data: 1,
+      complete: false,
+      text: mixedText,
+    });
+    expect(mixed.gaps).toContain(mixedText);
+  });
+
+  test("without the filter, a points read that fails or disagrees is a stated gap, never a failed search", async () => {
+    const { queries } = fakeQueries();
+    const failing: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async () => {
+          throw new Error("boom");
+        },
+      },
+    };
+    const o = await runTool("search_aged_roofs", PASADENA, failing);
+    expect(o.ok).toBe(true);
+    expect((o.content as Stated).count).toBe(42);
+    expect((o.content as Stated).returned).toBe(3);
+    expect(o.gaps).toContain(
+      "parcels.points failed (boom): whether the matching parcels have permit data (the City of Los Angeles) was not checked.",
+    );
+    expect(o.fact).toMatchObject({ matched_permit_data: null });
+    const otherCount: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async (i) => ({
+          ...(await queries.parcels.points(i)),
+          count: 41,
+        }),
+      },
+    };
+    const d = await runTool("search_aged_roofs", PASADENA, otherCount);
+    expect(d.ok).toBe(true);
+    expect(d.gaps).toContain(
+      "the data API's parcels.points counted 41 parcels and its search 42: whether the matching parcels have permit data (the City of Los Angeles) was not checked.",
+    );
+    const otherBasis: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async (i) => ({
+          ...(await queries.parcels.points(i)),
+          ownership: apiOwnershipRule("recording"),
+        }),
+      },
+    };
+    const b = await runTool("search_aged_roofs", PASADENA, otherBasis);
+    expect(b.ok).toBe(true);
+    expect(b.gaps).toContain(
+      "the data API parcels.points applied ownership basis recording, not none: whether the matching parcels have permit data (the City of Los Angeles) was not checked.",
+    );
+    // With the filter the same failure is an error: the filter can't be applied.
+    expect(
+      await runTool(
+        "search_aged_roofs",
+        { ...PASADENA, long_open_permit: true },
+        failing,
+      ),
+    ).toMatchObject({ ok: false, error: "boom" });
+  });
+
+  test("through the HTTP adapter: the search and points overlap, never more than 2 data calls in flight", async () => {
+    const { queries } = fakeQueries();
+    const api = fakeDataApi(queries, { delayMs: 20 });
+    const q = httpDataQueries({
+      apiUrl: FAKE_API_URL,
+      apiToken: "test-bearer-token-not-secret",
+      fetch: api.fetch,
+    });
+    const o = await runTool("search_aged_roofs", PASADENA, q);
+    expect(o.ok).toBe(true);
+    expect(
+      api.requests
+        .slice(0, 2)
+        .map((r) => r.route)
+        .sort(),
+    ).toEqual(["parcels.points", "parcels.search"]);
+    expect(api.peak()).toBe(2);
   });
 });

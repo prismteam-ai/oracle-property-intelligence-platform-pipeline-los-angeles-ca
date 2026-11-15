@@ -53,6 +53,26 @@ export const VAN_NUYS = { lat: 34.199, lon: -118.487, label: "Van Nuys" };
 export const VAN_NUYS_RESOLVED = { lat: 34.18651, lon: -118.44891 };
 /** The center the fake resolve_place returns for "Pasadena" (a jurisdiction outside the City of Los Angeles). */
 export const PASADENA_RESOLVED = { lat: 34.1478, lon: -118.1445 };
+/**
+ * A center where the fake's parcels are mixed: the first two in the City of Los Angeles (permit data), the third
+ * outside it.
+ */
+export const MIXED_CENTER = { lat: 34.145, lon: -118.18 };
+
+/**
+ * Which of the fake's three parcels have permit data at a center: none around the Pasadena center (outside the City
+ * of Los Angeles), the first two at MIXED_CENTER, all of them elsewhere.
+ */
+export function fakePermitData(input: {
+  lat: number;
+  lon: number;
+}): Array<0 | 1> {
+  const at = (c: { lat: number; lon: number }) =>
+    input.lat === c.lat && input.lon === c.lon;
+  if (at(PASADENA_RESOLVED)) return [0, 0, 0];
+  if (at(MIXED_CENTER)) return [1, 1, 0];
+  return [1, 1, 1];
+}
 /** A parcel the fake permits.forParcel serves outside the City of Los Angeles (jurisdiction PASADENA). */
 export const OUTSIDE_PARCEL = "5700000001";
 
@@ -319,11 +339,8 @@ export function fakeQueries(): {
       async search(input): Promise<SearchResult> {
         rec("parcels.search", input);
         const t = input.threshold_years ?? 15;
-        // Around the Pasadena center no parcel has permit data (outside the City of Los Angeles).
-        const covered = !(
-          input.lat === PASADENA_RESOLVED.lat &&
-          input.lon === PASADENA_RESOLVED.lon
-        );
+        // Around the Pasadena center no parcel has permit data (outside the City of Los Angeles); see fakePermitData.
+        const covered = fakePermitData(input);
         const items = FAKE_PARCELS.slice(0, input.limit ?? 50).map(
           (parcel_id, i): SearchItem => ({
             parcel_id,
@@ -334,7 +351,7 @@ export function fakeQueries(): {
             roof_age_years: 2026 - (1950 + i),
             roof_age_basis: ROOF_AGE_BASIS.proxy,
             roof_year_permit_number: null,
-            permit_data_available: covered,
+            permit_data_available: covered[i % covered.length] === 1,
             land_base_year: 1975 + i,
             distance_miles: 0.1 * (i + 1),
             latitude: input.lat,
@@ -356,8 +373,9 @@ export function fakeQueries(): {
         };
       },
       /**
-       * The search's parcels as map points, nearest first: the first and third marked long-open (FAKE_LONG_OPEN).
-       * Only the three are drawn of the search's count (42, or 17 with an ownership basis), so truncated is true.
+       * The search's parcels as map points, nearest first: the first and third marked long-open (FAKE_LONG_OPEN)
+       * where they have permit data (fakePermitData; a parcel outside the City of Los Angeles has no permits). Only
+       * the three are drawn of the search's count (42, or 17 with an ownership basis), so truncated is true.
        */
       async points(input): Promise<PointsResult> {
         rec("parcels.points", input);
@@ -370,9 +388,11 @@ export function fakeQueries(): {
           id: [...FAKE_PARCELS],
           lat: FAKE_PARCELS.map(() => input.lat),
           lon: FAKE_PARCELS.map(() => input.lon),
-          permit_data_available: [1, 1, 1],
-          long_open_permit: FAKE_PARCELS.map((id) =>
-            FAKE_LONG_OPEN.includes(id) ? 1 : 0,
+          permit_data_available: fakePermitData(input),
+          long_open_permit: FAKE_PARCELS.map((id, i) =>
+            FAKE_LONG_OPEN.includes(id) && fakePermitData(input)[i] === 1
+              ? 1
+              : 0,
           ),
           long_open: {
             min_open_days: input.min_open_days ?? 1826,

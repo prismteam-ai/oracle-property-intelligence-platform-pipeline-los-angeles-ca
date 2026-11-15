@@ -172,6 +172,7 @@ export {
 } from "./policy.ts";
 export { systemPrompt } from "./prompt.ts";
 export {
+  CANONICAL_NAME_NOTE,
   CONTRACTOR_READS_MS,
   DEFAULT_MIN_OPEN_DAYS,
   LONG_OPEN_SCOPE,
@@ -186,6 +187,7 @@ export {
   type ContractorStatus,
   type ContractorSummary,
   type LongOpenParcelsStated,
+  type PermitCoverage,
   type SourceRef,
   type ToolFact,
   type ToolName,

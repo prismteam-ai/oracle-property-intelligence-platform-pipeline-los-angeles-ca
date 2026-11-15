@@ -18,6 +18,7 @@ import type {
   LongOpenItem,
   LongOpenResult,
   OwnershipBasis,
+  OwnershipRuleOut,
   ParcelDetail,
   ParcelPermit,
   ParcelPermits,
@@ -203,7 +204,9 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'or more by a County-roll proxy, on ownership_basis "recording", "base_year" or "both" (the default); the result ' +
     "states the basis, its weakness and that the bases are proxies from the County roll, not sales records. Optional " +
     "long_open_permit, off by default: keeps only the parcels with a long-open roofing permit (the CRM map's rule); " +
-    "the result's long_open_permit states the parcel count, of how many aged-roof parcels, and that it counts parcels, not permits.",
+    "the result's long_open_permit states the parcel count, of how many aged-roof parcels, and that it counts parcels, not permits. " +
+    "Permits are served for the City of Los Angeles only: where no matching parcel has permit data the long-open count is " +
+    "not available (count null, status not_available), never 0, and permit_data states how many matching parcels have none.",
   long_open_permits:
     "City of Los Angeles (LADBS) roofing-work permits, issued and still open, within a radius: open at least " +
     "min_open_days days (optionally at most max_open_days), longest open first, each counted once at its nearest " +
@@ -244,16 +247,22 @@ export type ToolFact =
       threshold_years: number;
       built_before_year: number;
       roll_year: number;
-      count: number;
+      /** The listed count: the search's, or with long_open_permit the long-open parcels; null: not available. */
+      count: number | null;
+      /** The parcels that match the search (the roof-age rule and the ownership filter, when on). */
+      matched: number;
       returned: number;
       proxy_count: number;
       /** Listed parcels with permit_data_available false. */
       no_permit_data: number;
+      /** Which matching parcels have permit data (parcels.points); null when that read failed. */
+      matched_permit_data: PermitCoverage | null;
       /** The ownership basis the search applied; null: no ownership filter. */
       ownership_basis: OwnershipBasis | null;
       /** With long_open_permit: the parcels with a long-open roofing permit, of how many; null: no such filter. */
       long_open: {
-        count: number;
+        /** Null: not available (no parcel checked has permit data), never 0. */
+        count: number | null;
         of: number;
         min_open_days: number;
         /** False when only the nearest parcels were checked (the count is a lower bound). */
@@ -457,32 +466,109 @@ function rowFromDetail(
   };
 }
 
+/**
+ * Which parcels that match a search have permit data (parcels.points' permit_data_available: 1 = in the City of Los
+ * Angeles, where LADBS permits are served). Checked over the points drawn: all matching parcels, or the nearest
+ * max_points when the points are truncated.
+ */
+export interface PermitCoverage {
+  checked: number;
+  with_permit_data: number;
+  without_permit_data: number;
+  /** False when only the nearest parcels were checked. */
+  complete: boolean;
+}
+
+/**
+ * The permit-data coverage of a search's parcels from parcels.points with the same filter. The points must be the
+ * search's parcels (the same count) and mark each one; otherwise an error, never a coverage guessed.
+ */
+function permitCoverage(p: PointsResult, aged: number): PermitCoverage {
+  const marks = p.permit_data_available as unknown;
+  if (!Array.isArray(marks) || marks.length !== p.id.length)
+    throw new Error(
+      "the data API's parcels.points did not mark the parcels with permit data",
+    );
+  if (p.count !== aged)
+    throw new Error(
+      `the data API's parcels.points counted ${p.count} parcels and its search ${aged}`,
+    );
+  const withData = marks.filter((m) => m === 1).length;
+  return {
+    checked: p.id.length,
+    with_permit_data: withData,
+    without_permit_data: p.id.length - withData,
+    complete: !p.truncated,
+  };
+}
+
+/** The parcels that match a search, as its texts name them. */
+const matchingPhrase = (ownership: boolean) =>
+  `parcels that match the roof-age rule${ownership ? " and the ownership filter" : ""}`;
+
+/**
+ * How many of a search's parcels have no permit data, as a sentence; null when every parcel checked has permit
+ * data. Without permit data a parcel is outside the City of Los Angeles.
+ */
+function noPermitDataText(
+  c: PermitCoverage,
+  aged: number,
+  ownership: boolean,
+  maxPoints: number,
+): string | null {
+  if (c.without_permit_data === 0) return null;
+  const matching = matchingPhrase(ownership);
+  const outside = "outside the City of Los Angeles: no permit data there.";
+  if (c.complete)
+    return c.with_permit_data === 0
+      ? `All ${num(aged)} ${matching} are ${outside}`
+      : `${num(c.without_permit_data)} of the ${num(aged)} ${matching} are ${outside}`;
+  const nearest = `the nearest ${num(c.checked)} of the ${num(aged)} ${matching} (only those were checked: the data API marks at most ${num(maxPoints)} parcels)`;
+  return c.with_permit_data === 0
+    ? `All of ${nearest} are ${outside}`
+    : `${num(c.without_permit_data)} of ${nearest} are ${outside}`;
+}
+
 /** The long-open filter of search_aged_roofs as its result states it. */
 export interface LongOpenParcelsStated {
   /** What the count counts. */
   unit: "parcels";
-  /** Parcels with a long-open roofing permit (among those checked). */
-  count: number;
+  /**
+   * "available": the count is of the checked parcels that have permit data. "not_available": none of them has
+   * permit data (all are outside the City of Los Angeles), so the filter can't be evaluated: count is null, not 0.
+   */
+  status: "available" | "not_available";
+  /** Parcels with a long-open roofing permit (among those checked that have permit data); null when not available. */
+  count: number | null;
   /** The parcels that match the roof-age rule (and the ownership filter, when on): the search's count. */
   of: number;
   /** How many of them were checked: all, or the nearest MAX_POINTS when the data API's map points are truncated. */
   checked: number;
+  /** How many of those checked have permit data: the parcels the count is of. */
+  with_permit_data: number;
   complete: boolean;
   min_open_days: number;
   text: string;
 }
 
 /**
- * The parcels parcels.points marks long-open (long_open_permit 1), nearest first, and the count as stated: of
- * parcels, not permits. The points are the search's parcels (the same filter); a different count, a missing column
- * or another window is an error, never shown as filtered. When the points are truncated (more parcels than the
- * data API draws) only the nearest are checked: the count is a lower bound, stated as such.
+ * The parcels parcels.points marks long-open (long_open_permit 1) among those with permit data, nearest first, and
+ * the count as stated: of parcels, not permits. The points are the search's parcels (the same filter); a different
+ * count, a missing column or another window is an error, never shown as filtered. A parcel without permit data
+ * (outside the City of Los Angeles) is not counted either way: when none checked has permit data the count is not
+ * available, never 0. When the points are truncated (more parcels than the data API draws) only the nearest are
+ * checked: the count is a lower bound, stated as such.
  */
 function longOpenParcels(
   p: PointsResult,
   aged: number,
   ownership: boolean,
-): { ids: string[]; count: number; stated: LongOpenParcelsStated } {
+): {
+  ids: string[];
+  count: number | null;
+  coverage: PermitCoverage;
+  stated: LongOpenParcelsStated;
+} {
   const marks = p.long_open_permit as unknown;
   if (!Array.isArray(marks) || marks.length !== p.id.length)
     throw new Error(
@@ -495,27 +581,42 @@ function longOpenParcels(
     throw new Error(
       `the data API's parcels.points applied a long-open window other than at least ${num(DEFAULT_MIN_OPEN_DAYS)} days`,
     );
-  if (p.count !== aged)
-    throw new Error(
-      `the data API's parcels.points counted ${p.count} parcels and its search ${aged}`,
-    );
-  const ids = p.id.filter((_, i) => marks[i] === 1);
-  const complete = !p.truncated;
+  const coverage = permitCoverage(p, aged);
+  const ids = p.id.filter(
+    (_, i) => marks[i] === 1 && p.permit_data_available[i] === 1,
+  );
+  const complete = coverage.complete;
+  const available = coverage.checked === 0 || coverage.with_permit_data > 0;
+  const count = available ? ids.length : null;
   const rule = `an issued LADBS roofing-work permit still open at least ${num(DEFAULT_MIN_OPEN_DAYS)} days`;
   const unit =
     "This counts parcels, not permits: a parcel with several long-open permits counts once, and a building-level (condominium) permit marks every unit it links.";
-  const matching = `parcels that match the roof-age rule${ownership ? " and the ownership filter" : ""}`;
-  const text = complete
-    ? `${num(ids.length)} of the ${num(aged)} ${matching} have a long-open roofing permit (${rule}). ${unit}`
-    : `At least ${num(ids.length)} of the ${num(aged)} ${matching} have a long-open roofing permit (${rule}): only the nearest ${num(p.id.length)} were checked (the data API marks at most ${num(p.max_points)} parcels), so the count is a lower bound; a smaller radius gives a full count. ${unit}`;
+  const matching = matchingPhrase(ownership);
+  const without = coverage.without_permit_data;
+  const unknown = `outside the City of Los Angeles (no permit data there): whether they have one is unknown.`;
+  let text: string;
+  if (!available)
+    text = complete
+      ? `Not available: none of the ${num(aged)} ${matching} has permit data (all are outside the City of Los Angeles), so whether they have a long-open roofing permit (${rule}) is unknown, not 0; the filter can't be evaluated there.`
+      : `Not available: none of the nearest ${num(p.id.length)} of the ${num(aged)} ${matching} has permit data (all are outside the City of Los Angeles; only those were checked: the data API marks at most ${num(p.max_points)} parcels), so whether they have a long-open roofing permit (${rule}) is unknown, not 0; the filter can't be evaluated there. A smaller radius gives a full check.`;
+  else if (complete)
+    text =
+      without === 0
+        ? `${num(ids.length)} of the ${num(aged)} ${matching} have a long-open roofing permit (${rule}). ${unit}`
+        : `${num(ids.length)} of the ${num(coverage.with_permit_data)} ${matching} and have permit data have a long-open roofing permit (${rule}). The other ${num(without)} of the ${num(aged)} are ${unknown} ${unit}`;
+  else
+    text = `At least ${num(ids.length)} of the ${num(aged)} ${matching} have a long-open roofing permit (${rule}): only the nearest ${num(p.id.length)} were checked (the data API marks at most ${num(p.max_points)} parcels), so the count is a lower bound; a smaller radius gives a full count.${without === 0 ? "" : ` ${num(without)} of those checked are ${unknown}`} ${unit}`;
   return {
     ids,
-    count: ids.length,
+    count,
+    coverage,
     stated: {
       unit: "parcels",
-      count: ids.length,
+      status: available ? "available" : "not_available",
+      count,
       of: aged,
       checked: p.id.length,
+      with_permit_data: coverage.with_permit_data,
       complete,
       min_open_days: DEFAULT_MIN_OPEN_DAYS,
       text,
@@ -544,6 +645,13 @@ const PERMIT_FIELDS: Record<string, string> = {
     "parcel_count",
   ),
 };
+/**
+ * What canonical_business_name is, stated once in every result that lists contractor rows: the data API's latest
+ * business name on the license's permit rows, never a registration.
+ */
+export const CANONICAL_NAME_NOTE =
+  "canonical_business_name is the latest business name on the license's LADBS permits, not a registered or legal name of the license.";
+
 /**
  * The contractor identity (one per license number) comes as the API serves it: a license without any name keeps a
  * null canonical name (never filled from another field), and name variants are counted, never listed.
@@ -646,31 +754,56 @@ const run = {
       threshold_years: input.threshold_years,
       ...(ownership ? { ownership_basis: ownership } : {}),
     };
-    // With long_open_permit: the search for its count and rule only (one item), and parcels.points with the same
-    // filter for the parcels marked long-open, nearest first (the CRM map's highlight and legend). Two calls, in
-    // flight together.
-    const [res, points] = await Promise.all([
+    // The search, and parcels.points with the same filter, in flight together. The points say which matching
+    // parcels have permit data (the City of Los Angeles), so a place outside it is told from all the matching
+    // parcels, not only the listed ones. With long_open_permit the search is for its count and rule only (one
+    // item) and the points also give the parcels marked long-open, nearest first (the CRM map's highlight and
+    // legend); without it a points read that fails is a stated gap, never a failed search.
+    const [res, pointsRead] = await Promise.all([
       q.parcels.search({
         ...filter,
         offset: 0,
         limit: input.long_open_permit ? 1 : input.limit,
       }),
-      input.long_open_permit
-        ? q.parcels.points({ ...filter, min_open_days: DEFAULT_MIN_OPEN_DAYS })
-        : null,
+      q.parcels
+        .points({ ...filter, min_open_days: DEFAULT_MIN_OPEN_DAYS })
+        .then(
+          (v): Read<PointsResult> => ({ ok: true, value: v }),
+          (err: unknown): Read<PointsResult> => {
+            if (input.long_open_permit) throw err;
+            return { ok: false, why: notRead("parcels.points", err) };
+          },
+        ),
     ]);
+    const points = pointsRead.ok ? pointsRead.value : null;
     // The count and items are only as filtered as the API says it filtered them.
-    for (const [route, applied] of [
-      ["", res.ownership],
-      ...(points ? [["parcels.points ", points.ownership] as const] : []),
-    ] as const)
-      if ((applied?.basis ?? null) !== ownership)
-        throw new Error(
-          `the data API ${route}applied ownership basis ${applied?.basis ?? "none"}, not ${ownership ?? "none"}`,
-        );
-    const longOpen = points
-      ? longOpenParcels(points, res.count, ownership !== null)
+    const unfiltered = (route: string, applied: OwnershipRuleOut | null) =>
+      (applied?.basis ?? null) !== ownership
+        ? `the data API ${route}applied ownership basis ${applied?.basis ?? "none"}, not ${ownership ?? "none"}`
+        : null;
+    const searchUnfiltered = unfiltered("", res.ownership);
+    if (searchUnfiltered) throw new Error(searchUnfiltered);
+    const pointsUnfiltered = points
+      ? unfiltered("parcels.points ", points.ownership)
       : null;
+    if (pointsUnfiltered && input.long_open_permit)
+      throw new Error(pointsUnfiltered);
+    const longOpen =
+      points && input.long_open_permit
+        ? longOpenParcels(points, res.count, ownership !== null)
+        : null;
+    // Without the filter: the coverage, or why it is not known (the points read failed or does not match the
+    // search), never a failed search.
+    let coverage: Read<PermitCoverage> | null = null;
+    if (longOpen) coverage = { ok: true, value: longOpen.coverage };
+    else if (pointsUnfiltered) coverage = { ok: false, why: pointsUnfiltered };
+    else if (points)
+      try {
+        coverage = { ok: true, value: permitCoverage(points, res.count) };
+      } catch (err) {
+        coverage = { ok: false, why: shortMessage(err) };
+      }
+    else if (!pointsRead.ok) coverage = { ok: false, why: pointsRead.why };
     // The roof-age facts come from the search item itself (with long_open_permit, from the parcel's detail, read
     // for its citation anyway); the detail call is for the provenance citation. explorer.sources is read only when an
     // item's roof year comes from a permit (its citation's source). A read that fails is stated as a gap with the
@@ -789,9 +922,27 @@ const run = {
       };
     });
     const unknown = read - proxy - permit;
+    // Not available (null) when the filter can't be evaluated: no matching parcel has permit data.
     const count = longOpen ? longOpen.count : res.count;
-    const truncated = count > items.length;
-    if (longOpen && !longOpen.stated.complete) gaps.push(longOpen.stated.text);
+    const truncated = count !== null && count > items.length;
+    const noPermitData =
+      coverage?.ok && points
+        ? noPermitDataText(
+            coverage.value,
+            res.count,
+            ownership !== null,
+            points.max_points,
+          )
+        : null;
+    const notAvailable = longOpen?.stated.status === "not_available";
+    // Not available: its own text (pushed below) says that all are outside the City of Los Angeles.
+    if (noPermitData && !notAvailable) gaps.push(noPermitData);
+    else if (coverage && !coverage.ok)
+      gaps.push(
+        `${coverage.why}: whether the matching parcels have permit data (the City of Los Angeles) was not checked.`,
+      );
+    if (longOpen && (!longOpen.stated.complete || notAvailable))
+      gaps.push(longOpen.stated.text);
     if (truncated)
       gaps.push(
         `Results truncated: search_aged_roofs returned ${items.length} of ${count} matching parcels (nearest first).`,
@@ -814,8 +965,19 @@ const run = {
           : `per item: ${proxy} PROXY, ${permit} PERMIT${unknown ? `, ${unknown} unknown` : ""}${read < items.length ? `, ${items.length - read} not read` : ""}`,
       // The ownership filter applied: its basis, text, weakness and the proxy note (ownership.ts).
       ...(ownership ? { ownership: ownershipStated(ownership) } : {}),
-      // The long-open filter applied: the parcel count, of how many, and its unit (parcels, not permits).
+      // The long-open filter applied: the parcel count (or not available), of how many, and its unit (parcels).
       ...(longOpen ? { long_open_permit: longOpen.stated } : {}),
+      // How many matching parcels have no permit data (outside the City of Los Angeles), when any has none.
+      ...(noPermitData && coverage?.ok
+        ? {
+            permit_data: {
+              checked: coverage.value.checked,
+              without_permit_data: coverage.value.without_permit_data,
+              complete: coverage.value.complete,
+              text: noPermitData,
+            },
+          }
+        : {}),
       items,
       truncated,
     };
@@ -835,10 +997,12 @@ const run = {
         built_before_year: res.rule.built_before_year,
         roll_year: res.rule.roll_year,
         count,
+        matched: res.count,
         returned: items.length,
         proxy_count: proxy,
         no_permit_data: rows.filter((it) => it.permit_data_available === false)
           .length,
+        matched_permit_data: coverage?.ok ? coverage.value : null,
         ownership_basis: ownership,
         long_open: longOpen
           ? {
@@ -943,6 +1107,7 @@ const run = {
         rule: within.res.rule.text,
         contractor_source: c.source,
         contractors: c.summaryText,
+        canonical_name_note: CANONICAL_NAME_NOTE,
         items: c.items,
         truncated: second.truncated,
       };
@@ -1068,6 +1233,7 @@ const run = {
         ...basis(r.roof_age_basis),
         roof_year_permit_number: roofYearPermit,
         permits,
+        ...(contractorRows ? { canonical_name_note: CANONICAL_NAME_NOTE } : {}),
         bbb: {
           available: false,
           reason: str(r.bbb?.reason) ?? "BBB ratings are not available.",

@@ -221,6 +221,16 @@ describe.skipIf(!hasRealData)("the agent on the real latest run (P19)", () => {
     expect(String(c.long_open_permit.text)).toMatch(
       /^144 of the 3,948 parcels that match the roof-age rule have a long-open roofing permit .* This counts parcels, not permits/,
     );
+    // Every matching parcel has permit data: the text as it was, nothing about permit data added.
+    expect(c.long_open_permit).toMatchObject({
+      status: "available",
+      with_permit_data: 3_948,
+    });
+    expect(c.long_open_permit.text).toBe(
+      "144 of the 3,948 parcels that match the roof-age rule have a long-open roofing permit (an issued LADBS roofing-work permit still open at least 1,826 days). This counts parcels, not permits: a parcel with several long-open permits counts once, and a building-level (condominium) permit marks every unit it links.",
+    );
+    expect(c).not.toHaveProperty("permit_data");
+    expect(o.gaps.some((g) => g.includes("City of Los Angeles"))).toBe(false);
     // The CRM legend's count (the drawn points' marks) and its lead list's (parcels.match, long_open_permit, 72 IDs
     // per call) are the same 144 parcels.
     const points = await data.caller.parcels.points(filter);
@@ -363,6 +373,156 @@ describe.skipIf(!hasRealData)("the agent on the real latest run (P19)", () => {
       });
     for (const it of items.filter((x) => x.roof_age_basis === "PROXY"))
       expect(it.citation).not.toHaveProperty("roof_year_source");
+  });
+
+  /** Prompt d's search center (the model's call): every parcel within 1 mi lies outside the City of Los Angeles. */
+  const PASADENA_CALL = { lat: 34.1528, lon: -118.13578 };
+  /** A 1 mi area across the city line west of Pasadena: some matching parcels in the City of Los Angeles. */
+  const MIXED = { lat: 34.145, lon: -118.18 };
+
+  test("search_aged_roofs at the Pasadena center, 1 mi, 20 years: with long_open_permit the count is not available (null, not 0) among 7,845 parcels without permit data, nothing listed; without it the 7,845 are stated as outside the City of Los Angeles", async () => {
+    const filter = { ...PASADENA_CALL, radius_miles: 1, threshold_years: 20 };
+    const notAvailable =
+      "Not available: none of the 7,845 parcels that match the roof-age rule has permit data (all are outside the City of Los Angeles), so whether they have a long-open roofing permit (an issued LADBS roofing-work permit still open at least 1,826 days) is unknown, not 0; the filter can't be evaluated there.";
+    for (const input of [
+      { ...filter, limit: 10, long_open_permit: true },
+      { ...filter, long_open_permit: true },
+    ]) {
+      const o = await runTool("search_aged_roofs", input, data.queries);
+      expect(o.ok).toBe(true);
+      expect(o.content).toMatchObject({
+        count: null,
+        returned: 0,
+        items: [],
+        truncated: false,
+        long_open_permit: {
+          status: "not_available",
+          count: null,
+          of: 7_845,
+          checked: 7_845,
+          with_permit_data: 0,
+          complete: true,
+          text: notAvailable,
+        },
+        permit_data: { checked: 7_845, without_permit_data: 7_845 },
+      });
+      expect(o.gaps).toEqual([notAvailable]);
+      expect(o.records).toEqual([]);
+      const counts = await checkCounts(
+        [
+          {
+            id: "t1",
+            name: "search_aged_roofs",
+            input,
+            result: o.content,
+            is_error: false,
+          },
+        ],
+        data.queries,
+      );
+      expect(counts).toEqual({
+        result: "pass",
+        details: [
+          "search_aged_roofs: equal (parcels.points: none of the 7845 parcels checked of 7845 has permit data, count not available)",
+        ],
+      });
+    }
+    const plain = await runTool("search_aged_roofs", filter, data.queries);
+    expect(plain.content).toMatchObject({ count: 7_845, returned: 10 });
+    expect(plain.gaps).toContain(
+      "All 7,845 parcels that match the roof-age rule are outside the City of Los Angeles: no permit data there.",
+    );
+  });
+
+  test("prompt d's flow with only the filtered call, on the real data: the answer's gaps include Pasadena's outside-the-City gap", async () => {
+    const model = new ScriptedModel([
+      toolReply([{ name: "resolve_place", input: { name: "Pasadena" } }]),
+      toolReply([
+        {
+          name: "search_aged_roofs",
+          input: {
+            ...PASADENA_CALL,
+            radius_miles: 1,
+            threshold_years: 20,
+            limit: 10,
+            long_open_permit: true,
+          },
+        },
+      ]),
+      textReply(
+        "Permit data covers the City of Los Angeles only. Pasadena is a separate city, so whether these parcels have long-open roofing permits is unknown.",
+      ),
+    ]);
+    const a = await runAgent(
+      {
+        question:
+          "Which properties within one mile of Pasadena have roofs older than 20 years, and do they have open roofing permits?",
+      },
+      { model, queries: data.queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    expect(a.gaps).toContain(
+      "Pasadena is outside the City of Los Angeles: no permit data there.",
+    );
+    expect(GAPS.outside_city_of_la.inText("Pasadena").test(a.text)).toBe(true);
+  });
+
+  test("search_aged_roofs in a mixed area (34.145, -118.18, 1 mi, 20 years): 16 long-open of the 788 parcels with permit data; the other 1,924 of 2,712 stated as without permit data, with and without the filter", async () => {
+    const filter = { ...MIXED, radius_miles: 1, threshold_years: 20 };
+    const outside =
+      "1,924 of the 2,712 parcels that match the roof-age rule are outside the City of Los Angeles: no permit data there.";
+    const o = await runTool(
+      "search_aged_roofs",
+      { ...filter, long_open_permit: true },
+      data.queries,
+    );
+    expect(o.content).toMatchObject({
+      count: 16,
+      long_open_permit: {
+        status: "available",
+        count: 16,
+        of: 2_712,
+        checked: 2_712,
+        with_permit_data: 788,
+        complete: true,
+      },
+      permit_data: { without_permit_data: 1_924, text: outside },
+    });
+    expect(
+      String(
+        (o.content as { long_open_permit: { text: string } }).long_open_permit
+          .text,
+      ),
+    ).toMatch(
+      /^16 of the 788 parcels that match the roof-age rule and have permit data have a long-open roofing permit .*The other 1,924 of the 2,712 are outside the City of Los Angeles/,
+    );
+    expect(o.gaps).toContain(outside);
+    const plain = await runTool("search_aged_roofs", filter, data.queries);
+    expect(plain.content).toMatchObject({
+      count: 2_712,
+      permit_data: { without_permit_data: 1_924 },
+    });
+    expect(plain.gaps).toContain(outside);
+    const counts = await checkCounts(
+      [
+        {
+          id: "t1",
+          name: "search_aged_roofs",
+          input: { ...filter, long_open_permit: true, limit: 10 },
+          result: o.content,
+          is_error: false,
+        },
+        {
+          id: "t2",
+          name: "search_aged_roofs",
+          input: { ...filter, limit: 10 },
+          result: plain.content,
+          is_error: false,
+        },
+      ],
+      data.queries,
+    );
+    expect(counts.result).toBe("pass");
   });
 });
 

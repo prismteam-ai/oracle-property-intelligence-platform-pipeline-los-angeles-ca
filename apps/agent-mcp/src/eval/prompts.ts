@@ -113,9 +113,10 @@ export const GAPS = {
     // "permit data does not cover <place>" (also "doesn't" or "doesn’t"): the prompt's expected place name when it
     // has one, else 1–4 words. Approvals §3e.82.1: "permit data covers only (the) City of Los Angeles", and "only in/for the City of Los
     // Angeles" only with "permit" or "permits" in the same sentence (no . ! ? or line break between them).
+    // Also "permit data covers (the) City of Los Angeles only" (word order), never "this search covers ...".
     inText: (placeName) =>
       new RegExp(
-        String.raw`outside (?:the )?City of Los Angeles|no permit data|permit data covers only (?:the )?City of Los Angeles|\bpermits?\b[^.!?\n]*?\bonly (?:in|for) the City of Los Angeles|\bonly (?:in|for) the City of Los Angeles\b[^.!?\n]*?\bpermits?\b|permit data (?:does not|doesn['’]t) cover ` +
+        String.raw`outside (?:the )?City of Los Angeles|no permit data|permit data covers only (?:the )?City of Los Angeles|permit data covers (?:the )?City of Los Angeles only|\bpermits?\b[^.!?\n]*?\bonly (?:in|for) the City of Los Angeles|\bonly (?:in|for) the City of Los Angeles\b[^.!?\n]*?\bpermits?\b|permit data (?:does not|doesn['’]t) cover ` +
           (placeName === undefined
             ? String.raw`[\p{L}\p{N}'-]+(?:\s+[\p{L}\p{N}'-]+){0,3}`
             : escapeRegExp(placeName)),

@@ -1834,7 +1834,7 @@ describe("scope and abuse prompts j–n (approvals §3e.75 d), with the scripted
     const checks = await checksOf(p, a);
     // The counts check re-runs parcels.search with the basis the tool sent ("both"): 17, not the unfiltered 42.
     expect(checks.counts.details).toContain(
-      "search_aged_roofs: equal (parcels.search: count 17, 3 IDs)",
+      "search_aged_roofs: equal (parcels.search: count 17, 3 IDs; parcels.points: 0 of 3 checked without permit data)",
     );
     expect(checks.ownership).toEqual({
       result: "pass",
@@ -2481,6 +2481,28 @@ describe("the 6432d4a eval failures (approvals §3e.80), with the scripted model
       ),
     ).toBe(false);
   });
+
+  test('d: "Permit data covers the City of Los Angeles only" (the word order of a served answer) passes the outside_city_of_la text check; "This search covers the City of Los Angeles only" does not', () => {
+    for (const re of [
+      GAPS.outside_city_of_la.inText("Pasadena"),
+      GAPS.outside_city_of_la.inText(undefined),
+    ]) {
+      expect(
+        re.test(
+          "Permit data covers the City of Los Angeles only. Pasadena is a separate city, so whether these parcels have open roofing permits is unknown.",
+        ),
+      ).toBe(true);
+      expect(re.test("The permit data covers City of Los Angeles only.")).toBe(
+        true,
+      );
+      expect(re.test("This search covers the City of Los Angeles only")).toBe(
+        false,
+      );
+      expect(re.test("This search covers the City of Los Angeles only.")).toBe(
+        false,
+      );
+    }
+  });
 });
 
 /** A point near Van Nuys that no resolve_place call produced (prompt i's search without a resolution). */
@@ -2528,7 +2550,7 @@ describe("prompt p and the long-open filter (approvals §3e.94 item 2), with the
     const c2 = await checksOf(p, plain);
     expect(c2.tools.result).toBe("fail");
     expect(c2.counts.details).toContain(
-      "search_aged_roofs: equal (parcels.search: count 42, 3 IDs)",
+      "search_aged_roofs: equal (parcels.search: count 42, 3 IDs; parcels.points: 0 of 3 checked without permit data)",
     );
   });
 

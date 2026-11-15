@@ -478,25 +478,39 @@ function explain(
       continue;
     }
     switch (f.tool) {
-      case "search_aged_roofs":
+      case "search_aged_roofs": {
+        // Which matching parcels have permit data (all of them, or the nearest checked); null: not read.
+        const cov = f.matched_permit_data;
+        const without = cov?.without_permit_data ?? 0;
+        const lo = f.long_open;
+        const nearest = cov && !cov.complete ? " of the nearest checked" : "";
+        let matched: string;
+        if (lo && lo.count === null)
+          matched = `${fmt(lo.of)} match, none${nearest} with permit data (outside the City of Los Angeles), so whether they have a long-open roofing permit is not available (unknown, not 0)`;
+        else if (lo)
+          matched = `${fmt(lo.of)} match, of which ${lo.complete ? "" : "at least "}${fmt(lo.count ?? 0)} parcels (not permits) have a long-open roofing permit (open at least ${fmt(lo.min_open_days)} days)${lo.complete ? "" : " among the nearest checked"}${without > 0 ? `; ${fmt(without)}${nearest} have no permit data (outside the City of Los Angeles), unknown there` : ""}`;
+        else
+          matched = `${fmt(f.matched)} match${without > 0 ? ` (${fmt(without)}${nearest} without permit data: outside the City of Los Angeles)` : ""}`;
         reasoning.push(
-          `searched parcels within ${f.radius_miles} mi of ${label} built before ${f.built_before_year} (roofs older than ${f.threshold_years} years)${f.ownership_basis ? `, owner unchanged for 10 years or more by the "${f.ownership_basis}" basis` : ""}: ${
-            f.long_open
-              ? `${fmt(f.long_open.of)} match, of which ${f.long_open.complete ? "" : "at least "}${fmt(f.long_open.count)} parcels (not permits) have a long-open roofing permit (open at least ${fmt(f.long_open.min_open_days)} days)${f.long_open.complete ? "" : " among the nearest checked"}`
-              : `${fmt(f.count)} match`
-          }, ${f.returned} listed`,
+          `searched parcels within ${f.radius_miles} mi of ${label} built before ${f.built_before_year} (roofs older than ${f.threshold_years} years)${f.ownership_basis ? `, owner unchanged for 10 years or more by the "${f.ownership_basis}" basis` : ""}: ${matched}, ${f.returned} listed`,
         );
         assumptions.push(
           f.proxy_count === f.returned
             ? `Roof age is the assessor year-built proxy: older than ${f.threshold_years} years means built before ${f.built_before_year} (roll year ${f.roll_year} − ${f.threshold_years}).`
             : `Roof age counts from the effective roof year: a finaled roofing permit's year where the basis is PERMIT, else the assessor year-built proxy; older than ${f.threshold_years} years means an effective roof year before ${f.built_before_year}.`,
         );
-        // Every listed parcel lies where no permit source reaches.
-        if (f.returned > 0 && f.no_permit_data === f.returned)
+        // No matching parcel has permit data (of those checked: the nearest, when the map points are truncated).
+        // Without that read, the listed parcels decide, as they did before it.
+        if (
+          cov
+            ? cov.checked > 0 && cov.with_permit_data === 0
+            : f.returned > 0 && f.no_permit_data === f.returned
+        )
           gaps.push(outsideCityGap(label));
         // The basis, its weakness and the proxy note, stated with the answer (ownership.ts).
         if (f.ownership_basis) rules.push(ownershipRuleLine(f.ownership_basis));
         break;
+      }
       case "long_open_permits":
         reasoning.push(
           `searched long-open permits, ${LONG_OPEN_SCOPE}, within ${f.radius_miles} mi of ${label} open at least ${fmt(f.min_open_days)} days${f.max_open_days !== null ? ` and at most ${fmt(f.max_open_days)}` : ""}: ${fmt(f.count)} match, ${f.returned} listed`,

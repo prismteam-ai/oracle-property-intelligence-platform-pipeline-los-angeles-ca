@@ -44,6 +44,7 @@ import {
   FAKE_PERMITS,
   FAKE_SOURCES,
   LOS_ANGELES_CANDIDATES,
+  MIXED_CENTER,
   OUTSIDE_PARCEL,
   PASADENA_RESOLVED,
   PERMIT_RETRIEVED,
@@ -1142,6 +1143,98 @@ describe("long-open rule line (§15.3)", () => {
 });
 
 describe("outside the City of Los Angeles (§15.1 d)", () => {
+  test("d with only the filtered call (long_open_permit at Pasadena): the place's gap from the matching parcels, the count not available, nothing listed", async () => {
+    const { queries } = fakeQueries();
+    let result: Record<string, unknown> | undefined;
+    const model = new ScriptedModel([
+      toolReply([{ name: "resolve_place", input: { name: "Pasadena" } }]),
+      (p) => {
+        const c = resolvedCenter(p);
+        return toolReply([
+          {
+            name: "search_aged_roofs",
+            input: {
+              lat: c.lat,
+              lon: c.lon,
+              radius_miles: 1,
+              threshold_years: 20,
+              limit: 10,
+              long_open_permit: true,
+            },
+          },
+        ]);
+      },
+      (p) => {
+        result = lastToolResult(p, "search_aged_roofs") as Record<
+          string,
+          unknown
+        >;
+        return textReply(
+          "Permit data covers the City of Los Angeles only. Pasadena is a separate city, so whether these parcels have long-open roofing permits is unknown.",
+        );
+      },
+    ]);
+    const a = await runAgent(
+      {
+        question:
+          "Which properties within one mile of Pasadena have roofs older than 20 years, and do they have open roofing permits?",
+      },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    expect(a.gaps).toContain(
+      "Pasadena is outside the City of Los Angeles: no permit data there.",
+    );
+    // The model saw a count that is not available, never 0, and nothing listed.
+    expect(result).toMatchObject({
+      count: null,
+      returned: 0,
+      items: [],
+      long_open_permit: { status: "not_available", count: null },
+    });
+    expect(a.reasoning).toContain(
+      "searched parcels within 1 mi of Pasadena built before 2006 (roofs older than 20 years): 42 match, none of the nearest checked with permit data (outside the City of Los Angeles), so whether they have a long-open roofing permit is not available (unknown, not 0), 0 listed",
+    );
+  });
+
+  test("a mixed area: no place gap; the reasoning states how many matching parcels have no permit data", async () => {
+    const { queries } = fakeQueries();
+    const ask = (long_open_permit: boolean) =>
+      runAgent(
+        {
+          question: "Old roofs near the pin?",
+          center: { ...MIXED_CENTER, label: "the pin" },
+        },
+        {
+          model: new ScriptedModel([
+            toolReply([
+              {
+                name: "search_aged_roofs",
+                input: { ...MIXED_CENTER, radius_miles: 1, long_open_permit },
+              },
+            ]),
+            textReply("Done."),
+          ]),
+          queries,
+          settings: SETTINGS,
+        },
+      );
+    const plain = await ask(false);
+    expect(plain.gaps.some((g) => g.endsWith("no permit data there."))).toBe(
+      true,
+    );
+    expect(plain.gaps).not.toContain(
+      "the pin is outside the City of Los Angeles: no permit data there.",
+    );
+    expect(plain.reasoning).toContain(
+      ": 42 match (1 of the nearest checked without permit data: outside the City of Los Angeles), 3 listed",
+    );
+    const filtered = await ask(true);
+    expect(filtered.reasoning).toContain(
+      ": 42 match, of which at least 1 parcels (not permits) have a long-open roofing permit (open at least 1,826 days) among the nearest checked; 1 of the nearest checked have no permit data (outside the City of Los Angeles), unknown there, 1 listed",
+    );
+  });
+
   test("a search whose items all lack permit data adds the place's gap", async () => {
     const { queries } = fakeQueries();
     const model = new ScriptedModel([
@@ -1209,6 +1302,14 @@ describe("outside the City of Los Angeles (§15.1 d)", () => {
               ...it,
               permit_data_available: false,
             })),
+          };
+        },
+        points: async (i) => {
+          const p = await queries.parcels.points(i);
+          return {
+            ...p,
+            permit_data_available: p.id.map(() => 0 as const),
+            long_open_permit: p.id.map(() => 0 as const),
           };
         },
       },

@@ -247,15 +247,33 @@ async function compareDirect(
             ...filter,
             min_open_days: DEFAULT_MIN_OPEN_DAYS,
           });
-          const marked = p.id.filter((_, i) => p.long_open_permit[i] === 1);
-          cmp("count", r.count, marked.length);
+          // Counted among the parcels with permit data only; with none of them, not available (null), never 0.
+          const covered = p.permit_data_available.filter((m) => m === 1).length;
+          const available = p.id.length === 0 || covered > 0;
+          const marked = p.id.filter(
+            (_, i) =>
+              p.long_open_permit[i] === 1 && p.permit_data_available[i] === 1,
+          );
+          cmp("count", r.count, available ? marked.length : null);
           cmp("long_open_permit unit", rec(r.long_open_permit).unit, "parcels");
+          cmp(
+            "long_open_permit status",
+            rec(r.long_open_permit).status,
+            available ? "available" : "not_available",
+          );
+          cmp(
+            "long_open_permit with_permit_data",
+            rec(r.long_open_permit).with_permit_data,
+            covered,
+          );
           cmpList(
             "parcel IDs",
             ids(r.items, "parcel_id"),
             marked.slice(0, n("limit")),
           );
-          return `parcels.points: ${marked.length} of ${p.count} parcels marked long-open, ${Math.min(marked.length, n("limit"))} IDs`;
+          return available
+            ? `parcels.points: ${marked.length} of ${p.count} parcels marked long-open, ${Math.min(marked.length, n("limit"))} IDs`
+            : `parcels.points: none of the ${p.id.length} parcels checked of ${p.count} has permit data, count not available`;
         }
         const d = await q.parcels.search({
           ...filter,
@@ -268,7 +286,18 @@ async function compareDirect(
           ids(r.items, "parcel_id"),
           d.items.map((x) => x.parcel_id),
         );
-        return `parcels.search: count ${d.count}, ${d.items.length} IDs`;
+        // The matching parcels without permit data, as the result states them (absent: none), from the points.
+        const p = await q.parcels.points({
+          ...filter,
+          min_open_days: DEFAULT_MIN_OPEN_DAYS,
+        });
+        const without = p.permit_data_available.filter((m) => m === 0).length;
+        cmp(
+          "permit_data without_permit_data",
+          rec(r.permit_data).without_permit_data ?? 0,
+          without,
+        );
+        return `parcels.search: count ${d.count}, ${d.items.length} IDs; parcels.points: ${without} of ${p.id.length} checked without permit data`;
       };
       break;
     case "long_open_permits":

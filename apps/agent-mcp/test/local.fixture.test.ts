@@ -54,6 +54,10 @@ import {
   writePermitFixture,
   type FixtureRun,
 } from "../../api/test/fixture.ts";
+import {
+  PASADENA_RESOLVED,
+  fakeQueries,
+} from "../../../packages/agent/test/helpers.ts";
 import { createMcpServer } from "../src/create-server.ts";
 import {
   RunFilesMissingError,
@@ -495,6 +499,7 @@ describe("permit tools over the real permits router (writePermitFixture)", () =>
       "roof_age_basis_label",
       "roof_year_permit_number",
       "permits",
+      "canonical_name_note",
       "bbb",
       "sources",
     ]);
@@ -736,6 +741,65 @@ describe("MCP server over the SDK's in-memory transport", () => {
       expect(body.records.every((r) => r.source_name === FIXTURE.source)).toBe(
         true,
       );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  test("search_aged_roofs over MCP where no matching parcel has permit data: the long-open count is not available (null, not 0), and the result and gaps say the parcels are outside the City of Los Angeles, naming no place", async () => {
+    const { queries } = fakeQueries();
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer(queries);
+    await server.connect(serverSide);
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientSide);
+    try {
+      const call = (long_open_permit: boolean) =>
+        client.callTool({
+          name: "search_aged_roofs",
+          arguments: {
+            ...PASADENA_RESOLVED,
+            radius_miles: 1,
+            threshold_years: 20,
+            long_open_permit,
+          },
+        });
+      const body = (res: Awaited<ReturnType<typeof call>>) =>
+        JSON.parse(
+          (res.content as Array<{ type: string; text: string }>)[0]!.text,
+        ) as {
+          result: {
+            count: number | null;
+            items: unknown[];
+            long_open_permit?: { status: string; count: number | null };
+            permit_data?: { without_permit_data: number; text: string };
+          };
+          gaps: string[];
+        };
+      const res = await call(true);
+      expect(res.isError).toBeFalsy();
+      const b = body(res);
+      expect(b.result.count).toBeNull();
+      expect(b.result.items).toEqual([]);
+      expect(b.result.long_open_permit).toMatchObject({
+        status: "not_available",
+        count: null,
+      });
+      expect(b.gaps).toHaveLength(1);
+      expect(b.gaps[0]).toMatch(
+        /^Not available: none of the nearest 3 of the 42 parcels that match the roof-age rule has permit data \(all are outside the City of Los Angeles;/,
+      );
+      expect(b.gaps[0]).toContain("unknown, not 0");
+      const plain = body(await call(false));
+      expect(plain.result.count).toBe(42);
+      expect(plain.result.permit_data?.without_permit_data).toBe(3);
+      expect(plain.gaps).toContain(plain.result.permit_data!.text);
+      expect(plain.result.permit_data!.text).toMatch(
+        /are outside the City of Los Angeles: no permit data there\.$/,
+      );
+      for (const g of [...b.gaps, ...plain.gaps])
+        expect(g).not.toContain("Pasadena");
     } finally {
       await client.close();
       await server.close();
