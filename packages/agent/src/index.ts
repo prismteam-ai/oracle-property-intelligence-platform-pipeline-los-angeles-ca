@@ -13,10 +13,12 @@ export {
   outsideCityGap,
   promptCacheParts,
   runAgent,
+  valueSourceAssumption,
   type AgentAnswer,
   type AgentCenter,
   type AgentDeps,
   type AgentRequest,
+  type AgentScreen,
   type AgentUsage,
   type AreaBasis,
   type PreviousCall,
@@ -24,6 +26,7 @@ export {
   type SessionArea,
   type SessionState,
   type StoppedBy,
+  type ValueSource,
 } from "./agent.ts";
 export {
   GAP_CONTRACTOR_NO_WINDOW,

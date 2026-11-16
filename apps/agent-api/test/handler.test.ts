@@ -438,6 +438,43 @@ describe("the request: cap, body, routes and clients", () => {
     expect(s.model.requests).toHaveLength(0);
   });
 
+  test("screen: a valid one is passed to the agent (its user turn); an invalid one is a 400 before any model call", async () => {
+    const PIN = { lat: 34.20008, lon: -118.48111, label: "map pin" };
+    const ok = setup({ steps: [textReply("x")] });
+    const res = await ok.handler(
+      event(ANSWER_ROUTE, {
+        question: "Which properties here have old roofs?",
+        center: PIN,
+        screen: { radius_miles: 1, threshold_years: 15 },
+      }),
+      CONTEXT,
+    );
+    expect(status(res)).toBe(200);
+    const turn = ok.model.requests[0]!.params.messages.at(-1)!;
+    expect(JSON.stringify(turn.content)).toContain(
+      "Screen values from the request: radius 1 mi, roof age threshold 15 years.",
+    );
+    const bad = setup({ steps: [] });
+    for (const screen of [
+      { radius_miles: 11, threshold_years: 15 },
+      { radius_miles: 1, threshold_years: 0 },
+      { radius_miles: "1", threshold_years: 15 },
+      { radius_miles: 1 },
+    ]) {
+      const r = await bad.handler(
+        event(ANSWER_ROUTE, {
+          question: "Old roofs here?",
+          center: PIN,
+          screen,
+        }),
+        CONTEXT,
+      );
+      expect(status(r)).toBe(400);
+      expect(String(parse(r).error)).toMatch(/^screen/);
+    }
+    expect(bad.model.requests).toHaveLength(0);
+  });
+
   test("clients: crm and explorer only (403 for mcp or none); 401 without a bearer token; 404 another route", async () => {
     const s = setup();
     expect(

@@ -57,6 +57,7 @@ import {
   checkCounts,
   checkLicenseStatus,
   checkPlace,
+  checkScreen,
   checkStatedCounts,
   statedCounts,
   type AnswerChecks,
@@ -245,8 +246,8 @@ describe("prompts file (eval/prompts.json)", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byCase = (c: string) => prompts.filter((p) => p.case === c);
 
-  test("sixteen entries, valid: cases a–i, then the scope and abuse cases j–n and the coverage case o", () => {
-    expect(prompts.length).toBe(17);
+  test("nineteen entries, valid: cases a–i, then the scope and abuse cases j–n, the coverage case o, p and the CRM screen case q", () => {
+    expect(prompts.length).toBe(19);
     expect(new Set(prompts.map((p) => p.case))).toEqual(new Set(PROMPT_CASES));
     expect(new Set(prompts.map((p) => p.id)).size).toBe(prompts.length);
   });
@@ -327,9 +328,12 @@ describe("prompts file (eval/prompts.json)", () => {
       "the May 2023 line of the system prompt says to call it and state the contractor window from it",
     );
     expect(i.note).toContain("resolve_place is allowed, not required");
-    // Every other prompt is unchanged: no forbidden tool, and a resolved place still requires the call and the search.
+    // Every other prompt is unchanged: no forbidden tool (but q's resolve_place: the request gives the center), and a
+    // resolved place still requires the call and the search.
     for (const p of prompts.filter((x) => x.case !== "i")) {
-      expect(p.expected.forbidden_tools).toBeUndefined();
+      expect(p.expected.forbidden_tools).toEqual(
+        p.case === "q" ? ["resolve_place"] : undefined,
+      );
       expect("search_required" in p.expected.place).toBe(false);
       expect("resolve_required" in p.expected.place).toBe(false);
     }
@@ -1753,13 +1757,13 @@ describe("CLI and output folder", () => {
       .trim()
       .split("\n");
     expect(tsv[0]).toBe(
-      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tstated_counts\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms",
+      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tstated_counts\tscreen\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms",
     );
     expect(tsv.slice(1)).toEqual([
-      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
-      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
-      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
-      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
+      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
+      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
+      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
+      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
     ]);
     const md = readFileSync(join(out, "results.md"), "utf8");
     expect(md).toContain("data run run-1");
@@ -2921,5 +2925,241 @@ describe("check stated_counts: numbers of rows shown equal the rows the text lis
     expect(JSON.stringify(bad.error?.issues)).toContain(
       "stated_counts needs long_open_permits in tools",
     );
+  });
+});
+
+describe("the CRM screen: prompts q1 and q2, place request_center and check screen", () => {
+  const PIN = { lat: 34.20008, lon: -118.48111, label: "map pin" };
+  const SCREEN = { radius_miles: 1, threshold_years: 15 };
+  const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
+  const q = (id: string) => prompts.find((p) => p.id === id)!;
+  const searchCall = (input: Record<string, unknown>): ToolCallRecord => ({
+    id: "toolu_1",
+    name: "search_aged_roofs",
+    input: { lat: PIN.lat, lon: PIN.lon, ...input },
+    result: { count: 3, items: [] },
+    is_error: false,
+  });
+
+  test("q1 and q2: the pin and the screen in the request; each its own conversation; no resolve_place", () => {
+    const q1 = q("q1-crm-screen-threshold-from-question");
+    const q2 = q("q2-crm-screen-both-from-screen");
+    expect(q1.question).toBe(
+      "Which properties here have roofs older than 25 years?",
+    );
+    expect(q2.question).toBe("Which properties here have old roofs?");
+    for (const p of [q1, q2]) {
+      expect(p.case).toBe("q");
+      expect(p.request).toEqual({ center: PIN, screen: SCREEN });
+      expect(p.expected).toMatchObject({
+        tools: ["search_aged_roofs"],
+        forbidden_tools: ["resolve_place"],
+        refused: false,
+        place: { outcome: "request_center" },
+      });
+    }
+    expect(q1.group).not.toBe(q2.group);
+    expect(q1.expected.tool_inputs).toEqual({
+      search_aged_roofs: { radius_miles: 1, threshold_years: 25 },
+    });
+    expect(q1.expected.screen).toEqual({
+      radius: "screen",
+      threshold: "question",
+    });
+    expect(q2.expected.tool_inputs).toEqual({
+      search_aged_roofs: { radius_miles: 1, threshold_years: 15 },
+    });
+    expect(q2.expected.screen).toEqual({
+      radius: "screen",
+      threshold: "screen",
+    });
+    // No other prompt sends a request or expects a screen.
+    expect(
+      prompts.filter((p) => p.request || p.expected.screen).map((p) => p.id),
+    ).toEqual([q1.id, q2.id]);
+  });
+
+  test("the prompts file: screen needs request.screen; request_center needs request.center; the request is validated as the agent validates it", () => {
+    const q1 = q("q1-crm-screen-threshold-from-question");
+    const issues = (entry: unknown) =>
+      JSON.stringify(promptsFileSchema.safeParse([entry]).error?.issues ?? []);
+    expect(issues({ ...q1, request: { center: PIN } })).toContain(
+      "screen needs request.screen",
+    );
+    expect(issues({ ...q1, request: { screen: SCREEN } })).toContain(
+      "request_center needs request.center",
+    );
+    expect(
+      promptsFileSchema.safeParse([
+        {
+          ...q1,
+          request: {
+            ...q1.request,
+            screen: { radius_miles: 11, threshold_years: 15 },
+          },
+        },
+      ]).success,
+    ).toBe(false);
+  });
+
+  test("place request_center: every search at the request's center (5 decimals) and no resolve_place", () => {
+    const want = { outcome: "request_center" } as const;
+    expect(
+      checkPlace([searchCall({ radius_miles: 1 })], want, undefined, PIN)
+        .result,
+    ).toBe("pass");
+    expect(
+      checkPlace(
+        [searchCall({ lat: 34.200081, radius_miles: 1 })],
+        want,
+        undefined,
+        PIN,
+      ).result,
+    ).toBe("pass");
+    expect(
+      checkPlace(
+        [searchCall({ lat: 34.2, radius_miles: 1 })],
+        want,
+        undefined,
+        PIN,
+      ).result,
+    ).toBe("fail");
+    expect(checkPlace([], want, undefined, PIN).result).toBe("fail");
+    const resolved: ToolCallRecord = {
+      id: "toolu_0",
+      name: "resolve_place",
+      input: { name: "Van Nuys" },
+      result: { status: "resolved", name: "Van Nuys" },
+      is_error: false,
+    };
+    expect(
+      checkPlace(
+        [resolved, searchCall({ radius_miles: 1 })],
+        want,
+        undefined,
+        PIN,
+      ).result,
+    ).toBe("fail");
+    expect(
+      checkPlace([searchCall({})], want, undefined, undefined).result,
+    ).toBe("fail");
+  });
+
+  test("check screen: the deterministic assumptions name each source and the text states each value with it", () => {
+    const q1 = q("q1-crm-screen-threshold-from-question");
+    const answer = (text: string, assumptions: string[]) =>
+      ({ text, assumptions }) as unknown as AgentAnswer;
+    const ASSUMED = [
+      "Radius 1 mi from the screen (the question gives no distance).",
+      "Roof age threshold 25 years from the question (the screen shows 15 years).",
+    ];
+    const call = [searchCall({ radius_miles: 1, threshold_years: 25 })];
+    const good = checkScreen(
+      answer(
+        "I used the screen's 1-mile radius around the map pin. The roof age threshold of 25 years is from your question.",
+        ASSUMED,
+      ),
+      call,
+      q1.expected,
+      q1.request,
+    );
+    expect(good.result).toBe("pass");
+    expect(good.details).toEqual([
+      "radius 1: assumption stated; value stated in the text; source (screen) named with it",
+      "threshold 25: assumption stated; value stated in the text; source (question) named with it",
+    ]);
+    // The value stated without its source; the assumption missing; the wrong value used.
+    expect(
+      checkScreen(
+        answer(
+          "Within 1 mile, roofs older than 25 years (from your question).",
+          ASSUMED,
+        ),
+        call,
+        q1.expected,
+        q1.request,
+      ).result,
+    ).toBe("fail");
+    expect(
+      checkScreen(
+        answer(
+          "I used the screen's 1-mile radius. The 25-year threshold is from your question.",
+          ASSUMED.slice(1),
+        ),
+        call,
+        q1.expected,
+        q1.request,
+      ).result,
+    ).toBe("fail");
+    expect(
+      checkScreen(
+        answer("The screen's 1 mile; 15 years from the screen.", ASSUMED),
+        [searchCall({ radius_miles: 1, threshold_years: 15 })],
+        q1.expected,
+        q1.request,
+      ).result,
+    ).toBe("fail");
+    // n/a without the expectation.
+    expect(
+      checkScreen(
+        answer("", []),
+        call,
+        { ...q1.expected, screen: undefined },
+        undefined,
+      ).result,
+    ).toBe("n/a");
+  });
+
+  test("q2 with the scripted model: the request's center and screen reach the agent; the place, screen and tools checks pass", async () => {
+    const q2 = q("q2-crm-screen-both-from-screen");
+    const out = join(SCRATCH, "screen-q2-out");
+    mkdirSync(out, { recursive: true });
+    const model = new ScriptedModel([
+      toolReply([
+        {
+          name: "search_aged_roofs",
+          input: {
+            lat: PIN.lat,
+            lon: PIN.lon,
+            radius_miles: 1,
+            threshold_years: 15,
+          },
+        },
+      ]),
+      textReply(
+        "Within the screen's 1-mile radius of the map pin, using the screen's roof age threshold of 15 years: 42 parcels match.",
+      ),
+    ]);
+    const r = await runEval(
+      {
+        provider: "anthropic",
+        model: "sonnet-5.5",
+        runs: 1,
+        maxUsd: 5,
+        outDir: out,
+        prompts: [q2],
+      },
+      {
+        model,
+        queries: fakeQueries().queries,
+        settings: SETTINGS,
+        now: () => 0,
+      },
+    );
+    const texts = JSON.stringify(model.requests[0]!.params.messages.at(-1));
+    expect(texts).toContain(
+      "Center from the request: map pin, 34.20008, -118.48111.",
+    );
+    expect(texts).toContain(
+      "Screen values from the request: radius 1 mi, roof age threshold 15 years.",
+    );
+    const checks = r.rows[0]!.checks;
+    expect(checks.place.result).toBe("pass");
+    expect(checks.screen.result).toBe("pass");
+    expect(checks.tools.result).toBe("pass");
+    const t = JSON.parse(
+      readFileSync(join(out, `run-1-${q2.id}.json`), "utf8"),
+    ) as { request: unknown };
+    expect(t.request).toEqual({ center: PIN, screen: SCREEN });
   });
 });

@@ -14,7 +14,9 @@
  *   states a license's status);
  * - contractors: every within-window permit the text names has its contractor named as the tool returned it;
  * - stated_counts: every number the text states for the rows it shows from a long-open list equals the rows of that
- *   list the text names (totals, such as how many match, are not such statements).
+ *   list the text names (totals, such as how many match, are not such statements);
+ * - screen: with the request's screen values, the agent's assumptions name where the search's radius and roof age
+ *   threshold came from, and the text states each value with its source.
  */
 import type { OwnershipBasis } from "@oracle-la/api/contract";
 import {
@@ -25,6 +27,7 @@ import {
   OWNERSHIP_BASES,
   WITHIN_WINDOW_LIMIT,
   idsInText,
+  valueSourceAssumption,
   ownershipRuleLine,
   placeKey,
   toolSchemas,
@@ -34,7 +37,12 @@ import {
   type SessionArea,
   type ToolName,
 } from "@oracle-la/agent";
-import { GAPS, type EvalPrompt, type GapSpec } from "./prompts.ts";
+import {
+  GAPS,
+  VALUE_SOURCES,
+  type EvalPrompt,
+  type GapSpec,
+} from "./prompts.ts";
 
 /**
  * The API Gateway HTTP API's maximum integration timeout, in ms: "Maximum integration timeout | 30 seconds | No"
@@ -56,6 +64,7 @@ export const CHECK_NAMES = [
   "license_status",
   "contractors",
   "stated_counts",
+  "screen",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 
@@ -1013,6 +1022,125 @@ export function checkStatedCounts(
   return check(details, ok);
 }
 
+/** Words in the sentence of a stated value that name its source. */
+export const SOURCE_WORDS: Record<(typeof VALUE_SOURCES)[number], RegExp> = {
+  question: /\b(?:question|you asked|you said|you gave|you specified|your)\b/i,
+  screen: /\bscreen\b/i,
+};
+
+const NUMBER_NAMES: Record<number, string> = {
+  1: "one",
+  2: "two",
+  3: "three",
+  4: "four",
+  5: "five",
+  6: "six",
+  7: "seven",
+  8: "eight",
+  9: "nine",
+  10: "ten",
+  15: "fifteen",
+  20: "twenty",
+  25: "twenty-five",
+  30: "thirty",
+  40: "forty",
+};
+const escapeNumber = (s: string) => s.replace(/\./g, "\\.");
+/** The number as digits ("1", "1.0", "0.5") or, for whole numbers, a word. */
+const numberPattern = (n: number): string =>
+  [
+    escapeNumber(String(n)),
+    ...(Number.isInteger(n) ? [`${n}\\.0`] : []),
+    ...(NUMBER_NAMES[n] ? [NUMBER_NAMES[n]] : []),
+  ].join("|");
+/** "1 mile", "1-mile", "one mile", "1 mi". */
+export const milesText = (n: number): RegExp =>
+  new RegExp(
+    String.raw`(?<![\w.])(?:${numberPattern(n)})[\s-]*(?:miles?|mi)\b`,
+    "i",
+  );
+/** "25 years", "25-year", "twenty-five years". */
+export const yearsText = (n: number): RegExp =>
+  new RegExp(
+    String.raw`(?<![\w.])(?:${numberPattern(n)})[\s-]*(?:years?|yrs?)\b`,
+    "i",
+  );
+
+/** The sentences of a text (split at . ! ? followed by a space, and at line breaks). */
+const sentencesOf = (text: string): string[] =>
+  text.split(/(?<=[.!?])\s+|\n+/).filter((x) => x.trim());
+
+/**
+ * (ix) With expected.screen: the search (search_aged_roofs or long_open_permits; the first one) has a radius, and
+ * with search_aged_roofs a roof age threshold; for each, the agent's assumptions hold the deterministic line naming
+ * the expected source (valueSourceAssumption), and some sentence of the text states the value (miles or years) and
+ * names that source (SOURCE_WORDS). n/a without the expectation.
+ */
+export function checkScreen(
+  answer: AgentAnswer,
+  calls: readonly ToolCallRecord[],
+  expected: EvalPrompt["expected"],
+  request: EvalPrompt["request"],
+): CheckResult {
+  const want = expected.screen;
+  if (!want) return check(["no screen expectation"], null);
+  const screen = request?.screen;
+  if (!screen) return check(["the request has no screen"], false);
+  const search = calls
+    .filter((c) => SEARCH_TOOLS.has(c.name))
+    .map((c) => ({ name: c.name, input: parsedInput(c) }))
+    .find((c) => c.input !== null);
+  if (!search) return check(["no search"], false);
+  const input = search.input!;
+  const sentences = sentencesOf(answer.text);
+  const details: string[] = [];
+  let ok = true;
+  const one = (
+    what: "radius" | "threshold",
+    value: unknown,
+    source: (typeof VALUE_SOURCES)[number],
+    screenValue: number,
+    text: (n: number) => RegExp,
+  ) => {
+    if (typeof value !== "number") {
+      ok = false;
+      details.push(`${what}: not in the search's input`);
+      return;
+    }
+    const line = valueSourceAssumption(what, value, source, screenValue);
+    const assumed = answer.assumptions.includes(line);
+    const stated = sentences.some((x) => text(value).test(x));
+    const sourced = sentences.some(
+      (x) => text(value).test(x) && SOURCE_WORDS[source].test(x),
+    );
+    if (!assumed || !stated || !sourced) ok = false;
+    details.push(
+      `${what} ${value}: assumption ${assumed ? "stated" : `NOT stated ("${line}")`}; value ${stated ? "stated" : "NOT stated"} in the text; source (${source}) ${sourced ? "named with it" : "NOT named with it"}`,
+    );
+  };
+  one(
+    "radius",
+    input.radius_miles,
+    want.radius,
+    screen.radius_miles,
+    milesText,
+  );
+  if (want.threshold !== undefined) {
+    if (search.name !== "search_aged_roofs") {
+      ok = false;
+      details.push("threshold: the search is not search_aged_roofs");
+    } else
+      one(
+        "threshold",
+        input.threshold_years,
+        want.threshold,
+        screen.threshold_years,
+        yearsText,
+      );
+  }
+  return check(details, ok);
+}
+
 interface Resolution {
   status?: unknown;
   name?: unknown;
@@ -1028,6 +1156,8 @@ export function checkPlace(
   calls: readonly ToolCallRecord[],
   expected: EvalPrompt["expected"]["place"],
   previousArea: SessionArea | undefined,
+  /** The request's center, when the prompt sends one. */
+  requestCenter?: { lat: number; lon: number },
 ): CheckResult {
   const resolutions = calls
     .filter((c) => c.name === "resolve_place" && !c.is_error)
@@ -1048,6 +1178,23 @@ export function checkPlace(
   switch (expected.outcome) {
     case "none":
       return check(details, resolutions.length === 0);
+    case "request_center": {
+      if (!requestCenter)
+        return check([...details, "the request has no center"], false);
+      details.push(`request center ${requestCenter.lat}, ${requestCenter.lon}`);
+      return check(
+        details,
+        resolutions.length === 0 &&
+          searches.length > 0 &&
+          searches.every(
+            (s) =>
+              typeof s.lat === "number" &&
+              typeof s.lon === "number" &&
+              same5(s.lat, requestCenter.lat) &&
+              same5(s.lon, requestCenter.lon),
+          ),
+      );
+    }
     case "reused_previous_area": {
       if (!previousArea)
         return check([...details, "no previous search area"], false);
@@ -1162,11 +1309,17 @@ export async function checkAnswer(args: {
       elapsed: checkElapsed(answer),
       tools: checkTools(calls, prompt.expected),
       refusal: checkRefusal(answer, prompt.expected),
-      place: checkPlace(calls, prompt.expected.place, args.previousArea),
+      place: checkPlace(
+        calls,
+        prompt.expected.place,
+        args.previousArea,
+        prompt.request?.center,
+      ),
       ownership: checkOwnership(answer, calls, prompt.expected),
       license_status: checkLicenseStatus(answer, prompt.expected),
       contractors: checkContractors(answer, calls, prompt.expected),
       stated_counts: checkStatedCounts(answer, calls, prompt.expected),
+      screen: checkScreen(answer, calls, prompt.expected, prompt.request),
     },
   };
 }

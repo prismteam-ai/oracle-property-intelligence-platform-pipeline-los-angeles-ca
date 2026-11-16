@@ -269,5 +269,79 @@
       "refused": false,
       "place": { "outcome": "resolved", "name": "Van Nuys" }
     }
+  },
+  {
+    "id": "q1-crm-screen-threshold-from-question",
+    "case": "q",
+    "group": "q1-crm-screen",
+    "note": "The CRM's request: the map pin as center and the screen's radius (1 mi) and roof age threshold (15 years). The question gives a roof age (25 years, which wins over the screen's 15) and no distance (the screen's 1 mile). No resolve_place: the search is at the request's center. The answer states both values and where each came from (check screen).",
+    "question": "Which properties here have roofs older than 25 years?",
+    "request": {
+      "center": {
+        "lat": 34.20008,
+        "lon": -118.48111,
+        "label": "map pin"
+      },
+      "screen": {
+        "radius_miles": 1,
+        "threshold_years": 15
+      }
+    },
+    "expected": {
+      "tools": ["search_aged_roofs"],
+      "forbidden_tools": ["resolve_place"],
+      "tool_inputs": {
+        "search_aged_roofs": {
+          "radius_miles": 1,
+          "threshold_years": 25
+        }
+      },
+      "gaps": [],
+      "refused": false,
+      "screen": {
+        "radius": "screen",
+        "threshold": "question"
+      },
+      "place": {
+        "outcome": "request_center"
+      }
+    }
+  },
+  {
+    "id": "q2-crm-screen-both-from-screen",
+    "case": "q",
+    "group": "q2-crm-screen",
+    "note": "The CRM's request as in q1, with a question that gives no distance and no roof age: both from the screen (1 mile, 15 years), and stated with their source. No resolve_place.",
+    "question": "Which properties here have old roofs?",
+    "request": {
+      "center": {
+        "lat": 34.20008,
+        "lon": -118.48111,
+        "label": "map pin"
+      },
+      "screen": {
+        "radius_miles": 1,
+        "threshold_years": 15
+      }
+    },
+    "expected": {
+      "tools": ["search_aged_roofs"],
+      "forbidden_tools": ["resolve_place"],
+      "tool_inputs": {
+        "search_aged_roofs": {
+          "radius_miles": 1,
+          "threshold_years": 15
+        }
+      },
+      "gaps": [],
+      "refused": false,
+      "screen": {
+        "radius": "screen",
+        "threshold": "screen"
+      },
+      "place": {
+        "outcome": "request_center"
+      }
+    }
   }
 ]

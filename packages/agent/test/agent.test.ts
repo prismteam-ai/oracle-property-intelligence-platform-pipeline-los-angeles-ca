@@ -2171,6 +2171,8 @@ const FIXTURE_WINDOW = {
 };
 /** System-prompt lines added since 8fc8821 (each once, as its own line); nothing else of the text changed. */
 const PROMPT_LINES_ADDED_SINCE_8FC8821: readonly string[] = [
+  // Area and place (radius and roof age threshold: precedence and sources).
+  '- Radius and roof age threshold: a value in the question wins; then the previous search area, only when the question refers back to it in words; then "Screen values from the request"; then the default. State the radius and the roof age threshold you used and where each came from (the question, the previous area, the screen or the default).',
   // Answer format (stated counts equal the rows shown).
   "- When you say how many permits or records you show from a list (either long-open list included), that number must equal the rows you list from it; never restate a tool's returned count for rows you leave out. How many match in all may still be stated.",
 ];
@@ -2312,6 +2314,221 @@ describe("prompt caching (provider anthropic)", () => {
         { input_tokens: 51_000, output_tokens: 100 },
         a.history.slice(model.requests[0]!.params.messages.length + 1),
       ),
+    );
+  });
+});
+
+describe("the CRM screen's radius and roof age threshold (request.screen)", () => {
+  const PIN = { lat: 34.20008, lon: -118.48111, label: "map pin" };
+  const SCREEN = { radius_miles: 1, threshold_years: 15 };
+  const search = (input: Record<string, unknown>) =>
+    new ScriptedModel([
+      toolReply([
+        {
+          name: "search_aged_roofs",
+          input: { lat: PIN.lat, lon: PIN.lon, ...input },
+        },
+      ]),
+      textReply("Listed."),
+    ]);
+
+  test("valid: the user turn gives the screen values after the center (the system prompt is the same with or without them)", async () => {
+    const model = search({ radius_miles: 1, threshold_years: 25 });
+    const a = await runAgent(
+      {
+        question: "Which properties here have roofs older than 25 years?",
+        center: PIN,
+        screen: SCREEN,
+      },
+      { model, queries: fakeQueries().queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    const p = model.requests[0]!.params;
+    expect(lastUserTexts(p)).toEqual([
+      "Center from the request: map pin, 34.20008, -118.48111.",
+      "Screen values from the request: radius 1 mi, roof age threshold 15 years.",
+      "Which properties here have roofs older than 25 years?",
+    ]);
+    const without = search({ radius_miles: 1, threshold_years: 25 });
+    await runAgent(
+      { question: "Which properties here have roofs older than 25 years?" },
+      { model: without, queries: fakeQueries().queries, settings: SETTINGS },
+    );
+    expect(p.system).toBe(without.requests[0]!.params.system);
+  });
+
+  test("invalid: numbers only, within the tools' own bounds (radius 0.1–10, threshold an integer 1–120), no other field: InvalidRequestError, nothing runs", async () => {
+    for (const screen of [
+      { radius_miles: 0.1, threshold_years: 1 },
+      { radius_miles: 10, threshold_years: 120 },
+    ]) {
+      const model = search({ radius_miles: 1 });
+      await runAgent(
+        { question: "Old roofs here?", center: PIN, screen },
+        { model, queries: fakeQueries().queries, settings: SETTINGS },
+      );
+      expect(model.requests).toHaveLength(2);
+    }
+    for (const screen of [
+      { radius_miles: 0.09, threshold_years: 15 },
+      { radius_miles: 10.01, threshold_years: 15 },
+      { radius_miles: 1, threshold_years: 0 },
+      { radius_miles: 1, threshold_years: 121 },
+      { radius_miles: 1, threshold_years: 15.5 },
+      { radius_miles: "1", threshold_years: 15 },
+      { radius_miles: 1 },
+      { radius_miles: 1, threshold_years: 15, label: "x" },
+      "1 mi",
+    ]) {
+      const model = new ScriptedModel([]);
+      const { queries, calls } = fakeQueries();
+      await expect(
+        runAgent(
+          {
+            question: "Old roofs here?",
+            center: PIN,
+            screen: screen as never,
+          },
+          { model, queries, settings: SETTINGS },
+        ),
+      ).rejects.toThrow(InvalidRequestError);
+      expect(model.requests).toHaveLength(0);
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  test("assumptions name each value's source: radius from the screen, threshold from the question (q1)", async () => {
+    const a = await runAgent(
+      {
+        question: "Which properties here have roofs older than 25 years?",
+        center: PIN,
+        screen: SCREEN,
+      },
+      {
+        model: search({ radius_miles: 1, threshold_years: 25 }),
+        queries: fakeQueries().queries,
+        settings: SETTINGS,
+      },
+    );
+    expect(a.assumptions).toContain(
+      "Radius 1 mi from the screen (the question gives no distance).",
+    );
+    expect(a.assumptions).toContain(
+      "Roof age threshold 25 years from the question (the screen shows 15 years).",
+    );
+    expect(a.assumptions).toContain(
+      'Used the request\'s center "map pin" (34.20008, -118.48111).',
+    );
+  });
+
+  test("assumptions: both from the screen (q2); the default and an unsourced value are said so", async () => {
+    const q2 = await runAgent(
+      {
+        question: "Which properties here have old roofs?",
+        center: PIN,
+        screen: SCREEN,
+      },
+      {
+        model: search({ radius_miles: 1, threshold_years: 15 }),
+        queries: fakeQueries().queries,
+        settings: SETTINGS,
+      },
+    );
+    expect(q2.assumptions).toContain(
+      "Radius 1 mi from the screen (the question gives no distance).",
+    );
+    expect(q2.assumptions).toContain(
+      "Roof age threshold 15 years from the screen (the question gives no roof age).",
+    );
+    // The model ignored the screen: the tool's default, not the screen's value.
+    const ignored = await runAgent(
+      {
+        question: "Which properties here have old roofs?",
+        center: PIN,
+        screen: SCREEN,
+      },
+      {
+        model: search({}),
+        queries: fakeQueries().queries,
+        settings: SETTINGS,
+      },
+    );
+    expect(ignored.assumptions).toContain(
+      "Radius 5 mi: the tool's default, not the screen's 1 mi.",
+    );
+    expect(ignored.assumptions).toContain(
+      "Roof age threshold 15 years from the screen (the question gives no roof age).",
+    );
+    // No screen: the question's values, the default, or neither.
+    const plain = await runAgent(
+      {
+        question:
+          "Which properties within two miles of here have roofs older than 40 years?",
+        center: PIN,
+      },
+      {
+        model: search({ radius_miles: 2, threshold_years: 40 }),
+        queries: fakeQueries().queries,
+        settings: SETTINGS,
+      },
+    );
+    expect(plain.assumptions).toContain("Radius 2 mi from the question.");
+    expect(plain.assumptions).toContain(
+      "Roof age threshold 40 years from the question.",
+    );
+    const other = await runAgent(
+      { question: "Old roofs here?", center: PIN },
+      {
+        model: search({ radius_miles: 3 }),
+        queries: fakeQueries().queries,
+        settings: SETTINGS,
+      },
+    );
+    expect(other.assumptions).toContain(
+      "Radius 3 mi: from neither the question nor the previous search area.",
+    );
+    expect(other.assumptions).toContain(
+      "Roof age threshold 15 years: the tool's default.",
+    );
+  });
+
+  test("a follow-up that reuses the previous area's center and radius: stated as reused, not as the screen's", async () => {
+    const first = await runAgent(
+      {
+        question:
+          "Which properties within two miles of here have roofs older than 40 years?",
+        center: PIN,
+        screen: SCREEN,
+      },
+      {
+        model: search({ radius_miles: 2, threshold_years: 40 }),
+        queries: fakeQueries().queries,
+        settings: SETTINGS,
+      },
+    );
+    const model = new ScriptedModel([
+      toolReply([
+        {
+          name: "long_open_permits",
+          input: { lat: PIN.lat, lon: PIN.lon, radius_miles: 2 },
+        },
+      ]),
+      textReply("Listed."),
+    ]);
+    const a = await runAgent(
+      {
+        question: "Which of them in that area have long-open permits?",
+        screen: SCREEN,
+        history: first.history,
+        session: first.session,
+      },
+      { model, queries: fakeQueries().queries, settings: SETTINGS },
+    );
+    expect(a.assumptions).toContain(
+      "Radius and center reused from the previous question (map pin, 2 mi).",
+    );
+    expect(a.assumptions.filter((x) => x.startsWith("Radius 2 mi"))).toEqual(
+      [],
     );
   });
 });

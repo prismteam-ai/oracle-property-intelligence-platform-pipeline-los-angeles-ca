@@ -43,6 +43,7 @@ import {
   LONG_OPEN_SCOPE,
   anthropicTools,
   runTool,
+  toolSchemas,
   type ContractorSummary,
   type ToolOutcome,
 } from "./tools.ts";
@@ -54,6 +55,12 @@ export interface AgentCenter {
   lat: number;
   lon: number;
   label: string;
+}
+
+/** The CRM screen's radius and roof age threshold, sent with the question. */
+export interface AgentScreen {
+  radius_miles: number;
+  threshold_years: number;
 }
 
 export type AreaBasis = PlaceBasis | "request_center" | "coordinates";
@@ -75,6 +82,8 @@ export interface AgentRequest {
   question: string;
   /** The CRM pin or the presenter's place. */
   center?: AgentCenter;
+  /** The CRM screen's radius and roof age threshold (used when the question gives none). */
+  screen?: AgentScreen;
   /** The conversation so far (returned by the previous call). */
   history?: Anthropic.MessageParam[];
   session?: SessionState;
@@ -87,6 +96,15 @@ export const agentRequestSchema = z.object({
       lat: z.number().min(-90).max(90),
       lon: z.number().min(-180).max(180),
       label: z.string().trim().min(1).max(200),
+    })
+    .optional(),
+  // Numbers within the tools' own bounds: search_aged_roofs' radius_miles (long_open_permits uses the same schema)
+  // and threshold_years, without their defaults.
+  screen: z
+    .strictObject({
+      radius_miles: toolSchemas.search_aged_roofs.shape.radius_miles.unwrap(),
+      threshold_years:
+        toolSchemas.search_aged_roofs.shape.threshold_years.unwrap(),
     })
     .optional(),
 });
@@ -265,6 +283,11 @@ function userTurn(
       type: "text",
       text: `Center from the request: ${req.center.label}, ${req.center.lat}, ${req.center.lon}.`,
     });
+  if (req.screen)
+    blocks.push({
+      type: "text",
+      text: `Screen values from the request: radius ${req.screen.radius_miles} mi, roof age threshold ${req.screen.threshold_years} years.`,
+    });
   if (area)
     blocks.push({
       type: "text",
@@ -393,6 +416,83 @@ export function longOpenRuleLine(
 export const outsideCityGap = (place: string): string =>
   `${place} is outside the City of Los Angeles: no permit data there.`;
 
+/** Where a search's radius or roof age threshold came from (precedence: question, previous area, screen, default). */
+export type ValueSource =
+  "question" | "previous_area" | "screen" | "default" | "other";
+
+/** The tool defaults: radius 5 mi, roof age threshold 15 years. */
+const DEFAULT_RADIUS_MILES = 5;
+const DEFAULT_THRESHOLD_YEARS = 15;
+
+const NUMBER_WORD = Object.keys(NUMBER_WORDS).join("|");
+/** Distances in the question, in miles: "five miles", "1 mile", "1-mile", "a mile", "half a mile", "2.5 mi". */
+function questionMiles(question: string): number[] {
+  const re = new RegExp(
+    String.raw`\b(half an?|an?|\d+(?:\.\d+)?|${NUMBER_WORD})[\s-]+(?:miles?|mi)\b`,
+    "gi",
+  );
+  return [...question.matchAll(re)].map((m) => {
+    const w = m[1]!.toLowerCase();
+    if (w.startsWith("half")) return 0.5;
+    if (w === "a" || w === "an") return 1;
+    return NUMBER_WORDS[w] ?? Number(w);
+  });
+}
+/** Numbers of years in the question: "older than 25 years", "25-year-old roofs", "fifteen years". */
+function questionYears(question: string): number[] {
+  const re = new RegExp(
+    String.raw`\b(\d+(?:\.\d+)?|${NUMBER_WORD})[\s-]+years?\b`,
+    "gi",
+  );
+  return [...question.matchAll(re)].map((m) => {
+    const w = m[1]!.toLowerCase();
+    return NUMBER_WORDS[w] ?? Number(w);
+  });
+}
+
+/**
+ * The assumption naming where a search's radius or roof age threshold came from (deterministic; the eval's screen
+ * check rebuilds it). `screen` is the screen's value for the same setting, when the request had a screen.
+ */
+export function valueSourceAssumption(
+  what: "radius" | "threshold",
+  value: number,
+  source: ValueSource,
+  screen: number | undefined,
+): string {
+  const label = what === "radius" ? "Radius" : "Roof age threshold";
+  const unit = (n: number) => (what === "radius" ? `${n} mi` : `${n} years`);
+  const shows =
+    screen !== undefined ? ` (the screen shows ${unit(screen)})` : "";
+  switch (source) {
+    case "question":
+      return `${label} ${unit(value)} from the question${shows}.`;
+    case "previous_area":
+      return `${label} ${unit(value)} from the previous search area${shows}.`;
+    case "screen":
+      return `${label} ${unit(value)} from the screen (the question gives ${what === "radius" ? "no distance" : "no roof age"}).`;
+    case "default":
+      return `${label} ${unit(value)}: the tool's default${screen !== undefined ? `, not the screen's ${unit(screen)}` : ""}.`;
+    case "other":
+      return `${label} ${unit(value)}: from neither the question${screen !== undefined ? ", the screen" : ""} nor the previous search area.`;
+  }
+}
+
+/** The source of a search's value: the question, the previous area (radius only), the screen, the default, or none. */
+function valueSource(
+  value: number,
+  inQuestion: readonly number[],
+  previous: number | undefined,
+  screen: number | undefined,
+  fallback: number,
+): ValueSource {
+  if (inQuestion.some((n) => same(n, value))) return "question";
+  if (previous !== undefined && same(previous, value)) return "previous_area";
+  if (screen !== undefined && same(screen, value)) return "screen";
+  if (same(fallback, value)) return "default";
+  return "other";
+}
+
 interface Explained {
   reasoning: string[];
   /** Rule lines, each its own sentence after the reasoning. */
@@ -465,6 +565,7 @@ function explain(
       const radius = Number(input.radius_miles);
       const place = [...places].reverse().find((p) => atCenter(p, lat, lon));
       let basis: AreaBasis;
+      let reused = false;
       if (place) {
         label = place.label;
         basis = place.basis;
@@ -477,6 +578,7 @@ function explain(
       } else if (prev && atCenter(prev, lat, lon)) {
         label = prev.label;
         basis = prev.basis;
+        reused = true;
         assumptions.push(
           same(prev.radius_miles, radius)
             ? `Radius and center reused from the previous question (${prev.label}, ${prev.radius_miles} mi).`
@@ -490,6 +592,42 @@ function explain(
         );
       }
       area = { label, lat, lon, radius_miles: radius, basis };
+      // Where the radius and (search_aged_roofs) the roof age threshold came from. A radius reused with the
+      // previous area's center is already stated above.
+      const radiusFrom = valueSource(
+        radius,
+        questionMiles(req.question),
+        reused ? prev!.radius_miles : undefined,
+        req.screen?.radius_miles,
+        DEFAULT_RADIUS_MILES,
+      );
+      if (radiusFrom !== "previous_area")
+        assumptions.push(
+          valueSourceAssumption(
+            "radius",
+            radius,
+            radiusFrom,
+            req.screen?.radius_miles,
+          ),
+        );
+      if (
+        o.name === "search_aged_roofs" &&
+        typeof input.threshold_years === "number"
+      )
+        assumptions.push(
+          valueSourceAssumption(
+            "threshold",
+            input.threshold_years,
+            valueSource(
+              input.threshold_years,
+              questionYears(req.question),
+              undefined,
+              req.screen?.threshold_years,
+              DEFAULT_THRESHOLD_YEARS,
+            ),
+            req.screen?.threshold_years,
+          ),
+        );
     }
 
     const f = o.fact;
@@ -621,6 +759,7 @@ export async function runAgent(
     ...request,
     question: parsed.data.question,
     center: parsed.data.center,
+    screen: parsed.data.screen,
   };
   const now = deps.now ?? Date.now;
   // explorer.sources (the permit and contractor citations) is read at most once per answer.

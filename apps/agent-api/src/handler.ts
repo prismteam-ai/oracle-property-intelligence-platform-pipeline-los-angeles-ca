@@ -1,7 +1,7 @@
 /**
  * The hosted agent's Lambda handler (HTTP API, payload 2.0), for the OracleLaAgentApi stack to bundle
  * (`apps/agent-api/src/handler.ts`, export `handler`). Routes, both behind the shared token authorizer:
- * - POST /agent/answer: one answer per request; body { question, center?, history?, session?, signature? }.
+ * - POST /agent/answer: one answer per request; body { question, center?, screen?, history?, session?, signature? }.
  * - GET /agent/warm: loads the configuration and reads both SSM parameters, builds the model client; no model call.
  *
  * Environment (names only, no secret): DATA_API_URL; KEY_PARAMETER_NAME and HISTORY_SECRET_PARAMETER_NAME (the two
@@ -92,6 +92,7 @@ export interface HandlerDeps {
 const bodySchema = z.strictObject({
   question: z.string(),
   center: z.unknown().optional(),
+  screen: z.unknown().optional(),
   history: z.array(z.unknown()).optional(),
   session: z.unknown().optional(),
   signature: z.string().optional(),
@@ -246,7 +247,7 @@ export function createHandler(deps: HandlerDeps) {
         return finish(
           json(400, {
             error:
-              "invalid body: expected JSON { question, center?, history?, session?, signature? }",
+              "invalid body: expected JSON { question, center?, screen?, history?, session?, signature? }",
           }),
           "invalid",
         );
@@ -279,6 +280,7 @@ export function createHandler(deps: HandlerDeps) {
           {
             question: parsed.question,
             center: parsed.center as AgentRequest["center"],
+            screen: parsed.screen as AgentRequest["screen"],
             history: (parsed.history ?? []) as AgentRequest["history"],
             session: (parsed.session ?? {}) as SessionState,
           },

@@ -170,6 +170,8 @@ export interface Transcript {
   case: string;
   group: string;
   question: string;
+  /** The request's center and screen, when the prompt sends them. */
+  request: EvalPrompt["request"] | null;
   expected: EvalPrompt["expected"];
   status: AgentAnswer["status"];
   stopped_by: AgentAnswer["stopped_by"] | null;
@@ -209,7 +211,17 @@ export async function runEval(
         const previousLength = history.length;
         const previousArea = session.area;
         const answer = await runAgent(
-          { question: prompt.question, history, session },
+          {
+            question: prompt.question,
+            ...(prompt.request?.center
+              ? { center: prompt.request.center }
+              : {}),
+            ...(prompt.request?.screen
+              ? { screen: prompt.request.screen }
+              : {}),
+            history,
+            session,
+          },
           {
             model,
             queries: deps.queries,
@@ -247,6 +259,7 @@ export async function runEval(
           case: prompt.case,
           group: prompt.group,
           question: prompt.question,
+          request: prompt.request ?? null,
           expected: prompt.expected,
           status: answer.status,
           stopped_by: answer.stopped_by ?? null,

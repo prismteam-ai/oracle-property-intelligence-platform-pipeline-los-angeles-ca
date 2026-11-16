@@ -10,6 +10,7 @@ import {
   GAP_NO_CENTER,
   STANDARD_GAPS,
   TOOL_NAMES,
+  agentRequestSchema,
   type ToolName,
 } from "@oracle-la/agent";
 import { z } from "zod";
@@ -25,7 +26,8 @@ export const DEFAULT_PROMPTS_FILE = fileURLToPath(
  * (refused by the people guard), n how long without an ownership change (answered through the ownership filter);
  * then o, a coverage question (answered from run_summary: BBB ratings are not available, and why);
  * then p, how many aged-roof parcels have a long-open roofing permit (search_aged_roofs with
- * long_open_permit, a count of parcels).
+ * long_open_permit, a count of parcels); then q, the CRM's request with a center and the screen's radius and roof
+ * age threshold (each value from the question or the screen, and stated).
  */
 export const PROMPT_CASES = [
   "a",
@@ -44,6 +46,7 @@ export const PROMPT_CASES = [
   "n",
   "o",
   "p",
+  "q",
 ] as const;
 
 /**
@@ -187,8 +190,13 @@ export const placeSchema = z.discriminatedUnion("outcome", [
     name: placeName,
   }),
   z.strictObject({ outcome: z.literal("reused_previous_area") }),
+  /** No resolve_place call, and every search (at least one) at the request's center. */
+  z.strictObject({ outcome: z.literal("request_center") }),
   z.strictObject({ outcome: z.literal("none") }),
 ]);
+
+/** Where a search's radius or roof age threshold must come from (the agent's assumption and the text say so). */
+export const VALUE_SOURCES = ["question", "screen"] as const;
 export type ExpectedPlace = z.infer<typeof placeSchema>;
 
 export const promptSchema = z.strictObject({
@@ -197,6 +205,13 @@ export const promptSchema = z.strictObject({
   group: z.string().min(1),
   note: z.string().optional(),
   question: z.string().trim().min(1).max(2000),
+  /** What the request sends besides the question (the CRM: the pin and the screen's values), as the agent API takes it. */
+  request: z
+    .strictObject({
+      center: agentRequestSchema.shape.center,
+      screen: agentRequestSchema.shape.screen,
+    })
+    .optional(),
   expected: z.strictObject({
     /**
      * Tools that must be called (each at least once). Empty with no forbidden_tools: no tool may be called; empty
@@ -237,6 +252,16 @@ export const promptSchema = z.strictObject({
      * it names; totals (how many match) are not such numbers (check "stated_counts").
      */
     stated_counts: z.literal(true).optional(),
+    /**
+     * The sources of the search's radius and (search_aged_roofs) roof age threshold: the agent's assumptions name
+     * them and the text states each value with its source (check "screen"). Needs request.screen.
+     */
+    screen: z
+      .strictObject({
+        radius: z.enum(VALUE_SOURCES),
+        threshold: z.enum(VALUE_SOURCES).optional(),
+      })
+      .optional(),
     place: placeSchema,
   }),
 });
@@ -302,6 +327,18 @@ export const promptsFileSchema = z
             path: [i, "expected", "forbidden_tools"],
             message: `${t} is both required (tools) and forbidden`,
           });
+      if (p.expected.screen && !p.request?.screen)
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "expected", "screen"],
+          message: "screen needs request.screen",
+        });
+      if (p.expected.place.outcome === "request_center" && !p.request?.center)
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "expected", "place"],
+          message: "request_center needs request.center",
+        });
       if (p.expected.place.outcome === "reused_previous_area") {
         const before = ps.slice(0, i).some((q) => q.group === p.group);
         if (!before)
