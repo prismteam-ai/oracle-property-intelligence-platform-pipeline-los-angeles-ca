@@ -793,7 +793,7 @@ describe("MCP server over the SDK's in-memory transport", () => {
       expect(b.gaps).toHaveLength(2);
       expect(b.gaps[0]).toBe(b.result.permit_data!.text);
       expect(b.gaps[0]).toBe(
-        "All of the nearest 3 of the 42 parcels that match the roof-age rule (only those were checked: the data API marks at most 3 parcels) are outside the City of Los Angeles: no permit data there.",
+        "Roof age covers all 42 parcels that match the roof-age rule. How many of them lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 (the data API marks at most 3 parcels): all 3 do; for the other 39 it is not known.",
       );
       expect(b.gaps[1]).toMatch(
         /^Not available: none of the nearest 3 of the 42 parcels that match the roof-age rule has permit data \(all are outside the City of Los Angeles;/,
@@ -804,7 +804,7 @@ describe("MCP server over the SDK's in-memory transport", () => {
       expect(plain.result.permit_data?.without_permit_data).toBe(3);
       expect(plain.gaps).toContain(plain.result.permit_data!.text);
       expect(plain.result.permit_data!.text).toMatch(
-        /are outside the City of Los Angeles: no permit data there\.$/,
+        /lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 \(the data API marks at most 3 parcels\): all 3 do;/,
       );
       for (const g of [...b.gaps, ...plain.gaps])
         expect(g).not.toContain("Pasadena");

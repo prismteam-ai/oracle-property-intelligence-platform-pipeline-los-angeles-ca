@@ -356,9 +356,10 @@ describe("runTool", () => {
       })),
     );
     expect(c.truncated).toBe(true);
-    // The fake's points are truncated (the nearest 3 of 42, all with permit data): the others were not checked.
+    // The fake's points are truncated (the nearest 3 of 42, all with permit data): the list covers the whole circle,
+    // and how many parcels lie outside the City of Los Angeles is known for the nearest 3 only.
     expect(o.gaps).toEqual([
-      "All of the nearest 3 of the 42 parcels within 5 mi that have a roof year (only those were checked: the data API marks at most 3 parcels) have permit data; the other 39 were not checked.",
+      "The count and the list cover every permit within 5 mi. How many of the 42 parcels within 5 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 (the data API marks at most 3 parcels): none of those 3 does; for the other 39 it is not known.",
       "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
     ]);
     const all = await runTool(
@@ -1247,7 +1248,7 @@ describe("long_open_permits: with_contractor_window", () => {
     // Both lists' truncation gaps, each naming its list; the IDs of both lists are known.
     // The fake's parcels list permits 0 and 1 only, so permit 2's contractor is not read, and said so.
     expect(o.gaps).toEqual([
-      "All of the nearest 3 of the 42 parcels within 5 mi that have a roof year (only those were checked: the data API marks at most 3 parcels) have permit data; the other 39 were not checked.",
+      "The counts and both lists cover every permit within 5 mi. How many of the 42 parcels within 5 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 (the data API marks at most 3 parcels): none of those 3 does; for the other 39 it is not known.",
       "Results truncated: the longest-open list returned 2 of 57 long-open permits (longest open first).",
       "Results truncated: the within-window list returned 2 of 57 long-open permits (longest open first).",
       `The contractor of permit ${FAKE_PERMITS[2]} (parcel ${FAKE_PARCELS[2]}) was not read (permit ${FAKE_PERMITS[2]} is not among parcel ${FAKE_PARCELS[2]}'s permits (permits.forParcel)); it is listed without its contractor.`,
@@ -1743,11 +1744,13 @@ describe("search_aged_roofs: long_open_permit", () => {
       { fn: "parcels.points", input: { ...VN, min_open_days: 1826 } },
     ]);
     expect(o.content).not.toHaveProperty("long_open_permit");
-    // Every matching parcel checked has permit data, but only the nearest 3 of the 42 were checked (truncated
-    // points): stated, with how many match in all; nothing about the City of Los Angeles.
+    // Roof age covers every matching parcel; how many lie outside the City of Los Angeles is counted for the nearest
+    // 3 of the 42 only (truncated points; none of them does): stated, with how many match in all; no place is said to
+    // be outside the City.
     const nearest =
-      "All of the nearest 3 of the 42 parcels that match the roof-age rule (only those were checked: the data API marks at most 3 parcels) have permit data; the other 39 were not checked.";
+      "Roof age covers all 42 parcels that match the roof-age rule. How many of them lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 (the data API marks at most 3 parcels): none of those 3 does; for the other 39 it is not known.";
     expect((o.content as { permit_data?: unknown }).permit_data).toEqual({
+      roof_age_covers_all_matching: true,
       checked: 3,
       matched: 42,
       without_permit_data: 0,
@@ -1755,7 +1758,7 @@ describe("search_aged_roofs: long_open_permit", () => {
       text: nearest,
     });
     expect(o.gaps).toContain(nearest);
-    expect(o.gaps.some((g) => g.includes("City of Los Angeles"))).toBe(false);
+    expect(o.gaps.some((g) => g.includes("is outside the City"))).toBe(false);
     expect(o.fact).toMatchObject({
       long_open: null,
       count: 42,
@@ -2006,9 +2009,10 @@ describe("search_aged_roofs: permit data of the matching parcels (the City of Lo
       "Not available: none of the nearest 3 of the 42 parcels that match the roof-age rule has permit data (all are outside the City of Los Angeles; only those were checked: the data API marks at most 3 parcels), so whether they have a long-open roofing permit (an issued LADBS roofing-work permit still open at least 1,826 days) is unknown, not 0; the filter can't be evaluated there. A smaller radius gives a full check.",
     );
     const outside =
-      "All of the nearest 3 of the 42 parcels that match the roof-age rule (only those were checked: the data API marks at most 3 parcels) are outside the City of Los Angeles: no permit data there.";
+      "Roof age covers all 42 parcels that match the roof-age rule. How many of them lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 (the data API marks at most 3 parcels): all 3 do; for the other 39 it is not known.";
     // With the filter the block is as before (no matched: long_open_permit.of states it).
     expect(c.permit_data).toEqual({
+      roof_age_covers_all_matching: true,
       checked: 3,
       without_permit_data: 3,
       complete: false,
@@ -2161,9 +2165,10 @@ describe("search_aged_roofs: permit data of the matching parcels (the City of Lo
     expect(all.gaps).toContain(allText);
     const mixed = await runTool("search_aged_roofs", MIXED, queries);
     const mixedText =
-      "1 of the nearest 3 of the 42 parcels that match the roof-age rule (only those were checked: the data API marks at most 3 parcels) are outside the City of Los Angeles: no permit data there.";
+      "Roof age covers all 42 parcels that match the roof-age rule. How many of them lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 (the data API marks at most 3 parcels): 1 of those 3 does; for the other 39 it is not known.";
     expect((mixed.content as Stated).count).toBe(42);
     expect((mixed.content as Stated).permit_data).toEqual({
+      roof_age_covers_all_matching: true,
       checked: 3,
       matched: 42,
       without_permit_data: 1,
@@ -2189,7 +2194,7 @@ describe("search_aged_roofs: permit data of the matching parcels (the City of Lo
     expect((o.content as Stated).count).toBe(42);
     expect((o.content as Stated).returned).toBe(3);
     expect(o.gaps).toContain(
-      "parcels.points failed (boom): whether the matching parcels have permit data (the City of Los Angeles) was not checked.",
+      "Roof age covers all 42 parcels that match the roof-age rule. parcels.points failed (boom): how many of them lie outside the City of Los Angeles, where there is no permit data, is not known.",
     );
     expect(o.fact).toMatchObject({ matched_permit_data: null });
     const otherCount: DataQueries = {
@@ -2205,7 +2210,7 @@ describe("search_aged_roofs: permit data of the matching parcels (the City of Lo
     const d = await runTool("search_aged_roofs", PASADENA, otherCount);
     expect(d.ok).toBe(true);
     expect(d.gaps).toContain(
-      "the data API's parcels.points counted 41 parcels and its search 42: whether the matching parcels have permit data (the City of Los Angeles) was not checked.",
+      "Roof age covers all 42 parcels that match the roof-age rule. the data API's parcels.points counted 41 parcels and its search 42: how many of them lie outside the City of Los Angeles, where there is no permit data, is not known.",
     );
     const otherBasis: DataQueries = {
       ...queries,
@@ -2220,7 +2225,7 @@ describe("search_aged_roofs: permit data of the matching parcels (the City of Lo
     const b = await runTool("search_aged_roofs", PASADENA, otherBasis);
     expect(b.ok).toBe(true);
     expect(b.gaps).toContain(
-      "the data API parcels.points applied ownership basis recording, not none: whether the matching parcels have permit data (the City of Los Angeles) was not checked.",
+      "Roof age covers all 42 parcels that match the roof-age rule. the data API parcels.points applied ownership basis recording, not none: how many of them lie outside the City of Los Angeles, where there is no permit data, is not known.",
     );
     // Permit data is also read from the long-open marks: points without them leave it unchecked.
     const noMarks: DataQueries = {
@@ -2239,7 +2244,7 @@ describe("search_aged_roofs: permit data of the matching parcels (the City of Lo
     const m = await runTool("search_aged_roofs", PASADENA, noMarks);
     expect(m.ok).toBe(true);
     expect(m.gaps).toContain(
-      "the data API's parcels.points did not mark the long-open parcels: whether the matching parcels have permit data (the City of Los Angeles) was not checked.",
+      "Roof age covers all 42 parcels that match the roof-age rule. the data API's parcels.points did not mark the long-open parcels: how many of them lie outside the City of Los Angeles, where there is no permit data, is not known.",
     );
     expect(m.content).not.toHaveProperty("permit_data");
     // With the filter the same failure is an error: the filter can't be applied.
@@ -2365,14 +2370,15 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
     const { queries } = fakeQueries();
     const o = await runTool("long_open_permits", PASADENA, noPermits(queries));
     const text =
-      "Not available: none of the nearest 3 of the 42 parcels within 1 mi that have a roof year has permit data (all are outside the City of Los Angeles; only those were checked: the data API marks at most 3 parcels), so whether there are long-open roofing permits (an issued LADBS roofing-work permit still open at least 1,826 days) is unknown, not 0. A smaller radius gives a full check.";
+      "Not available: the list found no permit within 1 mi, and all of the nearest 3 of the 42 parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data (for the other 39 it is not known: the data API marks at most 3 parcels), so whether there are long-open roofing permits (an issued LADBS roofing-work permit still open at least 1,826 days) is unknown, not 0.";
     const outside =
-      "All of the nearest 3 of the 42 parcels within 1 mi that have a roof year (only those were checked: the data API marks at most 3 parcels) are outside the City of Los Angeles: no permit data there.";
+      "The list covers every permit within 1 mi. How many of the 42 parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 (the data API marks at most 3 parcels): all 3 do; for the other 39 it is not known.";
     expect(o.content).toMatchObject({
       count: null,
       status: "not_available",
       text,
       permit_data: {
+        permit_search_covers_whole_circle: true,
         checked: 3,
         without_permit_data: 3,
         complete: false,
@@ -2516,7 +2522,7 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
     expect(o.ok).toBe(true);
     expect(o.content).toMatchObject({ count: 57 });
     expect(o.gaps[0]).toBe(
-      "parcels.points failed (boom): whether the parcels within 1 mi that have a roof year have permit data (the City of Los Angeles) was not checked.",
+      "The count and the list cover every permit within 1 mi. parcels.points failed (boom): how many of the parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, is not known.",
     );
     expect(o.fact).toMatchObject({ count: 57, permit_data: null });
     const otherWindow: DataQueries = {
@@ -2535,7 +2541,7 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
       otherWindow,
     );
     expect(w.gaps[0]).toBe(
-      "the data API's parcels.points applied another open-duration window than the call's: whether the parcels within 1 mi that have a roof year have permit data (the City of Los Angeles) was not checked.",
+      "The count and the list cover every permit within 1 mi. the data API's parcels.points applied another open-duration window than the call's: how many of the parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, is not known.",
     );
     await runTool(
       "long_open_permits",
@@ -2552,11 +2558,12 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
     });
   });
 
-  test("all inside among the nearest checked (truncated points): permit_data and its gap say the others were not checked; the count stands", async () => {
+  test("all inside among the nearest counted (truncated points): permit_data and its gap say first that the count and lists cover every permit, then that the others are not known; the count stands", async () => {
     const { queries } = fakeQueries();
     const nearest =
-      "All of the nearest 3 of the 42 parcels within 1 mi that have a roof year (only those were checked: the data API marks at most 3 parcels) have permit data; the other 39 were not checked.";
+      "The count and the list cover every permit within 1 mi. How many of the 42 parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 (the data API marks at most 3 parcels): none of those 3 does; for the other 39 it is not known.";
     const permitData = {
+      permit_search_covers_whole_circle: true,
       checked: 3,
       matched: 42,
       without_permit_data: 0,
@@ -2590,10 +2597,14 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
       queries,
     );
     const c = w.content as Record<string, Record<string, unknown>>;
-    expect(c.permit_data).toEqual(permitData);
+    const both = nearest.replace(
+      "The count and the list cover",
+      "The counts and both lists cover",
+    );
+    expect(c.permit_data).toEqual({ ...permitData, text: both });
     expect(c.longest_open).not.toHaveProperty("status");
     expect(c.within_contractor_window).not.toHaveProperty("status");
-    expect(w.gaps[0]).toBe(nearest);
+    expect(w.gaps[0]).toBe(both);
   });
 
   /** The fake whose parcels.points read fails. */
@@ -2608,10 +2619,11 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
       },
     };
   }
-  const NOT_CHECKED =
-    "parcels.points failed (boom): whether the parcels within 1 mi that have a roof year have permit data (the City of Los Angeles) was not checked.";
+  /** The gap of the failed read, after what the result covers (`lead`). */
+  const notKnown = (lead: string) =>
+    `${lead} parcels.points failed (boom): how many of the parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, is not known.`;
   const notCheckedText = (rule: string) =>
-    `Not available: whether the parcels within 1 mi that have a roof year have permit data (the City of Los Angeles) was not checked, so whether there are long-open roofing permits (${rule}) is unknown, not 0.`;
+    `Not available: how many of the parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, is not known, so whether there are long-open roofing permits (${rule}) is unknown, not 0.`;
   const RULE =
     "an issued LADBS roofing-work permit still open at least 1,826 days";
 
@@ -2632,7 +2644,10 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
       items: [],
     });
     expect(o.content).not.toHaveProperty("permit_data");
-    expect(o.gaps).toEqual([NOT_CHECKED, text]);
+    expect(o.gaps).toEqual([
+      notKnown("The list covers every permit within 1 mi."),
+      text,
+    ]);
     expect(o.fact).toMatchObject({ count: null, permit_data: null });
   });
 
@@ -2658,7 +2673,11 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
       text: within,
       max_open_days: 5062,
     });
-    expect(o.gaps).toEqual([NOT_CHECKED, first, within]);
+    expect(o.gaps).toEqual([
+      notKnown("Both lists cover every permit within 1 mi."),
+      first,
+      within,
+    ]);
     expect(o.fact).toMatchObject({
       count: null,
       within_window: { status: "read", count: null },
@@ -2672,7 +2691,9 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
     expect(f.longest_open).toMatchObject({ count: 57 });
     expect(f.longest_open).not.toHaveProperty("status");
     expect(f.within_contractor_window).not.toHaveProperty("status");
-    expect(found.gaps[0]).toBe(NOT_CHECKED);
+    expect(found.gaps[0]).toBe(
+      notKnown("The counts and both lists cover every permit within 1 mi."),
+    );
     expect(found.gaps.filter((g) => g.startsWith("Not available"))).toEqual([]);
   });
 });

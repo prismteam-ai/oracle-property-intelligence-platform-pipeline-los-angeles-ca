@@ -575,7 +575,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     expect(counts.result).toBe("pass");
   });
 
-  test("long_open_permits as prompt a2 calls it (the Van Nuys center, 5 mi, with_contractor_window): only the nearest 25,000 parcels were checked, all with permit data, and permit_data says so; the counts stand (no status)", async () => {
+  test("long_open_permits as prompt a2 calls it (the Van Nuys center, 5 mi, with_contractor_window): the counts and both lists cover every permit within 5 mi; how many parcels lie outside the City was counted for the nearest 25,000 only (none does), and permit_data says so; the counts stand (no status)", async () => {
     const o = await runTool(
       "long_open_permits",
       {
@@ -596,8 +596,9 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
       "within_contractor_window",
     ]);
     const nearest =
-      "All of the nearest 25,000 of the 143,251 parcels within 5 mi that have a roof year (only those were checked: the data API marks at most 25,000 parcels) have permit data; the other 118,251 were not checked.";
+      "The counts and both lists cover every permit within 5 mi. How many of the 143,251 parcels within 5 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 25,000 (the data API marks at most 25,000 parcels): none of those 25,000 does; for the other 118,251 it is not known.";
     expect(c.permit_data).toEqual({
+      permit_search_covers_whole_circle: true,
       checked: 25_000,
       matched: 143_251,
       without_permit_data: 0,
@@ -911,15 +912,16 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     });
   });
 
-  test("search_aged_roofs without the filter at the Van Nuys center, 5 mi (15 years): the nearest 25,000 of 115,373 checked, all with permit data, stated as such with the total", async () => {
+  test("search_aged_roofs without the filter at the Van Nuys center, 5 mi (15 years): roof age covers all 115,373; how many lie outside the City was counted for the nearest 25,000 only (none does), stated as such with the total", async () => {
     const input = { ...VAN_NUYS_CENTER, radius_miles: 5, threshold_years: 15 };
     const o = await runTool("search_aged_roofs", input, data.queries);
     const text =
-      "All of the nearest 25,000 of the 115,373 parcels that match the roof-age rule (only those were checked: the data API marks at most 25,000 parcels) have permit data; the other 90,373 were not checked.";
+      "Roof age covers all 115,373 parcels that match the roof-age rule. How many of them lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 25,000 (the data API marks at most 25,000 parcels): none of those 25,000 does; for the other 90,373 it is not known.";
     expect(o.content).toMatchObject({
       count: 115_373,
       returned: 10,
       permit_data: {
+        roof_age_covers_all_matching: true,
         checked: 25_000,
         matched: 115_373,
         without_permit_data: 0,
@@ -928,7 +930,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
       },
     });
     expect(o.gaps).toContain(text);
-    expect(o.gaps.some((g) => g.includes("City of Los Angeles"))).toBe(false);
+    expect(o.gaps.some((g) => g.includes("is outside the City"))).toBe(false);
     const counts = await checkCounts(
       [
         {

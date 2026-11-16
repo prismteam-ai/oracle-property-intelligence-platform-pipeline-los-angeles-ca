@@ -208,11 +208,11 @@ export type ToolInput<N extends ToolName> = z.output<(typeof toolSchemas)[N]>;
  * states for its long-open filter).
  */
 const LONG_OPEN_COVERAGE_DESCRIPTION =
-  "Permits are served for the City of Los Angeles only: the parcels within the radius that have a roof year " +
-  "(only the nearest when there are more than the data API marks) are checked for permit data, and permit_data " +
-  "states how many have none and, when only the nearest were checked, how many there are in all. Where the list finds " +
-  "no permit and the check could not be made, or parcels were checked and none has permit data, the count is " +
-  "not available (count null, status not_available), never 0.";
+  "Permits are served for the City of Los Angeles only. The count and the lists cover every permit within the " +
+  "radius; permit_data states how many of the parcels within the radius that have a roof year have no permit data " +
+  "(outside the City), counted only for the nearest when there are more than the data API marks, with how many " +
+  "there are in all. Where the list finds no permit and either the parcels could not be read or none of those " +
+  "counted has permit data, the count is not available (count null, status not_available), never 0.";
 
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   resolve_place:
@@ -231,7 +231,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "the result's long_open_permit states the parcel count, of how many aged-roof parcels, and that it counts parcels, not permits. " +
     "Permits are served for the City of Los Angeles only: where no matching parcel has permit data or a long-open mark the " +
     "long-open count is not available (count null, status not_available), never 0, and permit_data states how many matching " +
-    "parcels have none (and, when only the nearest were checked, how many match).",
+    "parcels have none (when there are more than the data API marks, counted only for the nearest, with how many " +
+    "match; roof age still covers every matching parcel).",
   long_open_permits:
     "City of Los Angeles (LADBS) roofing-work permits, issued and still open, within a radius: open at least " +
     "min_open_days days (optionally at most max_open_days), longest open first, each counted once at its nearest " +
@@ -548,39 +549,50 @@ const matchingPhrase = (ownership: boolean) =>
   `parcels that match the roof-age rule${ownership ? " and the ownership filter" : ""}`;
 
 /**
- * How many of a search's parcels have no permit data, as a sentence; null when every parcel checked has permit
- * data. Without permit data a parcel is outside the City of Los Angeles.
+ * How many of a search's parcels have no permit data, as a sentence, when every one of them was counted (points not
+ * truncated); null when each has permit data. Without permit data a parcel is outside the City of Los Angeles.
  */
 function noPermitDataText(
   c: PermitCoverage,
   aged: number,
   matching: string,
-  maxPoints: number,
 ): string | null {
   if (c.without_permit_data === 0) return null;
   const outside = "outside the City of Los Angeles: no permit data there.";
-  if (c.complete)
-    return c.with_permit_data === 0
-      ? `All ${num(aged)} ${matching} are ${outside}`
-      : `${num(c.without_permit_data)} of the ${num(aged)} ${matching} are ${outside}`;
-  const nearest = `the nearest ${num(c.checked)} of the ${num(aged)} ${matching} (only those were checked: the data API marks at most ${num(maxPoints)} parcels)`;
   return c.with_permit_data === 0
-    ? `All of ${nearest} are ${outside}`
-    : `${num(c.without_permit_data)} of ${nearest} are ${outside}`;
+    ? `All ${num(aged)} ${matching} are ${outside}`
+    : `${num(c.without_permit_data)} of the ${num(aged)} ${matching} are ${outside}`;
 }
 
+/** Where there is no permit data, as the coverage texts name it. */
+const OUTSIDE_CITY =
+  "lie outside the City of Los Angeles, where there is no permit data";
+
 /**
- * A search's permit data when only the nearest parcels were checked (truncated points) and every one of them has
- * it: the others were not checked.
+ * How many of a search's parcels lie outside the City of Los Angeles when the points are truncated: counted for the
+ * nearest only, not known for the others. `subject` names the parcels ("How many of them"); the sentence before it
+ * (`lead`) says what is complete, so the partial count is never read as a partial search.
  */
-function nearestCheckedText(
+function nearestCountedText(
   c: PermitCoverage,
-  aged: number,
-  matching: string,
+  total: number,
+  lead: string,
+  subject: string,
   maxPoints: number,
 ): string {
-  return `All of the nearest ${num(c.checked)} of the ${num(aged)} ${matching} (only those were checked: the data API marks at most ${num(maxPoints)} parcels) have permit data; the other ${num(aged - c.checked)} were not checked.`;
+  const n = c.without_permit_data;
+  const those =
+    n === 0
+      ? `none of those ${num(c.checked)} does`
+      : n === c.checked
+        ? `all ${num(c.checked)} do`
+        : `${num(n)} of those ${num(c.checked)} ${n === 1 ? "does" : "do"}`;
+  return `${lead} ${subject} ${OUTSIDE_CITY}, was counted only for the nearest ${num(c.checked)} (the data API marks at most ${num(maxPoints)} parcels): ${those}; for the other ${num(total - c.checked)} it is not known.`;
 }
+
+/** What search_aged_roofs covers whatever its permit data: the roof age of every matching parcel. */
+const roofAgeLead = (aged: number, matching: string) =>
+  `Roof age covers all ${num(aged)} ${matching}.`;
 
 /** The long-open filter of search_aged_roofs as its result states it. */
 export interface LongOpenParcelsStated {
@@ -726,10 +738,30 @@ const longOpenRuleText = (minOpenDays: number, maxOpenDays: number | null) =>
   `an issued LADBS roofing-work permit still open at least ${days(minOpenDays)}${maxOpenDays !== null ? ` and at most ${days(maxOpenDays)}` : ""}`;
 
 /**
- * A long-open list's count where the circle's parcels have no permit data, or where that was not checked: not
- * available (null, never 0) when the list found no permit and either the coverage read failed or parcels were
- * checked and none of them has permit data or a long-open mark (all are outside the City of Los Angeles); null when
- * the count stands.
+ * What a long_open_permits result covers whatever the circle's permit data: every permit within the radius, in its
+ * count(s) and list(s). `lists` is how many lists the result has; `counted` is false when a count is not available
+ * (then only the lists are named).
+ */
+function permitsLead(
+  radiusMiles: number,
+  lists: 1 | 2,
+  counted: boolean,
+): string {
+  const what =
+    lists === 1
+      ? counted
+        ? "The count and the list cover"
+        : "The list covers"
+      : counted
+        ? "The counts and both lists cover"
+        : "Both lists cover";
+  return `${what} every permit within ${radiusMiles} mi.`;
+}
+
+/**
+ * A long-open list's count where the circle's parcels have no permit data, or where that is not known: not
+ * available (null, never 0) when the list found no permit and either the coverage read failed or none of the parcels
+ * counted has permit data or a long-open mark (all are outside the City of Los Angeles); null when the count stands.
  */
 function notAvailableText(
   cov: Read<AreaCoverage>,
@@ -739,14 +771,15 @@ function notAvailableText(
 ): string | null {
   if (count > 0) return null;
   const area = areaPhrase(radiusMiles);
+  const unknown = `so whether there are long-open roofing permits (${rule}) is unknown, not 0.`;
   if (!cov.ok)
-    return `Not available: whether the ${area} have permit data (the City of Los Angeles) was not checked, so whether there are long-open roofing permits (${rule}) is unknown, not 0.`;
+    return `Not available: how many of the ${area} ${OUTSIDE_CITY}, is not known, ${unknown}`;
   const a = cov.value;
   const c = a.coverage;
   if (c.checked === 0 || c.with_permit_data > 0) return null;
   return c.complete
-    ? `Not available: none of the ${num(a.parcels)} ${area} has permit data (all are outside the City of Los Angeles), so whether there are long-open roofing permits (${rule}) is unknown, not 0.`
-    : `Not available: none of the nearest ${num(c.checked)} of the ${num(a.parcels)} ${area} has permit data (all are outside the City of Los Angeles; only those were checked: the data API marks at most ${num(a.max_points)} parcels), so whether there are long-open roofing permits (${rule}) is unknown, not 0. A smaller radius gives a full check.`;
+    ? `Not available: none of the ${num(a.parcels)} ${area} has permit data (all are outside the City of Los Angeles), ${unknown}`
+    : `Not available: the list found no permit within ${radiusMiles} mi, and all of the nearest ${num(c.checked)} of the ${num(a.parcels)} ${area} ${OUTSIDE_CITY} (for the other ${num(a.parcels - c.checked)} it is not known: the data API marks at most ${num(a.max_points)} parcels), ${unknown}`;
 }
 
 /** A long-open list's count as the result states it: the count, or null with status not_available and why. */
@@ -757,38 +790,39 @@ const statedCount = (count: number, notAvailable: string | null) =>
 
 /**
  * The circle's permit data as a long_open_permits result states it: the permit_data block (absent when every parcel
- * was checked and has permit data; with truncated points, how many there are in all) and its gap, or the gap of a
- * coverage not checked.
+ * was counted and has permit data; with truncated points, how many there are in all and that the permit search still
+ * covers the whole circle) and its gap, or the gap of a coverage read that failed. `lead` (permitsLead) comes first
+ * in a text about truncated points or a failed read.
  */
 function areaStated(
   cov: Read<AreaCoverage>,
   radiusMiles: number,
+  lead: string,
 ): { permit_data: Record<string, unknown> | null; gaps: string[] } {
   const area = areaPhrase(radiusMiles);
   if (!cov.ok)
     return {
       permit_data: null,
       gaps: [
-        `${cov.why}: whether the ${area} have permit data (the City of Los Angeles) was not checked.`,
+        `${lead} ${cov.why}: how many of the ${area} ${OUTSIDE_CITY}, is not known.`,
       ],
     };
   const c = cov.value.coverage;
-  const outside = noPermitDataText(
-    c,
-    cov.value.parcels,
-    area,
-    cov.value.max_points,
-  );
-  // Only the nearest were checked: stated even when all of them have permit data (as search_aged_roofs states it).
-  const text =
-    outside ??
-    (c.complete
-      ? null
-      : nearestCheckedText(c, cov.value.parcels, area, cov.value.max_points));
+  // Only the nearest were counted: stated even when all of them have permit data (as search_aged_roofs states it).
+  const text = c.complete
+    ? noPermitDataText(c, cov.value.parcels, area)
+    : nearestCountedText(
+        c,
+        cov.value.parcels,
+        lead,
+        `How many of the ${num(cov.value.parcels)} ${area}`,
+        cov.value.max_points,
+      );
   return text === null
     ? { permit_data: null, gaps: [] }
     : {
         permit_data: {
+          ...(c.complete ? {} : { permit_search_covers_whole_circle: true }),
           checked: c.checked,
           ...(c.complete ? {} : { matched: cov.value.parcels }),
           without_permit_data: c.without_permit_data,
@@ -1110,34 +1144,30 @@ const run = {
     // Not available (null) when the filter can't be evaluated: no matching parcel has permit data.
     const count = longOpen ? longOpen.count : res.count;
     const truncated = count !== null && count > items.length;
-    const noPermitData =
-      coverage?.ok && points
-        ? noPermitDataText(
-            coverage.value,
-            res.count,
-            matchingPhrase(ownership !== null),
-            points.max_points,
-          )
-        : null;
-    // Without the filter and with truncated points: only the nearest were checked, stated even when all of them
-    // have permit data.
+    const matching = matchingPhrase(ownership !== null);
+    // How many matching parcels have no permit data. With truncated points only the nearest were counted: stated
+    // after what is complete (roof age), without the filter even when all of them have permit data.
     const permitData =
-      noPermitData ??
-      (!longOpen && coverage?.ok && points && !coverage.value.complete
-        ? nearestCheckedText(
-            coverage.value,
-            res.count,
-            matchingPhrase(ownership !== null),
-            points.max_points,
-          )
-        : null);
+      !coverage?.ok || !points
+        ? null
+        : coverage.value.complete
+          ? noPermitDataText(coverage.value, res.count, matching)
+          : longOpen && coverage.value.without_permit_data === 0
+            ? null
+            : nearestCountedText(
+                coverage.value,
+                res.count,
+                roofAgeLead(res.count, matching),
+                "How many of them",
+                points.max_points,
+              );
     const notAvailable = longOpen?.stated.status === "not_available";
     // Also when not available: the outside statement is a gap wherever the agent states the place outside the City
     // of Los Angeles (no parcel checked has permit data or a long-open mark), the long-open text after it.
     if (permitData) gaps.push(permitData);
     else if (coverage && !coverage.ok)
       gaps.push(
-        `${coverage.why}: whether the matching parcels have permit data (the City of Los Angeles) was not checked.`,
+        `${roofAgeLead(res.count, matching)} ${coverage.why}: how many of them ${OUTSIDE_CITY}, is not known.`,
       );
     if (longOpen && (!longOpen.stated.complete || notAvailable))
       gaps.push(longOpen.stated.text);
@@ -1166,10 +1196,13 @@ const run = {
       // The long-open filter applied: the parcel count (or not available), of how many, and its unit (parcels).
       ...(longOpen ? { long_open_permit: longOpen.stated } : {}),
       // How many matching parcels have no permit data (outside the City of Los Angeles), when any has none; without
-      // the filter also when only the nearest were checked, with how many match in all.
+      // the filter also when only the nearest were counted, with how many match in all.
       ...(permitData && coverage?.ok
         ? {
             permit_data: {
+              ...(coverage.value.complete
+                ? {}
+                : { roof_age_covers_all_matching: true }),
               checked: coverage.value.checked,
               ...(!longOpen && !coverage.value.complete
                 ? { matched: res.count }
@@ -1306,7 +1339,11 @@ const run = {
       const ref = sourceRef(src, "permit");
       const list = longOpenList(res, ref, "long_open_permits");
       const na = notAvailable(cov, res.count, input.max_open_days ?? null);
-      const area = areaStated(cov, input.radius_miles);
+      const area = areaStated(
+        cov,
+        input.radius_miles,
+        permitsLead(input.radius_miles, 1, na === null),
+      );
       return {
         content: {
           ...statedCount(res.count, na),
@@ -1334,7 +1371,6 @@ const run = {
     const ref = sourceRef(src, "permit");
     const first = longOpenList(res, ref, "the longest-open list");
     const na = notAvailable(cov, res.count, input.max_open_days ?? null);
-    const area = areaStated(cov, input.radius_miles);
     const within = await withinWindow(
       input,
       res.rule.reference_date,
@@ -1387,6 +1423,13 @@ const run = {
       };
       withinFact = { status: "not_listed", gap: within.gap };
     }
+    const area = areaStated(
+      cov,
+      input.radius_miles,
+      second
+        ? permitsLead(input.radius_miles, 2, na === null && withinNa === null)
+        : permitsLead(input.radius_miles, 1, na === null),
+    );
     return {
       content: {
         scope: LONG_OPEN_SCOPE,

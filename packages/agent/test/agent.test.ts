@@ -1219,12 +1219,14 @@ describe("outside the City of Los Angeles", () => {
     );
     // Both outside statements are listed: the tool's (how many parcels, no place) and the agent's (the place);
     // the answer's gaps are deduplicated by their exact text only.
+    expect(a.gaps).toContain(
+      "Roof age covers all 42 parcels that match the roof-age rule. How many of them lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 (the data API marks at most 3 parcels): all 3 do; for the other 39 it is not known.",
+    );
     expect(
       a.gaps.filter((g) =>
         g.endsWith("outside the City of Los Angeles: no permit data there."),
       ),
     ).toEqual([
-      "All of the nearest 3 of the 42 parcels that match the roof-age rule (only those were checked: the data API marks at most 3 parcels) are outside the City of Los Angeles: no permit data there.",
       "Pasadena is outside the City of Los Angeles: no permit data there.",
     ]);
     expect(a.gaps.filter((g) => g.startsWith("Not available:"))).toHaveLength(
@@ -1265,9 +1267,9 @@ describe("outside the City of Los Angeles", () => {
         },
       );
     const plain = await ask(false);
-    expect(plain.gaps.some((g) => g.endsWith("no permit data there."))).toBe(
-      true,
-    );
+    expect(
+      plain.gaps.some((g) => g.includes("where there is no permit data")),
+    ).toBe(true);
     expect(plain.gaps).not.toContain(
       "the pin is outside the City of Los Angeles: no permit data there.",
     );
@@ -1392,7 +1394,7 @@ describe("outside the City of Los Angeles", () => {
       "within 1 mi of Pasadena open at least 1,826 days: whether the parcels with a roof year have permit data was not checked, so the count is not available (unknown, not 0), 0 listed",
     );
     expect(a.gaps).toContain(
-      "parcels.points failed (boom): whether the parcels within 1 mi that have a roof year have permit data (the City of Los Angeles) was not checked.",
+      "The list covers every permit within 1 mi. parcels.points failed (boom): how many of the parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, is not known.",
     );
     expect(a.gaps.some((g) => g.startsWith("Pasadena is outside"))).toBe(false);
   });
@@ -1588,7 +1590,7 @@ describe("outside the City of Los Angeles", () => {
       { question: "Old roofs near the pin?", center: VAN_NUYS },
       { model, queries, settings: SETTINGS },
     );
-    expect(a.gaps.some((g) => g.includes("outside the City"))).toBe(false);
+    expect(a.gaps.some((g) => g.includes("is outside the City"))).toBe(false);
   });
   test("parcel_permits with permit_data_available false adds the parcel's gap", async () => {
     const { queries } = fakeQueries();
@@ -2339,11 +2341,28 @@ const without8fc8821Additions = (prompt: string): string => {
 const DESCRIPTION_ADDED_SINCE_8FC8821: Readonly<Record<string, string>> = {
   // long_open_permits' coverage rule (the rule search_aged_roofs' description states for its long-open filter).
   long_open_permits:
-    " Permits are served for the City of Los Angeles only: the parcels within the radius that have a roof year (only the nearest when there are more than the data API marks) are checked for permit data, and permit_data states how many have none and, when only the nearest were checked, how many there are in all. Where the list finds no permit and the check could not be made, or parcels were checked and none has permit data, the count is not available (count null, status not_available), never 0.",
+    " Permits are served for the City of Los Angeles only. The count and the lists cover every permit within the radius; permit_data states how many of the parcels within the radius that have a roof year have no permit data (outside the City), counted only for the nearest when there are more than the data API marks, with how many there are in all. Where the list finds no permit and either the parcels could not be read or none of those counted has permit data, the count is not available (count null, status not_available), never 0.",
+};
+/**
+ * Tool-description words changed since 8fc8821, each [then, now] and found once; nothing else of a description
+ * changed. search_aged_roofs: permit_data's partial count no longer reads as a partial search.
+ */
+const DESCRIPTION_CHANGED_SINCE_8FC8821: Readonly<
+  Record<string, readonly [string, string]>
+> = {
+  search_aged_roofs: [
+    "(and, when only the nearest were checked, how many match).",
+    "(when there are more than the data API marks, counted only for the nearest, with how many match; roof age still covers every matching parcel).",
+  ],
 };
 const without8fc8821DescriptionAdditions = (
   t: Anthropic.Tool,
 ): Anthropic.Tool => {
+  const changed = DESCRIPTION_CHANGED_SINCE_8FC8821[t.name];
+  if (changed !== undefined) {
+    expect(t.description!.split(changed[1])).toHaveLength(2);
+    t = { ...t, description: t.description!.replace(changed[1], changed[0]) };
+  }
   const added = DESCRIPTION_ADDED_SINCE_8FC8821[t.name];
   if (added === undefined) return t;
   expect(t.description!.split(added)).toEqual([
