@@ -212,6 +212,11 @@ export function makeContractorCache(dir: string) {
     view,
     allowed_columns: [...CONTRACTOR_FIELDS] as string[],
     token: false,
+    license_evidence: {
+      page_url:
+        "https://data.lacity.org/A-Prosperous-City/roofing-permits/8guu-8f5m",
+      retrieved_at: "2026-11-12T13:19:00Z",
+    } as { page_url: string; retrieved_at: string; basis?: string } | undefined,
     pages,
     count: {
       query: "SELECT count(*) AS n",

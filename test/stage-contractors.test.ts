@@ -28,6 +28,12 @@ test("stages each distinct row once, counting exact duplicates", async () => {
     staged: 3,
     duplicates: 1,
     distinctPermits: 2,
+    licenseEvidence: {
+      page_url:
+        "https://data.lacity.org/A-Prosperous-City/roofing-permits/8guu-8f5m",
+      retrieved_at: "2026-11-12T13:19:00Z",
+      basis: null,
+    },
   });
   const rows = readFileSync(out, "utf8")
     .trim()
@@ -48,6 +54,16 @@ test("stages each distinct row once, counting exact duplicates", async () => {
   expect(rows[2]).toMatchObject({
     _dataset: "8guu-8f5m",
     _page_file: "pages/8guu-8f5m_p001.json.gz",
+  });
+});
+
+test("the 12 Nov cache's earlier key licence_evidence is read the same", async () => {
+  const e = fx.manifest.license_evidence!;
+  fx.manifest.license_evidence = undefined;
+  Object.assign(fx.manifest, { licence_evidence: e });
+  fx.write();
+  await expect(stageContractors(dir, out)).resolves.toMatchObject({
+    licenseEvidence: { retrieved_at: "2026-11-12T13:19:00Z", basis: null },
   });
 });
 
@@ -110,6 +126,16 @@ const breaks: Array<[string, (f: typeof fx) => void, RegExp]> = [
     "extra rows",
     (f) => void (f.summary.duplicate_rows = 1),
     /and 1 extra rows/,
+  ],
+  [
+    "license evidence time",
+    (f) => void (f.manifest.license_evidence!.retrieved_at = "12 Nov 2026"),
+    /license_evidence needs page_url and retrieved_at/,
+  ],
+  [
+    "license evidence",
+    (f) => void (f.manifest.license_evidence = undefined),
+    /license_evidence needs page_url and retrieved_at/,
   ],
   [
     "count query",

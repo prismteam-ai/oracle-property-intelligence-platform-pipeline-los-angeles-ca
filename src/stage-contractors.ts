@@ -36,6 +36,35 @@ export interface ContractorCacheManifest {
   allowed_columns: string[];
   pages: Array<SocrataPage & { columns_checked: boolean }>;
   count: { query: string; expected_rows: number; fetched_rows: number };
+  /** The view page whose license the fetch records, and when the operator last read it (--license-read-at). */
+  license_evidence?: { page_url: string; retrieved_at: string; basis?: string };
+  /** The same under its earlier key: the 12 Nov 2026 cache was written by a copy of the script that spelled it so. */
+  licence_evidence?: { page_url: string; retrieved_at: string; basis?: string };
+}
+
+/** The contractor cache's license evidence as the run manifest records it (basis null in caches without one). */
+export interface LicenseEvidence {
+  page_url: string;
+  retrieved_at: string;
+  basis: string | null;
+}
+
+/** The cache's license evidence; fails unless it names the page and an ISO time in UTC. */
+export function licenseEvidence(m: ContractorCacheManifest): LicenseEvidence {
+  const e = m.license_evidence ?? m.licence_evidence;
+  if (
+    typeof e?.page_url !== "string" ||
+    typeof e.retrieved_at !== "string" ||
+    !/^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d(\.\d{3})?)?Z$/.test(e.retrieved_at)
+  )
+    throw new Error(
+      "contractor cache: license_evidence needs page_url and retrieved_at (an ISO time in UTC)",
+    );
+  return {
+    page_url: e.page_url,
+    retrieved_at: e.retrieved_at,
+    basis: e.basis ?? null,
+  };
 }
 
 export interface ContractorCacheSummary {
@@ -81,10 +110,12 @@ export async function stageContractors(
   duplicates: number;
   distinctPermits: number;
   files: Array<{ path: string; sha256: string }>;
+  licenseEvidence: LicenseEvidence;
 }> {
   const { manifest, summary } = readContractorCache(cacheDir);
   if (manifest.status !== "complete")
     throw new Error(`contractor cache status is "${manifest.status}"`);
+  const evidence = licenseEvidence(manifest);
   if (manifest.view !== CONTRACTOR_VIEW || summary.view !== CONTRACTOR_VIEW)
     throw new Error(`contractor cache is not view ${CONTRACTOR_VIEW}`);
   if (!sameList(manifest.allowed_columns, CONTRACTOR_FIELDS))
@@ -171,5 +202,6 @@ export async function stageContractors(
     duplicates,
     distinctPermits: permits.size,
     files,
+    licenseEvidence: evidence,
   };
 }

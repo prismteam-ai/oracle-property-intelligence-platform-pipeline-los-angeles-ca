@@ -522,6 +522,8 @@ const permitCaches = permitStaging && {
     exact_duplicate_rows: permitStaging.contractors.duplicates,
     staged: permitStaging.contractors.staged,
     distinct_permits: permitStaging.contractors.distinctPermits,
+    // The view page whose license the run states, and when it was last read (the fetch's --license-read-at).
+    license_evidence: permitStaging.contractors.licenseEvidence,
     pages: contractorCache!.manifest.pages.map((p) => ({
       path: `${PAGES_DIR}/${p.file}`,
       request_url: p.url,

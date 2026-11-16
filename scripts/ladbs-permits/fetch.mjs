@@ -1,7 +1,8 @@
 // LADBS roof-permit raw cache fetcher (data.lacity.org Socrata SoQL, no token).
 // Usage: node fetch.mjs <cache-dir>            -> fetch pages + manifest into <cache-dir>
 //        node fetch.mjs summarize <cache-dir>  -> summary.json + roofing_flagged.jsonl.gz from the cached pages
-// The cache folder is required; nothing is written beside this script.
+// The cache folder is required and must not exist yet: a fetch never writes into an existing folder, so a
+// recorded run's cache is never overwritten. Nothing is written beside this script.
 // Rules: 1 s between requests, 120 s timeout per request, up to 2 retries per request, stop on any
 // error after that. Every row's columns are checked against COLS before a page is written.
 //
@@ -9,7 +10,7 @@
 // can contain people's names. It is used only to flag roofing work: the ROOF filter of the queries
 // and the roof_r / roof_only flags below. The pipeline reads it only to set its own roofing flags
 // and never serves it.
-import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
@@ -31,6 +32,19 @@ if (ROOT === dirname(fileURLToPath(import.meta.url))) {
   process.exit(2);
 }
 const PAGES = join(ROOT, "pages");
+// A fetch creates its cache folder itself and refuses one that exists (empty or not): the parent folder is
+// created if needed, then mkdirSync without recursive fails on an existing folder, before any request.
+function newCacheFolder() {
+  if (existsSync(ROOT)) {
+    console.error(
+      `refusing: the cache folder ${ROOT} exists; a fetch writes only into a new folder`,
+    );
+    process.exit(2);
+  }
+  mkdirSync(dirname(ROOT), { recursive: true });
+  mkdirSync(ROOT);
+  mkdirSync(PAGES);
+}
 const BASE = "https://data.lacity.org/resource";
 const UA = "oracle-la-pipeline-fetch";
 const LIMIT = 50000;
@@ -125,7 +139,7 @@ function checkColumns(rows, where) {
 }
 
 async function fetchAll() {
-  mkdirSync(PAGES, { recursive: true });
+  newCacheFolder();
   const manifest = {
     source: "data.lacity.org",
     startedAt: new Date().toISOString(),
