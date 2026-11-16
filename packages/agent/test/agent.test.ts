@@ -251,7 +251,7 @@ describe("demo prompts with a center (pipeline README lines 108 and 110, [city x
       'Used the request\'s center "Van Nuys" (34.199, -118.487).',
     );
     expect(a.assumptions).toContain(
-      "Roof age is the assessor year-built proxy: older than 15 years means built before 2011 (roll year 2026 − 15).",
+      "Roof age counts from the effective roof year, the later of the year built and a finaled roofing permit's year; for every listed parcel it is the year built (the assessor proxy): older than 15 years means an effective roof year before 2011 (roll year 2026 − 15).",
     );
     expect(a.session).toEqual({
       area: {
@@ -423,7 +423,7 @@ describe("conversation: pipeline README lines 108 then 110 as ONE conversation (
     // The resolved place states its center (5 decimals) and parcel count in the reasoning, the assumptions and
     // the tool's note.
     expect(a1.reasoning).toBe(
-      `${VAN_NUYS_STATEMENT}; searched parcels within 5 mi of Van Nuys built before 2011 (roofs older than 15 years): 42 match, 3 listed.`,
+      `${VAN_NUYS_STATEMENT}; searched parcels within 5 mi of Van Nuys whose effective roof year (the later of the year built and a finaled roofing permit's year) is before 2011 (roofs older than 15 years): 42 match, 3 listed.`,
     );
     expect(a1.assumptions).toContain(VAN_NUYS_ASSUMPTION);
     expect(resolveNote(model, 1)).toBe(VAN_NUYS_NOTE);
@@ -1240,7 +1240,7 @@ describe("outside the City of Los Angeles", () => {
       long_open_permit: { status: "not_available", count: null },
     });
     expect(a.reasoning).toContain(
-      "searched parcels within 1 mi of Pasadena built before 2006 (roofs older than 20 years): 42 match (roof age covers all 42); how many lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3: all 3 do, so whether they have a long-open roofing permit is not available (unknown, not 0), 0 listed",
+      "searched parcels within 1 mi of Pasadena whose effective roof year (the later of the year built and a finaled roofing permit's year) is before 2006 (roofs older than 20 years): 42 match (roof age covers all 42); how many lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3: all 3 do, so whether they have a long-open roofing permit is not available (unknown, not 0), 0 listed",
     );
   });
 
@@ -1579,7 +1579,7 @@ describe("outside the City of Los Angeles", () => {
       basis: "jurisdiction",
     });
     expect(a.reasoning).toContain(
-      "searched parcels within 1 mi of Pasadena built before 2006",
+      "searched parcels within 1 mi of Pasadena whose effective roof year (the later of the year built and a finaled roofing permit's year) is before 2006",
     );
   });
   test("a search at the unrounded center is attributed too; one 5-decimal step away is not", async () => {
@@ -1887,7 +1887,7 @@ describe("the ownership filter in an answer", () => {
     });
     // Deterministic: the reasoning names the basis; its rule line states text, weakness and the proxy note.
     expect(a.reasoning).toContain(
-      'searched parcels within 5 mi of Van Nuys built before 2011 (roofs older than 15 years), owner unchanged for 10 years or more by the "both" basis: 17 match, 3 listed',
+      `searched parcels within 5 mi of Van Nuys whose effective roof year (the later of the year built and a finaled roofing permit's year) is before 2011 (roofs older than 15 years), owner unchanged for 10 years or more by the "both" basis: 17 match, 3 listed`,
     );
     expect(a.reasoning).toContain(ownershipRuleLine("both"));
     expect(a.reasoning).toContain(OWNERSHIP_BASIS.both.weakness);
@@ -2314,7 +2314,7 @@ describe("the reasoning states the long-open parcel count and the within-window 
     );
     expect(a.status).toBe("answered");
     expect(a.reasoning).toContain(
-      "Searched parcels within 1 mi of Van Nuys built before 2011 (roofs older than 15 years): 42 match (roof age covers all 42), of which at least 2 parcels (not permits) have a long-open roofing permit (open at least 1,826 days), counted among the nearest 3 only, 2 listed",
+      "Searched parcels within 1 mi of Van Nuys whose effective roof year (the later of the year built and a finaled roofing permit's year) is before 2011 (roofs older than 15 years): 42 match (roof age covers all 42), of which at least 2 parcels (not permits) have a long-open roofing permit (open at least 1,826 days), counted among the nearest 3 only, 2 listed",
     );
     expect(
       a.gaps.some((g) => g.startsWith("At least 2 of the 42 parcels")),

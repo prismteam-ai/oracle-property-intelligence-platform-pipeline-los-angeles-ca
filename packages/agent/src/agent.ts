@@ -716,11 +716,11 @@ function explain(
         else
           matched = `${fmt(f.matched)} match${without === 0 ? "" : nearest === null ? ` (${fmt(without)} without permit data: outside the City of Los Angeles)` : ` (${roofAge(f.matched)}; ${countedNearest(nearest)}: ${outsideOf(without, nearest)})`}`;
         reasoning.push(
-          `searched parcels within ${f.radius_miles} mi of ${label} built before ${f.built_before_year} (roofs older than ${f.threshold_years} years)${f.ownership_basis ? `, owner unchanged for 10 years or more by the "${f.ownership_basis}" basis` : ""}: ${matched}, ${f.returned} listed`,
+          `searched parcels within ${f.radius_miles} mi of ${label} whose effective roof year (the later of the year built and a finaled roofing permit's year) is before ${f.built_before_year} (roofs older than ${f.threshold_years} years)${f.ownership_basis ? `, owner unchanged for 10 years or more by the "${f.ownership_basis}" basis` : ""}: ${matched}, ${f.returned} listed`,
         );
         assumptions.push(
           f.proxy_count === f.returned
-            ? `Roof age is the assessor year-built proxy: older than ${f.threshold_years} years means built before ${f.built_before_year} (roll year ${f.roll_year} − ${f.threshold_years}).`
+            ? `Roof age counts from the effective roof year, the later of the year built and a finaled roofing permit's year${f.returned > 0 ? "; for every listed parcel it is the year built (the assessor proxy)" : ""}: older than ${f.threshold_years} years means an effective roof year before ${f.built_before_year} (roll year ${f.roll_year} − ${f.threshold_years}).`
             : `Roof age counts from the effective roof year: a finaled roofing permit's year where the basis is PERMIT, else the assessor year-built proxy; older than ${f.threshold_years} years means an effective roof year before ${f.built_before_year}.`,
         );
         // No matching parcel has permit data (of those counted: the nearest, when the map points are truncated).
