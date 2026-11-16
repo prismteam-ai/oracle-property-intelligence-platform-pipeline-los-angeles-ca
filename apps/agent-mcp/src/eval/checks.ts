@@ -1002,7 +1002,8 @@ const LIST_LABEL: Record<string, string> = {
 /**
  * (viii) With expected.stated_counts: every statement of how many rows the text shows from a long-open list (see
  * STATED_COUNT_PATTERNS; never a total) equals the rows of that list the text names (its permit numbers in the
- * text). The list a statement is about: "per list", "each list" or "both lists" means every list; "window" the
+ * text). When the text names no row of that list, the statement passes if it equals the tool's returned count or
+ * its total (count) for that list. The list a statement is about: "per list", "each list" or "both lists" means every list; "window" the
  * within-window list; "overall" or "any issue date" the longest-open list; otherwise the list whose first named row
  * follows the statement most closely (else the one whose last named row precedes it). n/a without the expectation.
  */
@@ -1024,6 +1025,8 @@ export function checkStatedCounts(
       return {
         name: l.name,
         label: LIST_LABEL[l.name] ?? l.name,
+        returned: typeof l.r.returned === "number" ? l.r.returned : null,
+        count: typeof l.r.count === "number" ? l.r.count : null,
         shown: at.length,
         first: at.length ? Math.min(...at) : -1,
         last: at.length ? Math.max(...at) : -1,
@@ -1068,10 +1071,24 @@ export function checkStatedCounts(
       about = [after ?? before ?? lists[0]!];
     }
     for (const l of about) {
-      const equal = s.count === l.shown;
-      if (!equal) ok = false;
+      if (l.shown > 0) {
+        const equal = s.count === l.shown;
+        if (!equal) ok = false;
+        details.push(
+          `"${s.said}" (${s.count}) → ${l.label}, ${l.shown} row(s) shown: ${equal ? "equal" : "NOT equal"}`,
+        );
+        continue;
+      }
+      // No row of the list shown: the tool's returned count or its total for the list.
+      const as =
+        s.count === l.returned
+          ? `the tool's returned count (${l.returned})`
+          : s.count === l.count
+            ? `the tool's total (${l.count})`
+            : null;
+      if (as === null) ok = false;
       details.push(
-        `"${s.said}" (${s.count}) → ${l.label}, ${l.shown} row(s) shown: ${equal ? "equal" : "NOT equal"}`,
+        `"${s.said}" (${s.count}) → ${l.label}, no row shown: ${as !== null ? `equal to ${as}` : `NOT equal to the tool's returned count (${l.returned ?? "none"}) or total (${l.count ?? "none"})`}`,
       );
     }
   }

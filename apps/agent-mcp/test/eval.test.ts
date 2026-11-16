@@ -3158,6 +3158,49 @@ describe("check stated_counts: numbers of rows shown equal the rows the text lis
     ).toBe("fail");
   });
 
+  test("a list with no row shown: a stated count passes when it equals the tool's returned count or its total for that list, and fails otherwise", () => {
+    // h-bbb-van-nuys run 1 (71defdb): the longest-open list is described, none of its rows shown; the window's 5 are.
+    const h = run(
+      [
+        "The 10 longest-open permits overall have been open 7,000 days or more.",
+        "The five longest-open permits in the contractor window:",
+        rows(100, 5),
+      ].join("\n"),
+    );
+    expect(h.result).toBe("pass");
+    expect(h.details).toEqual([
+      "longest-open list: 0 row(s) named in the text",
+      "within-window list: 5 row(s) named in the text",
+      '"The 10" (10) → longest-open list, no row shown: equal to the tool\'s returned count (10)',
+      '"The five" (5) → within-window list, 5 row(s) shown: equal',
+    ]);
+    // The tool's total for that list passes too.
+    const total = run("Here are 2,309 permits, none listed by number.", [
+      plainCall,
+    ]);
+    expect(total.result).toBe("pass");
+    expect(total.details).toContain(
+      '"Here are 2,309" (2309) → long-open list, no row shown: equal to the tool\'s total (2309)',
+    );
+    // Neither: fails.
+    const neither = run("Here are 7 of them.", [plainCall]);
+    expect(neither.result).toBe("fail");
+    expect(neither.details).toContain(
+      '"Here are 7" (7) → long-open list, no row shown: NOT equal to the tool\'s returned count (10) or total (2309)',
+    );
+    // A not-available list (count null) passes only on its returned count.
+    const na: ToolCallRecord = {
+      ...plainCall,
+      result: { count: null, status: "not_available", returned: 0, items: [] },
+    };
+    expect(run("Here are 0 permits.", [na]).result).toBe("pass");
+    expect(run("Here are 5 permits.", [na]).result).toBe("fail");
+    // With any row of the list shown the rule is as before: the rows shown, not the returned count.
+    expect(run(`Here are 10 permits:\n${rows(0, 4)}`, [plainCall]).result).toBe(
+      "fail",
+    );
+  });
+
   test("n/a without the expectation; a statement with no long-open list fails", () => {
     expect(
       checkStatedCounts(
