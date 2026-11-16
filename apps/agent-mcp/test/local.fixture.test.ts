@@ -176,13 +176,13 @@ describe("local wiring", () => {
   });
   test("caller.permits satisfies PermitQueries (compile-time, both input directions) and is what the tools read", async () => {
     const caller = permitData.caller;
-    // Function-typed members: inputs are checked contravariantly, so a lane input the API would refuse fails tsc.
+    // Function-typed members: inputs are checked contravariantly, so an agent input the API would refuse fails tsc.
     const permits: PermitQueries = caller.permits;
     const longOpen: (i: LongOpenInput) => Promise<LongOpenResult> =
       caller.permits.longOpen;
     const forParcel: (i: { parcel_id: string }) => Promise<ParcelPermits> =
       caller.permits.forParcel;
-    // And the API's own input type fits the lane's LongOpenInput (no field the lane lacks).
+    // And the API's own input type fits the agent's LongOpenInput (no field the agent's type lacks).
     type ApiLongOpenInput = Parameters<typeof caller.permits.longOpen>[0];
     const toLane = (i: ApiLongOpenInput): LongOpenInput => i;
     const input = toLane({ ...P, radius_miles: 5 });

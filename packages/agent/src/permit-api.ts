@@ -1,12 +1,12 @@
 /**
- * The data-query interface the tools use, wired to the data API's real routes (P9: apps/api/src/routers/permits.ts,
+ * The data-query interface the tools use, wired to the data API's real routes (apps/api/src/routers/permits.ts,
  * response types in apps/api/src/contract.ts).
  *
  * `DataQueries` is shaped like the data API's tRPC caller, so `appRouter.createCaller(ctx)` satisfies it
  * structurally (checked at compile time in apps/agent-mcp/test/local.fixture.test.ts). Every response type is the
  * contract's own, imported as a type, so drift in the API fails the typecheck here. The members are function-typed
  * properties (not methods) so their inputs are checked contravariantly: an input the API would not accept fails.
- * The contract exports no input types, so the three inputs below are the lane's, copied from the routers' zod inputs.
+ * The contract exports no input types, so the three inputs below are this package's, copied from the routers' zod inputs.
  */
 import type {
   LongOpenResult,

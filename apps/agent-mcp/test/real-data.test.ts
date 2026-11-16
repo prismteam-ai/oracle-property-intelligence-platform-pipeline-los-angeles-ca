@@ -1,5 +1,5 @@
 /**
- * The agent's tools on the real latest run (openLocalData over the checkout's runs/ and data/), for the P19
+ * The agent's tools on the real latest run (openLocalData over the checkout's runs/ and data/), for these
  * changes: the contractor window, places.resolve, the ownership bases and the contractor identity. Skipped when
  * data/ does not hold the run's files (a worktree or a replay); REQUIRE_REAL_DATA=1 makes that a failure, as in
  * apps/api/test/routers.test.ts. Expected values are the rebuild run's (2026-11-12T14-00-51-383Z-bc7f18f2e9cf2),

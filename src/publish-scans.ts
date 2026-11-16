@@ -6,7 +6,7 @@
  * - home paths (Linux and macOS home and root directories, a leading tilde, Windows user folders), and
  *   the local user and host names.
  * The value-based secrets scan and the account-ID scan are separate tools (run by the operator on the
- * same files); see the lane log. Results name the file, the check and the JSON path, never the value.
+ * same files). Results name the file, the check and the JSON path, never the value.
  */
 import { hostname, userInfo } from "node:os";
 import { personalDataColumns } from "./property-sql.ts";
