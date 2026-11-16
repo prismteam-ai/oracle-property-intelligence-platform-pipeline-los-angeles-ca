@@ -3,7 +3,7 @@
  * Every number field of the Explorer's forms behaves like a text entry: it can be emptied and retyped, shows
  * what was typed (never a 0 put back after clearing, so "5" typed after clearing shows "5", not "05"), and is
  * read only when the search runs: an empty or invalid value gives a plain message and no call. The arrows step
- * whole units. The agent panel's centre fields are covered in AskAgent.test.tsx.
+ * whole units. The agent panel's center fields are covered in AskAgent.test.tsx.
  * Mocks: ../src/config.ts and @oracle-la/api-client (a callable object like the tRPC proxy, vi.fn() procedures).
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -83,8 +83,9 @@ const RADIUS_FIELDS: Case[] = [
   {
     role: "textbox",
     name: "Latitude",
-    typed: "34.20155",
-    sent: { lat: 34.20155 },
+    // Not the default (34.20155), so the search sends what was typed.
+    typed: "34.199",
+    sent: { lat: 34.199 },
     empty:
       "Latitude is empty: enter a number from 33.2 to 34.9 (Los Angeles County).",
     invalid: [
@@ -95,8 +96,8 @@ const RADIUS_FIELDS: Case[] = [
   {
     role: "textbox",
     name: "Longitude",
-    typed: "-118.45361",
-    sent: { lon: -118.45361 },
+    typed: "-118.487",
+    sent: { lon: -118.487 },
     empty:
       "Longitude is empty: enter a number from -119 to -117.6 (Los Angeles County).",
     invalid: [
@@ -252,8 +253,8 @@ describe("Explorer long-open form: number fields", () => {
     expect(field("spinbutton", "Open at most (days, optional)").value).toBe("");
     await find();
     expect(h.longOpen.mock.calls[0]![0]).toMatchObject({
-      lat: 34.199,
-      lon: -118.487,
+      lat: 34.20155,
+      lon: -118.45361,
       radius_miles: 5,
       min_open_days: 1826,
     });

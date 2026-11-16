@@ -27,6 +27,7 @@ const h = vi.hoisted(() => ({
   records: vi.fn(),
   longOpen: vi.fn(),
   forParcel: vi.fn(),
+  detail: vi.fn(),
 }));
 vi.mock("../src/config.ts", () => ({
   loadConfig: vi.fn(async () => ({
@@ -44,7 +45,10 @@ vi.mock("@oracle-la/api-client", () => ({
         sourcePages: { query: h.sourcePages },
         records: { query: h.records },
       },
-      parcels: { search: { query: h.search } },
+      parcels: {
+        search: { query: h.search },
+        detail: { query: h.detail },
+      },
       permits: {
         longOpen: { query: h.longOpen },
         forParcel: { query: h.forParcel },
@@ -84,6 +88,7 @@ describe("Explorer radius query", () => {
       },
       history: [],
     });
+    h.sources.mockReset().mockResolvedValue(SOURCES);
     h.search.mockReset().mockResolvedValue({
       count: 3,
       rule,
@@ -118,8 +123,8 @@ describe("Explorer radius query", () => {
     await wait(0);
     expect(h.search).toHaveBeenCalledTimes(1);
     expect(h.search.mock.calls[0]![0]).toMatchObject({
-      lat: 34.199,
-      lon: -118.487,
+      lat: 34.20155,
+      lon: -118.45361,
       radius_miles: 5,
       threshold_years: 15,
       offset: 0,
@@ -485,6 +490,89 @@ const parcelPermits = (parcel_id: string) => ({
   bbb: { available: false, reason: BBB_REASON },
 });
 
+/** A parcel as parcels.detail serves it: v_property's and v_property_provenance's columns (fixture values). */
+const parcelDetail = (parcel_id: string) => ({
+  property: {
+    parcel_id,
+    assessor_id: "1111-111-111",
+    address: `${parcel_id.slice(0, 1)} DETAIL ST`,
+    street_number: "1",
+    city: "VAN NUYS",
+    postal_code: "91405",
+    latitude: 34.20101,
+    longitude: -118.45202,
+    coordinate_basis: "assessor centroid",
+    year_built: 1962,
+    effective_year_built: 1970,
+    roof_age_basis: PROXY_BASIS,
+    effective_roof_year: 1962,
+    roof_year_permit_number: null,
+    roof_year_rule_version: "v2",
+    permit_data_available: true,
+    use_type: "Residential",
+    use_code: "0100",
+    use_description: "Single Family Residence",
+    jurisdiction: "LOS ANGELES",
+    roll_year: 2026,
+    last_recording_date: "2004-05-06",
+    owner_unchanged_10y_proxy: true,
+    land_base_year: 1975,
+    ownership_base_year_10y_proxy: true,
+  },
+  provenance: {
+    parcel_id,
+    source_name: ROLL,
+    source_request_url:
+      "https://services.arcgis.com/x/FeatureServer/0/query?page=7",
+    source_request_method: "GET",
+    source_retrieved_at: "2026-11-12T13:05:00.000Z",
+    source_page_sha256: "c".repeat(64),
+    source_page_file: "pages/page-00007.json.gz",
+  },
+});
+/** A record view's label and value pairs. */
+const pairs = (testId: string) =>
+  [...screen.getByTestId(testId).querySelectorAll("dl > div")].map((d) => [
+    d.querySelector("dt")!.textContent,
+    d.querySelector("dd")!.textContent,
+  ]);
+/** The parcel part of a record view for parcelDetail(id): only the fields the Explorer shows elsewhere. */
+const PARCEL_PAIRS = (id: string) => [
+  ["Parcel (AIN)", id],
+  ["Address", `${id.slice(0, 1)} DETAIL ST`],
+  ["Year built", "1962"],
+  ["Effective roof year", "1962"],
+  ["Basis", "year built (proxy)"],
+  ["Land base year", "1975"],
+  ["Latitude", "34.20101"],
+  ["Longitude", "-118.45202"],
+];
+const PROVENANCE_PAIRS = [
+  ["Source", ROLL],
+  ["Request URL", "https://services.arcgis.com/x/FeatureServer/0/query?page=7"],
+  ["Retrieved at", "2026-11-12T13:05:00.000Z"],
+  ["Page", "pages/page-00007.json.gz"],
+  ["Page sha256", "c".repeat(64)],
+];
+const ROLL_SOURCE_PAIRS = [
+  ["Source", ROLL],
+  ["Retrieved", "2026-11-12T13:00:00.000Z → 2026-11-12T13:10:00.000Z"],
+  ["Query URL", "https://services.arcgis.com/x/FeatureServer/0/query"],
+  ["License", "—"],
+  ["Attribution", "—"],
+  ["Terms", "terms"],
+];
+/** Values parcels.detail serves that the Explorer shows nowhere: never in a record view. */
+const NOT_SHOWN = [
+  "1111-111-111",
+  "assessor centroid",
+  "Single Family Residence",
+  "0100",
+  "2004-05-06",
+  "GET",
+  "v2",
+];
+
 const tbodyText = (testId: string) =>
   [...screen.getByTestId(testId).querySelectorAll("tbody tr")].map((tr) =>
     [...tr.querySelectorAll("td")].map((td) => td.textContent ?? ""),
@@ -508,6 +596,11 @@ describe("Explorer sources, records and long-open permits", () => {
       .mockReset()
       .mockImplementation(async (i: { parcel_id: string }) =>
         parcelPermits(i.parcel_id),
+      );
+    h.detail
+      .mockReset()
+      .mockImplementation(async (i: { parcel_id: string }) =>
+        parcelDetail(i.parcel_id),
       );
   });
   afterEach(() => cleanup());
@@ -839,8 +932,8 @@ describe("Explorer sources, records and long-open permits", () => {
     expect(h.longOpen).toHaveBeenCalledTimes(1);
     const input = h.longOpen.mock.calls[0]![0] as Record<string, unknown>;
     expect(input).toEqual({
-      lat: 34.199,
-      lon: -118.487,
+      lat: 34.20155,
+      lon: -118.45361,
       radius_miles: 5,
       min_open_days: 1826,
       sort: "open_days",
@@ -949,6 +1042,192 @@ describe("Explorer sources, records and long-open permits", () => {
     fireEvent.click(toggles[0]!);
     expect(h.forParcel).toHaveBeenCalledTimes(2);
     expect(screen.getAllByTestId("contractors-row")).toHaveLength(3);
+  });
+
+  test("a radius row opens its record with its source: one parcels.detail call per click, from the row's button (keyboard) or the row, only fields the Explorer shows", async () => {
+    h.search.mockReset().mockResolvedValue({
+      count: 2,
+      rule,
+      next_offset: null,
+      ownership: null,
+      items: ["2224012045", "2224012046"].map((parcel_id, n) => ({
+        parcel_id,
+        address: `${n + 1} TEST ST`,
+        year_built: 1962,
+        roof_age_years_proxy: 64,
+        effective_roof_year: 1962,
+        roof_age_years: 64,
+        roof_age_basis: PROXY_BASIS,
+        roof_year_permit_number: null,
+        permit_data_available: true,
+        land_base_year: 1975,
+        distance_miles: 0.1,
+        latitude: 34.2,
+        longitude: -118.45,
+      })),
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Radius query" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByTestId("radius-count");
+    // The sources are loaded with the tab, once; nothing opens a record by itself.
+    expect(h.sources).toHaveBeenCalledTimes(1);
+    expect(h.detail).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("record-view")).toBeNull();
+    // The row's ID is a button: in the tab order, named for the record it opens.
+    const button = screen.getByRole("button", {
+      name: "Open the record of parcel 2224012045",
+    });
+    expect(button.textContent).toBe("2224012045");
+    expect(button.tabIndex).toBe(0);
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    button.focus();
+    fireEvent.click(button);
+    expect(h.detail).toHaveBeenCalledTimes(1);
+    expect(h.detail).toHaveBeenLastCalledWith({ parcel_id: "2224012045" });
+    await screen.findByTestId("record-parcel");
+    const view = screen.getByTestId("record-view");
+    expect(view.dataset.record).toBe("2224012045");
+    expect(view.querySelector("h3")!.textContent).toContain(
+      "Record: Parcel 2224012045",
+    );
+    // The focus moves to the record that opened.
+    expect(document.activeElement).toBe(view.querySelector("h3"));
+    expect(button.getAttribute("aria-expanded")).toBe("true");
+    expect(pairs("record-parcel")).toEqual(PARCEL_PAIRS("2224012045"));
+    expect(pairs("record-provenance")).toEqual(PROVENANCE_PAIRS);
+    expect(pairs("record-parcel-source")).toEqual(ROLL_SOURCE_PAIRS);
+    for (const v of NOT_SHOWN) expect(view.textContent).not.toContain(v);
+    expect(view.textContent).not.toMatch(/owner|mailing/i);
+    // The same row again: no call. A click anywhere on another row: one call.
+    fireEvent.click(button);
+    fireEvent.click(
+      screen.getAllByTestId("radius-row")[0]!.querySelectorAll("td")[3]!,
+    );
+    expect(h.detail).toHaveBeenCalledTimes(1);
+    fireEvent.click(
+      screen.getAllByTestId("radius-row")[1]!.querySelectorAll("td")[3]!,
+    );
+    expect(h.detail).toHaveBeenCalledTimes(2);
+    expect(h.detail).toHaveBeenLastCalledWith({ parcel_id: "2224012046" });
+    await screen.findByText("Record: Parcel 2224012046", { exact: false });
+    expect(h.sources).toHaveBeenCalledTimes(1);
+    // Close: the record goes; the table stays.
+    fireEvent.click(screen.getByTestId("record-close"));
+    expect(screen.queryByTestId("record-view")).toBeNull();
+    expect(screen.getAllByTestId("radius-row")).toHaveLength(2);
+  });
+
+  test("a radius record that cannot be read says so; clicking the row again retries with one call", async () => {
+    h.search.mockReset().mockResolvedValue({
+      count: 1,
+      rule,
+      next_offset: null,
+      ownership: null,
+      items: [
+        {
+          parcel_id: "2224012045",
+          address: "1 TEST ST",
+          year_built: 1962,
+          roof_age_years_proxy: 64,
+          effective_roof_year: 1962,
+          roof_age_years: 64,
+          roof_age_basis: PROXY_BASIS,
+          roof_year_permit_number: null,
+          permit_data_available: true,
+          land_base_year: 1975,
+          distance_miles: 0.1,
+          latitude: 34.2,
+          longitude: -118.45,
+        },
+      ],
+    });
+    h.detail.mockReset().mockRejectedValueOnce(new Error("HTTP 503"));
+    render(<App />);
+    fireEvent.click(await screen.findByRole("tab", { name: "Radius query" }));
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByTestId("radius-count");
+    fireEvent.click(screen.getByTestId("open-record"));
+    expect((await screen.findByTestId("record-error")).textContent).toBe(
+      "HTTP 503",
+    );
+    h.detail.mockImplementation(async (i: { parcel_id: string }) =>
+      parcelDetail(i.parcel_id),
+    );
+    fireEvent.click(screen.getByTestId("open-record"));
+    expect(h.detail).toHaveBeenCalledTimes(2);
+    await screen.findByTestId("record-parcel");
+    expect(screen.queryByTestId("record-error")).toBeNull();
+  });
+
+  test("a long-open row opens its record: the permit as the row shows it, the permit source and the parcel's record, one parcels.detail call per click; Show contractors opens none", async () => {
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("tab", { name: "Long-open permits" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Find long-open permits" }),
+    );
+    await screen.findByTestId("long-open-count");
+    // The contractors toggle is a control of its own: it opens no record.
+    fireEvent.click(screen.getAllByTestId("contractors-toggle")[0]!);
+    expect(h.forParcel).toHaveBeenCalledTimes(1);
+    expect(h.detail).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("record-view")).toBeNull();
+    // The permit number is the row's button (its flags stay beside it).
+    const button = screen.getByRole("button", {
+      name: "Open the record of permit 20000-30000-00003",
+    });
+    expect(button.closest("td")!.textContent).toBe(
+      "20000-30000-00003 (roof coating only)",
+    );
+    fireEvent.click(button);
+    expect(h.detail).toHaveBeenCalledTimes(1);
+    expect(h.detail).toHaveBeenLastCalledWith({ parcel_id: "3333333333" });
+    await screen.findByTestId("record-parcel");
+    const view = screen.getByTestId("record-view");
+    expect(view.dataset.record).toBe("20000-30000-00003");
+    expect(pairs("record-permit")).toEqual([
+      ["Permit number", "20000-30000-00003 (roof coating only)"],
+      ["Address", "3 LONG OPEN WAY"],
+      ["Status", "Issued"],
+      ["Status class", "open-issued"],
+      ["Issue date", "2015-06-03"],
+      ["Days open", "3997"],
+      ["Join method", "direct"],
+      ["Parcels", "1"],
+      ["Distance (mi)", "0.3"],
+    ]);
+    expect(pairs("record-permit-source")).toEqual([
+      ["Source", PERMITS],
+      ["Retrieved", "2026-11-12T13:00:00.000Z → 2026-11-12T13:10:00.000Z"],
+      [
+        "Query URL",
+        "https://data.lacity.org/resource/aaaa-0001.jsonhttps://data.lacity.org/resource/aaaa-0002.json",
+      ],
+      ["License", PERMIT_LICENSE],
+      ["Attribution", PERMIT_ATTRIBUTION],
+      ["Terms", "terms"],
+    ]);
+    expect(pairs("record-parcel")).toEqual(PARCEL_PAIRS("3333333333"));
+    expect(pairs("record-provenance")).toEqual(PROVENANCE_PAIRS);
+    expect(pairs("record-parcel-source")).toEqual(ROLL_SOURCE_PAIRS);
+    for (const v of [
+      ...NOT_SHOWN,
+      "Bldg-Alter/Repair",
+      "1 or 2 Family Dwelling",
+      "91405",
+    ])
+      expect(view.textContent).not.toContain(v);
+    expect(view.textContent).not.toMatch(/description|owner|mailing/i);
+    // A click on another row's cell: one more call, for that row's parcel.
+    fireEvent.click(
+      screen.getAllByTestId("long-open-row")[1]!.querySelectorAll("td")[1]!,
+    );
+    expect(h.detail).toHaveBeenCalledTimes(2);
+    expect(h.detail).toHaveBeenLastCalledWith({ parcel_id: "1111111111" });
+    // explorer.sources: once for the tab, none per click.
+    expect(h.sources).toHaveBeenCalledTimes(1);
   });
 
   test("the long-open view sends a changed minimum and an optional maximum, and shows the API's refusal", async () => {

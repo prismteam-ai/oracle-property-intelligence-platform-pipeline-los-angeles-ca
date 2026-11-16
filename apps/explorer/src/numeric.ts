@@ -6,13 +6,15 @@
 import type { ChangeEvent } from "react";
 import type { LA_BOUNDS, MAX_OPEN_DAYS } from "@oracle-la/api-client";
 
-/** The search centres the data API accepts (LA County with a margin); typed so a different API box fails the typecheck. */
+/** The search centers the data API accepts (LA County with a margin); typed so a different API box fails the typecheck. */
 export const LA_BOX: typeof LA_BOUNDS = {
   minLat: 33.2,
   maxLat: 34.9,
   minLon: -119.0,
   maxLon: -117.6,
 };
+/** The default center of the Radius query and Long-open forms (as typed text). */
+export const DEFAULT_CENTER = { lat: "34.20155", lon: "-118.45361" } as const;
 /** The API's largest open duration in days (100 years); typed as the API's constant. */
 export const MAX_DAYS: typeof MAX_OPEN_DAYS = 36_525;
 

@@ -201,3 +201,57 @@ pre.mono {
   max-height: 480px;
   overflow: auto;
 }
+.agent-section > summary {
+  font-weight: 600;
+  cursor: pointer;
+  margin: 8px 0 4px;
+}
+tr.record-row {
+  cursor: pointer;
+}
+tr.record-row:hover,
+tr.record-row.shown {
+  background: #eef4ff;
+}
+button.row-open {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: #1d4fb8;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.record-view {
+  background: #fff;
+  border: 1px solid #b8cdf5;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+.record-view h3 {
+  margin: 4px 0 8px;
+}
+.record-view h4 {
+  margin: 12px 0 4px;
+}
+dl.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+dl.facts dt {
+  color: #656871;
+  font-size: 12px;
+}
+dl.facts dd {
+  margin: 0;
+}
+.block {
+  display: block;
+}
+footer {
+  padding: 0 20px 16px;
+}

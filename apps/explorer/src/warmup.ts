@@ -17,7 +17,10 @@ export const DATA_WARM_REQUESTS = 2;
 export interface WarmupDeps {
   /** GET /agent/warm. */
   warmAgent: () => Promise<unknown>;
-  /** One cheap data API request (meta.info), never batched with the other. */
+  /**
+   * One data API request, never batched with the other: explorer.sources, which takes about 0.8 s, so the two
+   * requests overlap on the data API and each warms an instance of its own.
+   */
   warmData: () => Promise<unknown>;
   now?: () => number;
 }

@@ -15,6 +15,7 @@ import type {
 } from "@oracle-la/api-client";
 import { TOOL_NAMES } from "../../../packages/agent/src/tools.ts";
 import type { AnswerResponse } from "../src/agent-api.ts";
+import { dateOnly } from "../src/dates.ts";
 import { EXAMPLE } from "../src/mcp-tools.ts";
 import {
   ANSWERED,
@@ -27,7 +28,8 @@ import {
 } from "./agent-fixtures.ts";
 import { BASE_URL, CREDS, ORIGIN } from "./env.ts";
 
-const VN = { lat: 34.199, lon: -118.487 };
+/** The Radius query and Long-open forms' default center (Van Nuys, as the agent resolves it). */
+const VN = { lat: 34.20155, lon: -118.45361 };
 const haversine = (a: number[], b: number[]) => {
   const r = (d: number) => (d * Math.PI) / 180;
   const h =
@@ -629,15 +631,15 @@ test.describe("with credentials", () => {
       "Roof older than (years) must be a whole number from 1 to 120.",
     );
     expect(sent).toEqual([]);
-    // Retyped: exactly what was typed is shown and sent.
+    // Retyped (not the default center): exactly what was typed is shown and sent.
     const typed = {
-      lat: 34.20155,
-      lon: -118.45361,
+      lat: 34.199,
+      lon: -118.487,
       radius_miles: 1,
       threshold_years: 20,
     };
-    await retype(lat, "34.20155");
-    await retype(lon, "-118.45361");
+    await retype(lat, "34.199");
+    await retype(lon, "-118.487");
     await retype(radius, "1");
     await retype(years, "20");
     const expected = await apiGet("parcels.search", typed);
@@ -837,16 +839,17 @@ test.describe("with credentials", () => {
       "Open at most (100 days) is below open at least (3,000 days): set a larger maximum or clear it.",
     );
     expect(sent).toEqual([]);
+    // Not the default center: what was typed is sent.
     for (const [name, text] of [
-      ["Latitude", "34.20155"],
-      ["Longitude", "-118.45361"],
+      ["Latitude", "34.199"],
+      ["Longitude", "-118.487"],
     ] as const)
       await retype(page.getByRole("textbox", { name }), text);
     await retype(page.getByRole("spinbutton", { name: "Radius (miles)" }), "2");
     await retype(max, "5000");
     const typed = {
-      lat: 34.20155,
-      lon: -118.45361,
+      lat: 34.199,
+      lon: -118.487,
       radius_miles: 2,
       min_open_days: 3000,
       max_open_days: 5000,
@@ -911,14 +914,20 @@ async function mockAnswers(page: Page, replies: Reply[], log?: string[]) {
   return bodies;
 }
 
-/** Records the warm-up traffic in order: "warm:req", "warm:res", "data:req", "data:res" (meta.info). */
+/**
+ * Records the warm-up traffic in order: "warm:req", "warm:res", "data:req", "data:res" (explorer.sources sent
+ * unbatched; the tabs' own explorer.sources call is batched and not counted).
+ */
 function watchWarmup(page: Page, log: string[]) {
-  const kind = (url: string) =>
-    /\/agent\/warm$/.test(new URL(url).pathname)
+  const kind = (url: string) => {
+    const u = new URL(url);
+    return /\/agent\/warm$/.test(u.pathname)
       ? "warm"
-      : /\/trpc\/meta\.info$/.test(new URL(url).pathname)
+      : /\/trpc\/explorer\.sources$/.test(u.pathname) &&
+          !u.searchParams.has("batch")
         ? "data"
         : null;
+  };
   page.on("request", (r) => {
     const k = kind(r.url());
     if (k && r.method() === "GET") log.push(`${k}:req`);
@@ -938,7 +947,7 @@ const count = (log: string[], e: string) => log.filter((x) => x === e).length;
 test.describe("Ask the agent (answers mocked) and MCP", () => {
   test.use({ httpCredentials: CREDS });
 
-  test("10. config.json names the agent API; the tab shows; opening it warms the agent and two data API requests at once; the notice is shown", async ({
+  test("10. config.json names the agent API; the tab shows; opening it warms the agent and two unbatched explorer.sources requests at once; the notice is shown", async ({
     page,
   }) => {
     const cfg = (await (
@@ -991,6 +1000,15 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
     await expect(how.getByText(ANSWERED.reasoning)).toBeHidden();
     await how.locator("summary").click();
     await expect(how.getByText(ANSWERED.reasoning)).toBeVisible();
+    // Sources: closed, the count in the summary; opened, by kind with dates as YYYY-MM-DD.
+    const sourcesBox = a.getByTestId("agent-sources-details");
+    await expect(sourcesBox).not.toHaveAttribute("open", /.*/);
+    await expect(sourcesBox.locator("summary")).toHaveText(
+      `Sources (${ANSWERED.records.length})`,
+    );
+    await expect(a.getByTestId("agent-sources").first()).toBeHidden();
+    await sourcesBox.locator("summary").click();
+    await expect(a.getByTestId("agent-sources").first()).toBeVisible();
     await expect(a.getByTestId("agent-sources")).toHaveCount(3);
     for (const r of ANSWERED.records) {
       const row = a.locator(
@@ -1001,9 +1019,15 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
         r.source_name,
         r.license ?? "—",
         r.attribution ?? "—",
-        r.collected_at,
+        dateOnly(r.collected_at),
       ]);
+      await expect(row.locator("td").last()).toHaveText(/^\d{4}-\d{2}-\d{2}$/);
     }
+    // Gaps: collapsible and open.
+    await expect(a.getByTestId("agent-gaps-details")).toHaveAttribute(
+      "open",
+      "",
+    );
     await expect(a.getByTestId("agent-gaps").locator("li")).toHaveText(
       ANSWERED.gaps.slice(STANDING_GAPS.length),
     );
@@ -1015,7 +1039,7 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
     );
   });
 
-  test("11b. the centre fields are text entries: emptied and retyped, the question sends what was typed; an invalid centre is refused in the panel and nothing is sent", async ({
+  test("11b. the center fields are text entries: emptied and retyped, the question sends what was typed; an invalid center is refused in the panel and nothing is sent", async ({
     page,
   }) => {
     const bodies = await mockAnswers(page, [ANSWERED]);
@@ -1130,7 +1154,9 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
       "waking",
     );
     await expect(page.getByTestId("agent-status")).toContainText("Waking up");
-    await expect(page.getByTestId("agent-send")).toBeEnabled();
+    // A held question is pending: Send and New conversation are disabled.
+    await expect(page.getByTestId("agent-send")).toBeDisabled();
+    await expect(page.getByTestId("agent-new")).toBeDisabled();
     await expect.poll(() => count(log, "data:res")).toBe(2);
     expect(bodies).toEqual([]);
     release();
@@ -1141,6 +1167,65 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
     // The answer went out only after the warm-up's agent and data responses.
     expect(log.indexOf("answer")).toBeGreaterThan(log.lastIndexOf("warm:res"));
     expect(log.indexOf("answer")).toBeGreaterThan(log.lastIndexOf("data:res"));
+    await expect(page.getByTestId("agent-send")).toBeEnabled();
+    await expect(page.getByTestId("agent-new")).toBeEnabled();
+  });
+
+  test("14b. Send and New conversation are disabled from the click until the answer or an error, and enabled when nothing is pending", async ({
+    page,
+  }) => {
+    // The answer is held back until the test releases it (mocked: never a real /agent/answer).
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    const bodies: Array<Record<string, unknown>> = [];
+    const replies: Reply[] = [
+      ANSWERED,
+      { httpStatus: 503, body: { error: "agent not configured" } },
+    ];
+    await page.route("**/agent/answer", async (route) => {
+      const req = route.request();
+      if (req.method() === "OPTIONS")
+        return route.fulfill({ status: 204, headers: AGENT_CORS });
+      bodies.push(req.postDataJSON() as Record<string, unknown>);
+      const next = replies.shift();
+      if (!next) {
+        unmockedAnswers.push(`${req.method()} ${req.url()} (no reply left)`);
+        return route.abort("blockedbyclient");
+      }
+      if (bodies.length === 1) await released;
+      const [status, body] =
+        "httpStatus" in next ? [next.httpStatus, next.body] : [200, next];
+      await route.fulfill({
+        status,
+        headers: { ...AGENT_CORS, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    });
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Ask the agent" }).click();
+    const sendBtn = page.getByTestId("agent-send");
+    const newBtn = page.getByTestId("agent-new");
+    await expect(sendBtn).toBeEnabled();
+    await ask(page, QUESTION_1);
+    await expect(sendBtn).toBeDisabled();
+    await expect(newBtn).toBeDisabled();
+    // A second question typed meanwhile stays in the box; nothing more is sent.
+    await page.getByRole("textbox", { name: /question/i }).fill(QUESTION_2);
+    await expect.poll(() => bodies.length).toBe(1);
+    release();
+    await expect(page.getByTestId("agent-answer")).toHaveCount(1);
+    await expect(sendBtn).toBeEnabled();
+    await expect(newBtn).toBeEnabled();
+    await expect(page.getByRole("textbox", { name: /question/i })).toHaveValue(
+      QUESTION_2,
+    );
+    // An error ends the pending question too.
+    await sendBtn.click();
+    await expect(page.getByTestId("agent-message")).toContainText(
+      "not available right now (HTTP 503: agent not configured)",
+    );
+    await expect(sendBtn).toBeEnabled();
+    expect(bodies).toHaveLength(2);
   });
 
   test("15. re-warm: more than 4 minutes after the last data API response, the warm-up runs again before the question", async ({
@@ -1167,6 +1252,128 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
     );
     expect(log.lastIndexOf("answer")).toBeGreaterThan(
       log.lastIndexOf("warm:res"),
+    );
+  });
+
+  test("15b. the page shows the Explorer's commit and the agent's commit as GET /agent/warm reports it", async ({
+    page,
+  }) => {
+    const warmBodies: unknown[] = [];
+    page.on("response", async (r) => {
+      if (/\/agent\/warm$/.test(new URL(r.url()).pathname) && r.ok())
+        warmBodies.push(await r.json());
+    });
+    await page.goto("/");
+    // The Explorer's own commit, fixed at build: a 7-character hash (never "-dirty" or "unbundled" when hosted).
+    await expect(page.getByTestId("explorer-commit")).toHaveText(
+      /^[0-9a-f]{7}$/,
+    );
+    await expect(page.getByTestId("agent-commit")).toHaveText(
+      "not checked yet (the Ask the agent tab checks it)",
+    );
+    await page.getByRole("tab", { name: "Ask the agent" }).click();
+    await expect.poll(() => warmBodies.length).toBe(1);
+    const warm = warmBodies[0] as { status: string; commit?: string };
+    expect(warm.status).toBe("warm");
+    await expect(page.getByTestId("agent-commit")).toHaveText(
+      warm.commit ?? "not reported",
+    );
+    // No data API commit on the page.
+    await expect(page.getByTestId("commits")).not.toContainText(/data api/i);
+  });
+
+  test("15c. a Radius query row and a Long-open row open their record with its source: one parcels.detail request per click, from the keyboard too", async ({
+    page,
+  }) => {
+    const sources = (await apiGet("explorer.sources")) as Sources;
+    const roll = sources.sources.find((s) => s.source_kind === "parcel")!;
+    const permitSrc = sources.sources.find((s) => s.source_kind === "permit")!;
+    const details = trpcInputs(page, "parcels.detail");
+    await page.goto("/");
+    await page.getByRole("tab", { name: "Radius query" }).click();
+    await page.getByRole("button", { name: "Search" }).click();
+    const radiusRows = page.getByTestId("radius-row");
+    await expect(radiusRows.first()).toBeVisible();
+    const parcelId = (await radiusRows
+      .first()
+      .getAttribute("data-parcel")) as string;
+    const detail = await apiGet("parcels.detail", { parcel_id: parcelId });
+    // Keyboard: the row's ID is a button in the tab order; Enter opens the record.
+    const open = page.getByRole("button", {
+      name: `Open the record of parcel ${parcelId}`,
+    });
+    await open.focus();
+    await page.keyboard.press("Enter");
+    const view = page.getByTestId("record-view");
+    await expect(view).toHaveAttribute("data-record", parcelId);
+    await expect(view.getByTestId("record-parcel")).toBeVisible();
+    await expect.poll(() => details.length).toBe(1);
+    expect(details[0]).toEqual({ parcel_id: parcelId });
+    const dd = (testId: string, label: string) =>
+      view
+        .getByTestId(testId)
+        .locator("div")
+        .filter({ has: page.locator(`dt:text-is("${label}")`) })
+        .locator("dd");
+    await expect(dd("record-parcel", "Parcel (AIN)")).toHaveText(parcelId);
+    await expect(dd("record-parcel", "Address")).toHaveText(
+      cell(detail.property.address),
+    );
+    await expect(dd("record-parcel", "Year built")).toHaveText(
+      cell(detail.property.year_built),
+    );
+    await expect(dd("record-provenance", "Request URL")).toHaveText(
+      detail.provenance.source_request_url,
+    );
+    await expect(dd("record-provenance", "Page sha256")).toHaveText(
+      detail.provenance.source_page_sha256,
+    );
+    await expect(dd("record-parcel-source", "Source")).toHaveText(
+      roll.source_name,
+    );
+    // Only fields the Explorer shows elsewhere: the labels, exactly.
+    await expect(view.getByTestId("record-parcel").locator("dt")).toHaveText([
+      "Parcel (AIN)",
+      "Address",
+      "Year built",
+      "Effective roof year",
+      "Basis",
+      "Land base year",
+      "Latitude",
+      "Longitude",
+    ]);
+    // The same row again: no request; a click on another row: one.
+    await open.click();
+    await radiusRows.nth(1).locator("td").nth(3).click();
+    await expect.poll(() => details.length).toBe(2);
+    await page.getByTestId("record-close").click();
+    await expect(view).toHaveCount(0);
+
+    await page.getByRole("tab", { name: "Long-open permits" }).click();
+    await page.getByRole("button", { name: "Find long-open permits" }).click();
+    const longRows = page.getByTestId("long-open-row");
+    await expect(longRows.first()).toBeVisible();
+    const permit = (await longRows
+      .first()
+      .getAttribute("data-permit")) as string;
+    // The contractors toggle opens no record.
+    await longRows.first().getByTestId("contractors-toggle").click();
+    await expect(page.getByTestId("record-view")).toHaveCount(0);
+    await longRows.first().locator("td").nth(1).click();
+    await expect(page.getByTestId("record-view")).toHaveAttribute(
+      "data-record",
+      permit,
+    );
+    await expect.poll(() => details.length).toBe(3);
+    await expect(dd("record-permit", "Permit number")).toContainText(permit);
+    await expect(dd("record-permit-source", "Source")).toHaveText(
+      permitSrc.source_name,
+    );
+    await expect(dd("record-parcel-source", "Source")).toHaveText(
+      roll.source_name,
+    );
+    expect(await page.getByTestId("record-view").innerText()).not.toMatch(
+      /work_desc|description|owner/i,
     );
   });
 

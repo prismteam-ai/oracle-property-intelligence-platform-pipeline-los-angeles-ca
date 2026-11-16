@@ -19,6 +19,12 @@ const h = vi.hoisted(() => ({
   clients: [] as Array<{ batch?: boolean }>,
   metaInfo: vi.fn(),
   runSummary: vi.fn(),
+  /** explorer.sources calls, by whether their client batches. */
+  sources: vi.fn((batch: boolean) => {
+    void batch;
+    return Promise.resolve({ sources: [] });
+  }),
+  warmBody: '{"status":"warm","commit":"f965598"}',
 }));
 vi.mock("../src/config.ts", () => ({ loadConfig: h.config }));
 vi.mock("@oracle-la/api-client", () => ({
@@ -28,7 +34,7 @@ vi.mock("@oracle-la/api-client", () => ({
       meta: { info: { query: h.metaInfo } },
       explorer: {
         runSummary: { query: h.runSummary },
-        sources: { query: vi.fn(async () => ({ sources: [] })) },
+        sources: { query: () => h.sources(opts.batch !== false) },
       },
     });
   },
@@ -48,7 +54,7 @@ const flush = () =>
 const fetchStub = vi.fn(async (input: string | URL | Request) => {
   const u = new URL(String(input));
   if (u.pathname === "/agent/warm")
-    return new Response('{"status":"warm"}', { status: 200 });
+    return new Response(h.warmBody, { status: 200 });
   throw new Error(`unexpected request ${u.pathname}`);
 });
 
@@ -56,6 +62,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   h.clients.length = 0;
   h.metaInfo.mockReset().mockResolvedValue({ api_version: "x" });
+  h.sources.mockClear();
+  h.warmBody = '{"status":"warm","commit":"f965598"}';
   h.runSummary.mockReset().mockReturnValue(new Promise(() => {}));
   fetchStub.mockClear();
   vi.stubGlobal("fetch", fetchStub);
@@ -77,6 +85,11 @@ describe("the agent tab and config.json", () => {
     expect(screen.queryByTestId("agent-form")).toBeNull();
     expect(fetchStub).not.toHaveBeenCalled();
     expect(h.metaInfo).not.toHaveBeenCalled();
+    // The Explorer's own commit only (run from source here: "unbundled"); no agent commit.
+    expect(screen.getByTestId("commits").textContent).toBe(
+      "Explorer commit unbundled",
+    );
+    expect(screen.queryByTestId("agent-commit")).toBeNull();
   });
 
   test("an empty agentApiUrl hides the tab too", async () => {
@@ -86,7 +99,7 @@ describe("the agent tab and config.json", () => {
     expect(screen.queryByRole("tab", { name: "Ask the agent" })).toBeNull();
   });
 
-  test("with agentApiUrl the tab shows; opening it warms the agent and sends two unbatched data API requests", async () => {
+  test("with agentApiUrl the tab shows; opening it warms the agent and sends two unbatched explorer.sources requests", async () => {
     h.config.mockResolvedValue({
       ...BASE,
       agentApiUrl: "https://agent.test",
@@ -99,12 +112,59 @@ describe("the agent tab and config.json", () => {
     expect(fetchStub.mock.calls.map((c) => String(c[0]))).toEqual([
       "https://agent.test/agent/warm",
     ]);
-    expect(h.metaInfo).toHaveBeenCalledTimes(2);
-    // The warm-up's data client sends one HTTP request per call.
+    // The warm-up's two data requests: explorer.sources (slow enough to overlap), each one HTTP request.
+    expect(h.sources.mock.calls).toEqual([[false], [false]]);
+    expect(h.metaInfo).not.toHaveBeenCalled();
     expect(h.clients.some((c) => c.batch === false)).toBe(true);
     // Another tab hides the panel but keeps it (and its conversation) mounted.
     fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
     expect(screen.getByTestId("agent-form").closest("[hidden]")).not.toBeNull();
+  });
+
+  test("the page shows the Explorer's commit and the agent's as GET /agent/warm reports it; not reported when absent", async () => {
+    h.config.mockResolvedValue({
+      ...BASE,
+      agentApiUrl: "https://agent.test",
+    });
+    h.warmBody = '{"status":"warm"}';
+    render(<App />);
+    await flush();
+    expect(screen.getByTestId("explorer-commit").textContent).toBe("unbundled");
+    // Before the first warm-up the agent has not been asked.
+    expect(screen.getByTestId("agent-commit").textContent).toBe(
+      "not checked yet (the Ask the agent tab checks it)",
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Ask the agent" }));
+    await flush();
+    expect(screen.getByTestId("agent-commit").textContent).toBe("not reported");
+    // The commit is shown on every tab once reported.
+    cleanup();
+    h.warmBody = '{"status":"warm","commit":"f965598"}';
+    render(<App />);
+    await flush();
+    fireEvent.click(screen.getByRole("tab", { name: "Ask the agent" }));
+    await flush();
+    fireEvent.click(screen.getByRole("tab", { name: "MCP" }));
+    expect(screen.getByTestId("commits").textContent).toBe(
+      "Explorer commit unbundled · Agent commit f965598",
+    );
+    // No data API commit and no environment value on the page.
+    expect(screen.getByTestId("commits").textContent).not.toMatch(/data api/i);
+  });
+
+  test("a warm-up that gets no response reports no agent commit", async () => {
+    h.config.mockResolvedValue({
+      ...BASE,
+      agentApiUrl: "https://agent.test",
+    });
+    fetchStub.mockImplementationOnce(async () => {
+      throw new TypeError("network");
+    });
+    render(<App />);
+    await flush();
+    fireEvent.click(screen.getByRole("tab", { name: "Ask the agent" }));
+    await flush();
+    expect(screen.getByTestId("agent-commit").textContent).toBe("not reported");
   });
 
   test("the MCP tab lists the server's tools with name, description and input schema", async () => {

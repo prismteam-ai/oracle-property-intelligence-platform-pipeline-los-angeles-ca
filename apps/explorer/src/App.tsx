@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { createApiClient, type ApiClient } from "@oracle-la/api-client";
 import { createAgentApi, type AgentApi } from "./agent-api.ts";
 import { AskAgent } from "./AskAgent.tsx";
+import { EXPLORER_COMMIT } from "./commit.ts";
 import { loadConfig, type AppConfig } from "./config.ts";
 import { LongOpen } from "./LongOpen.tsx";
 import { Mcp } from "./Mcp.tsx";
@@ -24,6 +25,30 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number];
 
+/**
+ * The agent API with its warm-up reporting the agent's commit: what each GET /agent/warm reported (no commit when
+ * the response had none or no response came).
+ */
+function reportingCommit(
+  api: AgentApi,
+  report: (r: { commit?: string }) => void,
+): AgentApi {
+  return {
+    ...api,
+    warm: () =>
+      api.warm().then(
+        (r) => {
+          report(r.commit ? { commit: r.commit } : {});
+          return r;
+        },
+        (e: unknown) => {
+          report({});
+          throw e;
+        },
+      ),
+  };
+}
+
 export function App() {
   // The tRPC client is a callable proxy, so it is held inside an object (never passed to a state setter alone).
   const [conn, setConn] = useState<{
@@ -35,11 +60,14 @@ export function App() {
   }>();
   const [error, setError] = useState<string>();
   const [tab, setTab] = useState<Tab>("Run summary");
+  // The agent's commit as GET /agent/warm reported it; unset until the first warm-up has answered.
+  const [agentCommit, setAgentCommit] = useState<{ commit?: string }>();
   useEffect(() => {
     loadConfig()
       .then((c) => {
         const api = createApiClient(c);
-        // The warm-up's data requests are sent one HTTP request each (never batched into one).
+        // The warm-up's data requests are sent one HTTP request each (never batched into one), to explorer.sources:
+        // about 0.8 s each, so the two overlap and reach two data API instances.
         const unbatched = createApiClient({ ...c, batch: false });
         setConn({
           api,
@@ -48,11 +76,14 @@ export function App() {
           ...(c.agentApiUrl
             ? {
                 agent: {
-                  api: createAgentApi({
-                    agentApiUrl: c.agentApiUrl,
-                    apiToken: c.apiToken,
-                  }),
-                  warmData: () => unbatched.meta.info.query(),
+                  api: reportingCommit(
+                    createAgentApi({
+                      agentApiUrl: c.agentApiUrl,
+                      apiToken: c.apiToken,
+                    }),
+                    setAgentCommit,
+                  ),
+                  warmData: () => unbatched.explorer.sources.query(),
                 },
               }
             : {}),
@@ -104,7 +135,9 @@ export function App() {
         {conn && tab === "Records" && (
           <Records api={conn.api} loadSources={conn.loadSources} />
         )}
-        {api && tab === "Radius query" && <RadiusQuery api={api} />}
+        {conn && tab === "Radius query" && (
+          <RadiusQuery api={conn.api} loadSources={conn.loadSources} />
+        )}
         {conn && tab === "Long-open permits" && (
           <LongOpen api={conn.api} loadSources={conn.loadSources} />
         )}
@@ -123,6 +156,25 @@ export function App() {
         )}
         {tab === "Coming next" && <Placeholders />}
       </main>
+      <footer>
+        <p className="note" data-testid="commits">
+          Explorer commit{" "}
+          <span className="mono" data-testid="explorer-commit">
+            {EXPLORER_COMMIT}
+          </span>
+          {conn?.agent && (
+            <>
+              {" "}
+              · Agent commit{" "}
+              <span className="mono" data-testid="agent-commit">
+                {agentCommit
+                  ? (agentCommit.commit ?? "not reported")
+                  : "not checked yet (the Ask the agent tab checks it)"}
+              </span>
+            </>
+          )}
+        </p>
+      </footer>
     </>
   );
 }

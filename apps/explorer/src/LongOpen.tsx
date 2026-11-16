@@ -8,6 +8,7 @@ import type {
 } from "@oracle-la/api-client";
 import { basisLabel } from "./basis.ts";
 import {
+  DEFAULT_CENTER,
   inputValue,
   LAT,
   LON,
@@ -19,6 +20,7 @@ import {
   typed,
   type NumberRule,
 } from "./numeric.ts";
+import { OpenButton, RecordView, rowClick, useRecord } from "./RecordView.tsx";
 import { contractorNote, retrieved, type LoadSources } from "./sources.ts";
 import { useQuery } from "./useQuery.ts";
 
@@ -45,7 +47,9 @@ type ParcelState = { data?: ParcelPermits; error?: string };
  * Long-open roofing permits around a point (permits.longOpen). Long-open items carry no contractors and no
  * per-item provenance: a row's contractors come from permits.forParcel for its parcel, fetched only when the
  * row is expanded (one call per parcel, kept for the session); the source is cited once from
- * explorer.sources (the LADBS permit datasets). Work descriptions are not served and never shown.
+ * explorer.sources (the LADBS permit datasets). Work descriptions are not served and never shown. A row opens its
+ * record (RecordView): the permit as the row shows it with the permit source, and its parcel's record (one
+ * parcels.detail call per click).
  */
 export function LongOpen({
   api,
@@ -56,8 +60,8 @@ export function LongOpen({
 }) {
   // The fields' text as typed; read only when the search runs.
   const [form, setForm] = useState({
-    lat: "34.199",
-    lon: "-118.487",
+    lat: DEFAULT_CENTER.lat,
+    lon: DEFAULT_CENTER.lon,
     radius_miles: "5",
     min_open_days: String(DEFAULT_MIN_DAYS),
     max_open_days: "",
@@ -69,6 +73,7 @@ export function LongOpen({
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [parcels, setParcels] = useState<Record<string, ParcelState>>({});
   const sources = useQuery(loadSources, "sources");
+  const record = useRecord(api);
   const permitSource = sources.data?.sources.find(
     (s) => s.source_kind === "permit",
   );
@@ -105,6 +110,7 @@ export function LongOpen({
       );
       setOffset(off);
       setOpen(new Set());
+      record.close();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -263,7 +269,14 @@ export function LongOpen({
               Next
             </button>
           </p>
-          <table data-testid="long-open-results">
+          {record.rec && (
+            <RecordView
+              rec={record.rec}
+              sources={sources}
+              onClose={record.close}
+            />
+          )}
+          <table data-testid="long-open-results" className="records-table">
             <thead>
               <tr>
                 <th>Permit</th>
@@ -286,6 +299,8 @@ export function LongOpen({
                   item={i}
                   expanded={open.has(i.permit_number)}
                   onToggle={() => toggle(i)}
+                  shown={record.rec?.key === i.permit_number}
+                  onOpen={() => record.open(i.permit_number, i.parcel_id, i)}
                   parcel={parcels[i.parcel_id]}
                   sourceName={permitSource?.source_name}
                   contractorNote={
@@ -308,10 +323,15 @@ function Row({
   parcel,
   sourceName,
   contractorNote,
+  shown,
+  onOpen,
 }: {
   item: LongOpenItem;
   expanded: boolean;
   onToggle: () => void;
+  /** This row's record is the one shown. */
+  shown: boolean;
+  onOpen: () => void;
   parcel: ParcelState | undefined;
   sourceName: string | undefined;
   contractorNote: string | undefined;
@@ -321,9 +341,19 @@ function Row({
   );
   return (
     <>
-      <tr data-testid="long-open-row" data-permit={i.permit_number}>
+      <tr
+        data-testid="long-open-row"
+        data-permit={i.permit_number}
+        className={shown ? "record-row shown" : "record-row"}
+        onClick={rowClick(onOpen)}
+      >
         <td>
-          {i.permit_number}
+          <OpenButton
+            label={`permit ${i.permit_number}`}
+            id={i.permit_number}
+            open={shown}
+            onOpen={onOpen}
+          />
           {i.building_level && " (building)"}
           {i.roof_coating_only && " (roof coating only)"}
         </td>

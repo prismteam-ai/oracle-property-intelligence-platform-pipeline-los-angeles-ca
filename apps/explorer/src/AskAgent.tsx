@@ -43,8 +43,9 @@ export function centerFrom(
 /**
  * The "Ask the agent" tab. Kept mounted while other tabs show, so the
  * conversation (history, session, signature) lives in component state only, never in storage; "New
- * conversation" drops it. The Send button is never disabled: a question asked during the warm-up is held with a
- * "waking up" status; a question asked while an answer is pending stays in the box with a note.
+ * conversation" drops it. Send is disabled from the click until the answer, a stop or an error (a question asked
+ * during the warm-up is held with a "waking up" status, Send disabled the same way), and enabled whenever no
+ * question is pending; "New conversation" is disabled while a question is pending.
  */
 export function AskAgent({
   agent,
@@ -52,7 +53,10 @@ export function AskAgent({
   active,
 }: {
   agent: AgentApi;
-  /** One data API request (meta.info), not batched. */
+  /**
+   * One data API request (explorer.sources, about 0.8 s, so the warm-up's two overlap and reach two instances),
+   * not batched.
+   */
   warmData: () => Promise<unknown>;
   /** True while the tab shows: opening it starts the warm-up. */
   active: boolean;
@@ -67,9 +71,10 @@ export function AskAgent({
   const [message, setMessage] = useState<string>();
   const [turns, setTurns] = useState<Turn[]>([]);
   const conversation = useRef<Conversation | undefined>(undefined);
-  const pending = useRef(false);
-  /** Bumped by "New conversation": an answer to an older conversation is dropped. */
-  const generation = useRef(0);
+  /** A question is pending (from the click until the answer, a stop or an error): Send and New conversation off. */
+  const [pending, setPending] = useState(false);
+  // The same, read synchronously: a second submit in the same tick (before the re-render) sends nothing.
+  const pendingNow = useRef(false);
 
   useEffect(() => {
     if (active && !warmup.running() && warmup.stale()) void warmup.start();
@@ -79,15 +84,12 @@ export function AskAgent({
     e?.preventDefault();
     const asked = question;
     const q = asked.trim();
+    if (pendingNow.current) return;
     if (!q) return setMessage("Type a question first.");
-    if (pending.current)
-      return setMessage(
-        "Still working on the previous question: this one stays in the box until that answer is in.",
-      );
     const c = centerFrom(lat, lon);
     if (c.error) return setMessage(c.error);
-    pending.current = true;
-    const gen = generation.current;
+    pendingNow.current = true;
+    setPending(true);
     setMessage(undefined);
     try {
       // Re-warm: the data API instances may be cold again.
@@ -109,7 +111,6 @@ export function AskAgent({
             }
           : {}),
       });
-      if (gen !== generation.current) return;
       if (res.status === "stopped") {
         setMessage(stoppedMessage(res));
         return;
@@ -123,28 +124,23 @@ export function AskAgent({
       setTurns((t) => [...t, { question: q, answer: res }]);
       setQuestion((cur) => (cur === asked ? "" : cur));
     } catch (err) {
-      if (gen !== generation.current) return;
       setMessage(
         err instanceof AnswerError
           ? err.message
           : failureMessage({ kind: "network" }),
       );
     } finally {
-      // After "New conversation" the newer state owns these.
-      if (gen === generation.current) {
-        pending.current = false;
-        setStatus("idle");
-      }
+      pendingNow.current = false;
+      setPending(false);
+      setStatus("idle");
     }
   };
 
   const newConversation = () => {
-    generation.current++;
+    if (pendingNow.current) return;
     conversation.current = undefined;
-    pending.current = false;
     setTurns([]);
     setMessage(undefined);
-    setStatus("idle");
   };
 
   return (
@@ -200,12 +196,13 @@ export function AskAgent({
           {NOTICE}
         </p>
         <p>
-          <button type="submit" data-testid="agent-send">
+          <button type="submit" data-testid="agent-send" disabled={pending}>
             Send
           </button>{" "}
           <button
             type="button"
             data-testid="agent-new"
+            disabled={pending}
             onClick={newConversation}
           >
             New conversation

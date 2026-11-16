@@ -4,6 +4,7 @@ import {
 } from "../../../packages/agent/src/contractor-coverage.ts";
 import { STANDARD_GAPS } from "../../../packages/agent/src/policy.ts";
 import type { AnswerResponse, Citation } from "./agent-api.ts";
+import { dateOnly } from "./dates.ts";
 import { Markdown } from "./markdown.tsx";
 
 /**
@@ -39,7 +40,10 @@ const KINDS: ReadonlyArray<[Citation["kind"], string]> = [
   ["contractor", "Contractor rows (by permit)"],
 ];
 
-/** One answer as the agent panels render it. */
+/**
+ * One answer as the agent panels render it. Sources collapsible and closed, their count in the summary; Gaps
+ * collapsible and open. Dates as YYYY-MM-DD.
+ */
 export function AgentAnswerView({ answer }: { answer: AnswerResponse }) {
   const gaps = splitGaps(answer.gaps);
   return (
@@ -71,56 +75,60 @@ export function AgentAnswerView({ answer }: { answer: AnswerResponse }) {
           </>
         )}
       </details>
-      <h4>Sources</h4>
-      {answer.records.length === 0 ? (
-        <p data-testid="agent-sources-none">No records cited.</p>
-      ) : (
-        KINDS.map(([kind, label]) => {
-          const rows = answer.records.filter((r) => r.kind === kind);
-          if (!rows.length) return null;
-          return (
-            <div key={kind} className="table-wrap">
-              <table data-testid="agent-sources" data-kind={kind}>
-                <caption>{label}</caption>
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Source</th>
-                    <th>License</th>
-                    <th>Attribution</th>
-                    <th>Collected at</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr key={`${r.kind}/${r.id}`}>
-                      <td className="mono">{r.id}</td>
-                      <td>{r.source_name}</td>
-                      <td>{r.license ?? "—"}</td>
-                      <td>{r.attribution ?? "—"}</td>
-                      <td>{r.collected_at}</td>
+      <details className="agent-section" data-testid="agent-sources-details">
+        <summary>Sources ({answer.records.length})</summary>
+        {answer.records.length === 0 ? (
+          <p data-testid="agent-sources-none">No records cited.</p>
+        ) : (
+          KINDS.map(([kind, label]) => {
+            const rows = answer.records.filter((r) => r.kind === kind);
+            if (!rows.length) return null;
+            return (
+              <div key={kind} className="table-wrap">
+                <table data-testid="agent-sources" data-kind={kind}>
+                  <caption>{label}</caption>
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Source</th>
+                      <th>License</th>
+                      <th>Attribution</th>
+                      <th>Collected at</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          );
-        })
-      )}
-      <h4>Gaps</h4>
-      {gaps.specific.length > 0 && (
-        <ul data-testid="agent-gaps">
-          {gaps.specific.map((g) => (
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => (
+                      <tr key={`${r.kind}/${r.id}`}>
+                        <td className="mono">{r.id}</td>
+                        <td>{r.source_name}</td>
+                        <td>{r.license ?? "—"}</td>
+                        <td>{r.attribution ?? "—"}</td>
+                        <td>{dateOnly(r.collected_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })
+        )}
+      </details>
+      <details className="agent-section" data-testid="agent-gaps-details" open>
+        <summary>Gaps</summary>
+        {gaps.specific.length > 0 && (
+          <ul data-testid="agent-gaps">
+            {gaps.specific.map((g) => (
+              <li key={g}>{g}</li>
+            ))}
+          </ul>
+        )}
+        <b>Always true</b>
+        <ul data-testid="agent-standing-gaps">
+          {gaps.standing.map((g) => (
             <li key={g}>{g}</li>
           ))}
         </ul>
-      )}
-      <b>Always true</b>
-      <ul data-testid="agent-standing-gaps">
-        {gaps.standing.map((g) => (
-          <li key={g}>{g}</li>
-        ))}
-      </ul>
+      </details>
     </div>
   );
 }

@@ -12,6 +12,7 @@ import {
   PROXY_NOTE,
 } from "./ownership.ts";
 import {
+  DEFAULT_CENTER,
   inputValue,
   LAT,
   LON,
@@ -21,6 +22,9 @@ import {
   typed,
   type NumberRule,
 } from "./numeric.ts";
+import { OpenButton, RecordView, rowClick, useRecord } from "./RecordView.tsx";
+import type { LoadSources } from "./sources.ts";
+import { useQuery } from "./useQuery.ts";
 
 const THRESHOLD: NumberRule = {
   label: "Roof older than (years)",
@@ -29,12 +33,21 @@ const THRESHOLD: NumberRule = {
   whole: true,
 };
 
-/** Radius + roof-age query as form and table (no map in the Explorer; the CRM owns the map). */
-export function RadiusQuery({ api }: { api: ApiClient }) {
+/**
+ * Radius + roof-age query as form and table (no map in the Explorer; the CRM owns the map). A row opens its
+ * record with its source (RecordView): one parcels.detail call per click; the sources are loaded with the tab.
+ */
+export function RadiusQuery({
+  api,
+  loadSources,
+}: {
+  api: ApiClient;
+  loadSources: LoadSources;
+}) {
   // The fields' text as typed; read only when the search runs.
   const [form, setForm] = useState({
-    lat: "34.199",
-    lon: "-118.487",
+    lat: DEFAULT_CENTER.lat,
+    lon: DEFAULT_CENTER.lon,
     radius_miles: "5",
     threshold_years: "15",
   });
@@ -46,6 +59,8 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
   const [offset, setOffset] = useState(0);
   const [res, setRes] = useState<SearchResult>();
   const [error, setError] = useState<string>();
+  const sources = useQuery(loadSources, "sources");
+  const record = useRecord(api);
   const run = async (off: number) => {
     setError(undefined);
     const read = readAll({
@@ -67,6 +82,7 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
         }),
       );
       setOffset(off);
+      record.close();
     } catch (e) {
       setError((e as Error).message);
     }
@@ -213,7 +229,14 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
               Next
             </button>
           </p>
-          <table data-testid="radius-results">
+          {record.rec && (
+            <RecordView
+              rec={record.rec}
+              sources={sources}
+              onClose={record.close}
+            />
+          )}
+          <table data-testid="radius-results" className="records-table">
             <thead>
               <tr>
                 <th>Parcel</th>
@@ -229,29 +252,46 @@ export function RadiusQuery({ api }: { api: ApiClient }) {
               </tr>
             </thead>
             <tbody>
-              {res.items.map((i) => (
-                <tr key={i.parcel_id}>
-                  <td>{i.parcel_id}</td>
-                  <td>{i.address}</td>
-                  <td>{i.year_built ?? "—"}</td>
-                  <td>{i.effective_roof_year}</td>
-                  <td title={i.roof_age_basis} data-testid="basis">
-                    {basisLabel(i.roof_age_basis, i.roof_year_permit_number)}
-                  </td>
-                  <td>{i.roof_age_years}</td>
-                  <td data-testid="land-base-year">
-                    {i.land_base_year ?? "—"}
-                  </td>
-                  <td data-testid="distance">{i.distance_miles}</td>
-                  <td data-testid="lat">{i.latitude}</td>
-                  <td data-testid="lon">{i.longitude}</td>
-                </tr>
-              ))}
+              {res.items.map((i) => {
+                const open = () => record.open(i.parcel_id, i.parcel_id);
+                const shown = record.rec?.key === i.parcel_id;
+                return (
+                  <tr
+                    key={i.parcel_id}
+                    data-testid="radius-row"
+                    data-parcel={i.parcel_id}
+                    className={shown ? "record-row shown" : "record-row"}
+                    onClick={rowClick(open)}
+                  >
+                    <td>
+                      <OpenButton
+                        label={`parcel ${i.parcel_id}`}
+                        id={i.parcel_id}
+                        open={shown}
+                        onOpen={open}
+                      />
+                    </td>
+                    <td>{i.address}</td>
+                    <td>{i.year_built ?? "—"}</td>
+                    <td>{i.effective_roof_year}</td>
+                    <td title={i.roof_age_basis} data-testid="basis">
+                      {basisLabel(i.roof_age_basis, i.roof_year_permit_number)}
+                    </td>
+                    <td>{i.roof_age_years}</td>
+                    <td data-testid="land-base-year">
+                      {i.land_base_year ?? "—"}
+                    </td>
+                    <td data-testid="distance">{i.distance_miles}</td>
+                    <td data-testid="lat">{i.latitude}</td>
+                    <td data-testid="lon">{i.longitude}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           <p>
-            Coordinates are assessor parcel centre points; provenance per parcel
-            is on the Records tab.
+            Coordinates are assessor parcel center points. A row opens its
+            record with its provenance and source.
           </p>
         </>
       )}

@@ -25,10 +25,12 @@ import {
 } from "../e2e/agent-fixtures.ts";
 import {
   ANSWER_TIMEOUT_MS,
+  commitFrom,
   createAgentApi,
   type AnswerResponse,
 } from "../src/agent-api.ts";
 import { AskAgent, NOTICE } from "../src/AskAgent.tsx";
+import { dateOnly } from "../src/dates.ts";
 import { Markdown } from "../src/markdown.tsx";
 import { HOLD_MAX_MS, REWARM_AFTER_MS } from "../src/warmup.ts";
 
@@ -129,6 +131,7 @@ function renderTab(active = true) {
 const box = () =>
   screen.getByRole("textbox", { name: /question/i }) as HTMLTextAreaElement;
 const send = () => screen.getByTestId("agent-send") as HTMLButtonElement;
+const newConv = () => screen.getByTestId("agent-new") as HTMLButtonElement;
 async function ask(q: string) {
   fireEvent.change(box(), { target: { value: q } });
   fireEvent.click(send());
@@ -177,6 +180,35 @@ describe("Ask the agent: warm-up and held questions", () => {
     expect(agent.answerRequests()).toEqual([]);
   });
 
+  test("GET /agent/warm's commit is read when it is a commit (short or full hash, -dirty, unbundled), never otherwise", async () => {
+    for (const c of ["f965598", "f965598-dirty", "unbundled", "a".repeat(40)])
+      expect(commitFrom({ status: "warm", commit: c })).toBe(c);
+    for (const body of [
+      { status: "warm" },
+      { status: "warm", commit: "" },
+      { status: "warm", commit: "F965598" },
+      { status: "warm", commit: "f96559" },
+      { status: "warm", commit: "<b>x</b>" },
+      { status: "warm", commit: 1234567 },
+      null,
+      "f965598",
+    ])
+      expect(commitFrom(body)).toBeUndefined();
+    agent.holdWarm(async () => ({
+      status: 200,
+      body: { status: "warm", commit: "f965598" },
+    }));
+    expect(await agent.api.warm()).toEqual({ status: 200, commit: "f965598" });
+    agent.holdWarm(async () => ({ status: 200, body: { status: "warm" } }));
+    expect(await agent.api.warm()).toEqual({ status: 200 });
+    // A refusal is an answer too (the warm-up is released by it), with no commit.
+    agent.holdWarm(async () => ({
+      status: 503,
+      body: { error: "agent not configured", commit: "f965598" },
+    }));
+    expect(await agent.api.warm()).toEqual({ status: 503 });
+  });
+
   test("a hidden tab does not warm up; opening it does", async () => {
     const r = renderTab(false);
     await flush();
@@ -202,7 +234,8 @@ describe("Ask the agent: warm-up and held questions", () => {
     expect(screen.getByTestId("agent-status").textContent).toMatch(
       /waking up/i,
     );
-    expect(send().disabled).toBe(false);
+    // A held question is pending: Send is disabled.
+    expect(send().disabled).toBe(true);
     w.resolve({ status: 200, body: { status: "warm" } });
     data[0]!.resolve({});
     await flush();
@@ -296,29 +329,49 @@ describe("Ask the agent: sending and statuses", () => {
     );
   });
 
-  test("Send is never disabled: idle, waking up, working, after an answer and after a failure", async () => {
+  test("Send and New conversation are disabled from the click until the answer, a stop or an error (the warm-up hold included), and enabled whenever nothing is pending", async () => {
     const w = deferred<{ status: number; body: unknown }>();
     agent.holdWarm(() => w.promise);
     const a = deferred<{ status: number; body: unknown }>();
-    agent.answers.push(a.promise, {
-      status: 500,
-      body: { error: "internal error" },
-    });
+    const failed = deferred<{ status: number; body: unknown }>();
+    const stopped = deferred<{ status: number; body: unknown }>();
+    agent.answers.push(a.promise, failed.promise, stopped.promise);
     renderTab();
-    expect(send().disabled).toBe(false);
+    const enabled = () => [send().disabled, newConv().disabled];
+    expect(enabled()).toEqual([false, false]);
+    // An empty box or an invalid center is refused in the panel: nothing is pending, Send stays enabled.
+    await ask("");
+    expect(screen.getByTestId("agent-message").textContent).toBe(
+      "Type a question first.",
+    );
+    expect(enabled()).toEqual([false, false]);
     await ask(QUESTION_1);
     expect(screen.getByTestId("agent-status").dataset.state).toBe("waking");
-    expect(send().disabled).toBe(false);
+    expect(enabled()).toEqual([true, true]);
     w.resolve({ status: 200, body: {} });
     await flush();
     expect(screen.getByTestId("agent-status").dataset.state).toBe("working");
-    expect(send().disabled).toBe(false);
+    expect(enabled()).toEqual([true, true]);
     a.resolve({ status: 200, body: ANSWERED });
     await flush();
-    expect(send().disabled).toBe(false);
+    expect(enabled()).toEqual([false, false]);
+    // An error ends the pending question too.
     await ask(QUESTION_2);
+    expect(enabled()).toEqual([true, true]);
+    failed.resolve({ status: 500, body: { error: "internal error" } });
+    await flush();
     expect(screen.getByTestId("agent-message")).toBeTruthy();
-    expect(send().disabled).toBe(false);
+    expect(enabled()).toEqual([false, false]);
+    // And a stop.
+    fireEvent.click(send());
+    await flush();
+    expect(enabled()).toEqual([true, true]);
+    stopped.resolve({ status: 200, body: STOPPED });
+    await flush();
+    expect(screen.getByTestId("agent-message").textContent).toContain(
+      "stopped before it was complete",
+    );
+    expect(enabled()).toEqual([false, false]);
   });
 
   test("while waiting for the answer a working status shows; it goes when the answer is in", async () => {
@@ -334,21 +387,24 @@ describe("Ask the agent: sending and statuses", () => {
     expect(box().value).toBe("");
   });
 
-  test("a second Send while an answer is pending keeps the new question in the box and sends nothing", async () => {
+  test("while an answer is pending a second submit (Send is disabled; the form submitted otherwise) sends nothing and the new question stays in the box", async () => {
     const a = deferred<{ status: number; body: unknown }>();
     agent.answers.push(a.promise);
     await openWarm();
     await ask(QUESTION_1);
-    await ask(QUESTION_2);
+    fireEvent.change(box(), { target: { value: QUESTION_2 } });
+    expect(send().disabled).toBe(true);
+    fireEvent.click(send());
+    fireEvent.submit(screen.getByTestId("agent-form"));
+    await flush();
     expect(agent.answerRequests()).toHaveLength(1);
-    expect(screen.getByTestId("agent-message").textContent).toMatch(
-      /still working/i,
-    );
+    expect(screen.queryByTestId("agent-message")).toBeNull();
     expect(box().value).toBe(QUESTION_2);
     a.resolve({ status: 200, body: ANSWERED });
     await flush();
-    // The box kept the newer question.
+    // The box kept the newer question, and Send is enabled for it.
     expect(box().value).toBe(QUESTION_2);
+    expect(send().disabled).toBe(false);
   });
 
   test("a stopped answer shows a plain message and keeps the question; the conversation is unchanged", async () => {
@@ -480,7 +536,7 @@ describe("Ask the agent: sending and statuses", () => {
     },
   );
 
-  test("a centre field that is not a plain number in range is refused in the panel; nothing is sent", async () => {
+  test("a center field that is not a plain number in range is refused in the panel; nothing is sent", async () => {
     await openWarm();
     const lat = screen.getByRole("textbox", { name: "Latitude" });
     const lon = screen.getByRole("textbox", { name: "Longitude" });
@@ -553,15 +609,17 @@ describe("Ask the agent: conversation", () => {
     expect(agent.answerRequests()[1]!.body).toEqual({ question: QUESTION_2 });
   });
 
-  test("an answer that arrives after New conversation is dropped", async () => {
+  test("New conversation is disabled while a question is pending: the answer arrives and is kept", async () => {
     const a = deferred<{ status: number; body: unknown }>();
     agent.answers.push(a.promise);
     await openWarm();
     await ask(QUESTION_1);
-    fireEvent.click(screen.getByTestId("agent-new"));
+    expect(newConv().disabled).toBe(true);
+    fireEvent.click(newConv());
     a.resolve({ status: 200, body: ANSWERED });
     await flush();
-    expect(screen.queryByTestId("agent-turn")).toBeNull();
+    expect(screen.getAllByTestId("agent-turn")).toHaveLength(1);
+    expect(newConv().disabled).toBe(false);
   });
 });
 
@@ -592,7 +650,15 @@ describe("Ask the agent: rendering", () => {
     expect(how.querySelector("summary")!.textContent).toBe("How I got this");
     expect(how.textContent).toContain(ANSWERED.reasoning);
     expect(how.textContent).toContain(ANSWERED.assumptions[0]);
-    // Sources grouped by kind, each row ID, source, license, attribution, collected at.
+    // Sources: collapsible, closed, the count in the summary; grouped by kind, each row ID, source, license,
+    // attribution, collected at (a date).
+    const sources = within(a).getByTestId(
+      "agent-sources-details",
+    ) as HTMLDetailsElement;
+    expect(sources.open).toBe(false);
+    expect(sources.querySelector("summary")!.textContent).toBe(
+      `Sources (${ANSWERED.records.length})`,
+    );
     const tables = within(a).getAllByTestId("agent-sources");
     expect(tables.map((t) => t.dataset.kind)).toEqual([
       "parcel",
@@ -610,15 +676,21 @@ describe("Ask the agent: rendering", () => {
       parcel!.source_name,
       "—",
       "—",
-      parcel!.collected_at,
+      "2026-11-12",
     ]);
     expect(cells(tables[1]!)).toEqual([
       permit!.id,
       permit!.source_name,
       permit!.license,
       permit!.attribution,
-      permit!.collected_at,
+      "2026-11-12",
     ]);
+    // Gaps: collapsible and open.
+    const gapsBox = within(a).getByTestId(
+      "agent-gaps-details",
+    ) as HTMLDetailsElement;
+    expect(gapsBox.open).toBe(true);
+    expect(gapsBox.querySelector("summary")!.textContent).toBe("Gaps");
     // Gaps: this answer's first, the standing ones under "Always true".
     expect(
       [...within(a).getByTestId("agent-gaps").querySelectorAll("li")].map(
@@ -631,6 +703,18 @@ describe("Ask the agent: rendering", () => {
       ].map((l) => l.textContent),
     ).toEqual(STANDING_GAPS);
     expect(within(a).getByText("Always true")).toBeTruthy();
+  });
+
+  test("dates as YYYY-MM-DD: a timestamp shows its date; a range within one day shows that date once", () => {
+    expect(dateOnly("2026-11-12T00:26:18.151Z")).toBe("2026-11-12");
+    expect(
+      dateOnly("2026-11-12T13:10:47.174Z to 2026-11-12T13:14:48.715Z"),
+    ).toBe("2026-11-12");
+    expect(
+      dateOnly("2026-11-12T23:10:47.174Z to 2026-11-13T00:14:48.715Z"),
+    ).toBe("2026-11-12 to 2026-11-13");
+    expect(dateOnly("2015-06-01")).toBe("2015-06-01");
+    expect(dateOnly("not a date")).toBe("not a date");
   });
 
   test("markdown is rendered without raw HTML; only http(s) links become links", () => {

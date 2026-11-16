@@ -2,7 +2,8 @@
  * The Explorer's client for the hosted agent API (OracleLaAgentApi, apps/agent-api/src/handler.ts):
  * - POST <agentApiUrl>/agent/answer with { question, center?, history?, session?, signature? }; 200 is the
  *   agent's answer plus `signature` (the server's MAC of the returned { history, session }).
- * - GET <agentApiUrl>/agent/warm: initializes the function (configuration, both parameters), no model call.
+ * - GET <agentApiUrl>/agent/warm: initializes the function (configuration, both parameters), no model call; 200 is
+ *   { status: "warm", commit }, the agent's commit (the short hash of the last commit that changed its code).
  * Both carry the Explorer's own bearer token (the shared token authorizer; the agent serves crm and explorer).
  *
  * The request and answer types are the pipeline's own (packages/agent, type-only imports): nothing is copied.
@@ -81,9 +82,27 @@ type Fetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+/** What GET /agent/warm answered: its HTTP status, and the agent's commit when the response reports one. */
+export interface WarmResult {
+  status: number;
+  commit?: string;
+}
+
+/** A commit as the agent API reports it: a short (or full) hash, with "-dirty", or "unbundled" when run from source. */
+const COMMIT = /^(?:[0-9a-f]{7,40}(?:-dirty)?|unbundled)$/;
+
+/** The commit in a warm response's body; undefined when there is none or it is not a commit. */
+export function commitFrom(body: unknown): string | undefined {
+  const c = (body as { commit?: unknown } | null)?.commit;
+  return typeof c === "string" && COMMIT.test(c) ? c : undefined;
+}
+
 export interface AgentApi {
-  /** GET /agent/warm; resolves with the HTTP status (any response counts as answered), rejects on a network error. */
-  warm: () => Promise<number>;
+  /**
+   * GET /agent/warm; resolves with the HTTP status (any response counts as answered) and the agent's commit when a
+   * 200 reports one; rejects on a network error.
+   */
+  warm: () => Promise<WarmResult>;
   /** POST /agent/answer; rejects with AnswerError when no answer came back. */
   answer: (body: AnswerRequest) => Promise<AnswerResponse>;
 }
@@ -114,7 +133,15 @@ export function createAgentApi(opts: {
         headers: { authorization },
         cache: "no-store",
       });
-      return res.status;
+      let commit: string | undefined;
+      if (res.ok) {
+        try {
+          commit = commitFrom(await res.json());
+        } catch {
+          commit = undefined;
+        }
+      }
+      return commit ? { status: res.status, commit } : { status: res.status };
     },
     async answer(body) {
       const ctl = new AbortController();
