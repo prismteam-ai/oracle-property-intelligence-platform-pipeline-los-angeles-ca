@@ -28,6 +28,7 @@ import {
   NO_TOOL_CALL_TEXT,
   PEOPLE_REFUSAL_TEXT,
   STANDARD_GAPS,
+  peopleRefusalText,
 } from "../src/policy.ts";
 import type { SourceList } from "../src/permit-api.ts";
 import { systemPrompt } from "../src/prompt.ts";
@@ -1015,7 +1016,7 @@ describe("caps", () => {
 });
 
 describe("people questions", () => {
-  test("refused with zero model calls and a constant text", async () => {
+  test("refused with zero model calls and a fixed text: the current text, then that the data has no owner names, mailing addresses or contact details", async () => {
     const { queries, calls } = fakeQueries();
     const model = new ScriptedModel([]);
     const a = await runAgent(
@@ -1029,12 +1030,38 @@ describe("people questions", () => {
     expect(calls).toHaveLength(0);
     expect(a).toMatchObject({
       status: "refused",
-      text: PEOPLE_REFUSAL_TEXT,
+      text: `${PEOPLE_REFUSAL_TEXT} This data has no owner names, mailing addresses or contact details.`,
       records: [],
       history: [],
     });
     expect(a.usage.model_calls).toBe(0);
     expectSections(a);
+  });
+
+  test("owners mixed with BBB ratings: still refused before any model call; the text also says the data has no BBB ratings", async () => {
+    const { queries, calls } = fakeQueries();
+    const model = new ScriptedModel([]);
+    const question =
+      "Who owns the houses near Van Nuys and what are their roofers' BBB ratings?";
+    const a = await runAgent(
+      { question, center: VAN_NUYS },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(model.requests).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    expect(a).toMatchObject({
+      status: "refused",
+      refused_by: "people_guard",
+      text: `${PEOPLE_REFUSAL_TEXT} This data has no owner names, mailing addresses or contact details, and no BBB ratings.`,
+    });
+    expect(a.markdown).toContain("and no BBB ratings.");
+    // "Better Business Bureau" asks for BBB too; a question without it gets the first variant.
+    expect(
+      peopleRefusalText("Who owns it, and its Better Business Bureau rating?"),
+    ).toMatch(/, and no BBB ratings\.$/);
+    expect(peopleRefusalText("Who owns the house at 6400 Van Nuys Blvd?")).toBe(
+      `${PEOPLE_REFUSAL_TEXT} This data has no owner names, mailing addresses or contact details.`,
+    );
   });
 
   test("a contractor-business question is not refused", async () => {
@@ -2073,8 +2100,9 @@ describe("coverage questions", () => {
     expect(a).toMatchObject({
       status: "refused",
       refused_by: "people_guard",
-      text: PEOPLE_REFUSAL_TEXT,
+      text: peopleRefusalText("Do you have owner data?"),
     });
+    expect(a.text.startsWith(PEOPLE_REFUSAL_TEXT)).toBe(true);
     expect(a.usage.model_calls).toBe(0);
     expect(PEOPLE_REFUSAL_TEXT).toContain(
       "Owner names and contact details are neither collected nor served.",

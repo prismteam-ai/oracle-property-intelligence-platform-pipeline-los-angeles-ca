@@ -246,8 +246,8 @@ describe("prompts file (eval/prompts.json)", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byCase = (c: string) => prompts.filter((p) => p.case === c);
 
-  test("nineteen entries, valid: cases a–i, then the scope and abuse cases j–n, the coverage case o, p and the CRM screen case q", () => {
-    expect(prompts.length).toBe(19);
+  test("twenty entries, valid: cases a–i, then the scope and abuse cases j–n, the coverage case o, p, the CRM screen case q and owners with BBB r", () => {
+    expect(prompts.length).toBe(20);
     expect(new Set(prompts.map((p) => p.case))).toEqual(new Set(PROMPT_CASES));
     expect(new Set(prompts.map((p) => p.id)).size).toBe(prompts.length);
   });
@@ -295,12 +295,12 @@ describe("prompts file (eval/prompts.json)", () => {
     const g = byCase("g")[0]!;
     expect(g.expected.refused).toBe(true);
     expect(isPeopleQuestion(g.question)).toBe(true);
-    // Refused: g and m by the people guard, j–l by the no-tool-call rule; only g and m are people questions.
-    const refusedCases = new Set(["g", "j", "k", "l", "m"]);
+    // Refused: g, m and r by the people guard, j–l by the no-tool-call rule; only g, m and r are people questions.
+    const refusedCases = new Set(["g", "j", "k", "l", "m", "r"]);
     for (const p of prompts) {
       expect(p.expected.refused).toBe(refusedCases.has(p.case));
       expect(isPeopleQuestion(p.question)).toBe(
-        p.case === "g" || p.case === "m",
+        p.case === "g" || p.case === "m" || p.case === "r",
       );
     }
     expect(byCase("h")[0]!.question).toMatch(/BBB/);
@@ -1081,12 +1081,54 @@ describe("checks: gaps_text keyword misses on Sonnet run 2", () => {
       "I couldn't find \"Springfield\" in this dataset's parcels, so I didn't run the search. I won't guess a location for it.\n\nYou can give me either of these instead:\n- a latitude and longitude, or\n- a Los Angeles County city or community name, such as Van Nuys or Pasadena.\n\nI'll then search a 5-mile radius for roofs older than 15 years. The default roof-age threshold is 15 years, as you asked. Roof age counts from the assessor's year-built proxy unless a finaled roofing permit exists. Permit data covers only the City of Los Angeles.";
 
     test("the Sonnet run-2 answer passes", async () => {
-      expect(e.expected.gaps).toEqual(["place_unknown", "no_center"]);
+      expect(e.expected.gaps).toEqual([
+        "place_unknown",
+        "no_center",
+        "point_fields",
+      ]);
       const c = await checksOf(e, await springfield(SONNET_RUN2_E));
+      expect(c.gaps).toEqual({
+        result: "pass",
+        details: [
+          "place_unknown: listed",
+          "no_center: listed",
+          "point_fields: listed",
+        ],
+      });
       expect(c.gaps_text).toEqual({
         result: "pass",
-        details: ["place_unknown: mentioned", "no_center: mentioned"],
+        details: [
+          "place_unknown: mentioned",
+          "no_center: mentioned",
+          "point_fields: mentioned",
+        ],
       });
+    });
+    test("point_fields: the reply names latitude and longitude (one sentence) or the map pin; a point alone is not enough", async () => {
+      const re = GAPS.point_fields.inText;
+      for (const t of [
+        "Give me its latitude and longitude.",
+        "Enter the Longitude and the Latitude above the question.",
+        "Or drop the map pin in the CRM.",
+      ])
+        expect(re.test(t)).toBe(true);
+      for (const t of [
+        "Give me a point or a more specific place.",
+        "Give me the latitude. The longitude too.",
+        "Use coordinates.",
+      ])
+        expect(re.test(t)).toBe(false);
+      const c = await checksOf(
+        e,
+        await springfield(
+          "Springfield is not in this data, so I can't search there. Give me a point or a more specific place.",
+        ),
+      );
+      expect(c.gaps.result).toBe("pass");
+      expect(c.gaps_text.result).toBe("fail");
+      expect(c.gaps_text.details).toContain(
+        "point_fields: NOT mentioned in the text",
+      );
     });
     test("an answer with no request for a location and no center/point words fails", async () => {
       const c = await checksOf(
@@ -3161,5 +3203,49 @@ describe("the CRM screen: prompts q1 and q2, place request_center and check scre
       readFileSync(join(out, `run-1-${q2.id}.json`), "utf8"),
     ) as { request: unknown };
     expect(t.request).toEqual({ center: PIN, screen: SCREEN });
+  });
+});
+
+describe("prompt r: owners mixed with BBB ratings", () => {
+  test("refused by the people guard with no model call; the text names the missing owner data and BBB; every check passes", async () => {
+    const r = loadPrompts(DEFAULT_PROMPTS_FILE).find(
+      (p) => p.id === "r-owner-bbb-refused",
+    )!;
+    expect(r).toMatchObject({
+      case: "r",
+      question:
+        "Who owns the houses near Van Nuys and what are their roofers' BBB ratings?",
+      expected: {
+        tools: [],
+        gaps: ["owner_data", "bbb"],
+        refused: true,
+        refusal: "people_guard",
+        place: { outcome: "none" },
+      },
+    });
+    const model = new ScriptedModel([]);
+    const { queries, calls } = fakeQueries();
+    const answer = await runAgent(
+      { question: r.question },
+      { model, queries, settings: SETTINGS },
+    );
+    expect(model.requests).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    expect(answer.text).toContain(
+      "This data has no owner names, mailing addresses or contact details, and no BBB ratings.",
+    );
+    const { checks } = await checkAnswer({
+      prompt: r,
+      answer,
+      previousLength: 0,
+      previousArea: undefined,
+      queries,
+    });
+    expect(allPassed(checks)).toBe(true);
+    expect(checks.refusal.result).toBe("pass");
+    expect(checks.gaps_text).toEqual({
+      result: "pass",
+      details: ["owner_data: mentioned", "bbb: mentioned"],
+    });
   });
 });

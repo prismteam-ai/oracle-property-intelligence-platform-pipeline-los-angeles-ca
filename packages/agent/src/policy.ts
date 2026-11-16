@@ -48,6 +48,18 @@ export const PEOPLE_REFUSAL_TEXT =
   "Owner names and contact details are neither collected nor served. I can answer about parcels, roof age, " +
   "permits and contractor businesses (business names and license numbers).";
 
+/** A question that asks for BBB (Better Business Bureau) ratings. */
+const ASKS_BBB = /\bBBB\b|\bbetter business bureau\b/i;
+
+/**
+ * The people guard's refusal of `question`: PEOPLE_REFUSAL_TEXT, then what the data lacks: owner names, mailing
+ * addresses and contact details always, and BBB ratings when the question asks for them (a question that mixes
+ * owners with something else the data lacks is told both).
+ */
+export function peopleRefusalText(question: string): string {
+  return `${PEOPLE_REFUSAL_TEXT} This data has no owner names, mailing addresses or contact details${ASKS_BBB.test(question) ? ", and no BBB ratings" : ""}.`;
+}
+
 /** Business terms that contain a people word but are about contractors, removed before matching. */
 const BUSINESS_TERMS = /\bowner[\s-]?builders?\b/gi;
 

@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   GAP_NO_CENTER,
+  PLACE_UNKNOWN_HOW_TO_ASK,
   STANDARD_GAPS,
   TOOL_NAMES,
   agentRequestSchema,
@@ -27,7 +28,8 @@ export const DEFAULT_PROMPTS_FILE = fileURLToPath(
  * then o, a coverage question (answered from run_summary: BBB ratings are not available, and why);
  * then p, how many aged-roof parcels have a long-open roofing permit (search_aged_roofs with
  * long_open_permit, a count of parcels); then q, the CRM's request with a center and the screen's radius and roof
- * age threshold (each value from the question or the screen, and stated).
+ * age threshold (each value from the question or the screen, and stated); then r, owners mixed with BBB ratings
+ * (refused by the people guard, the text naming the missing owner data and BBB).
  */
 export const PROMPT_CASES = [
   "a",
@@ -47,6 +49,7 @@ export const PROMPT_CASES = [
   "o",
   "p",
   "q",
+  "r",
 ] as const;
 
 /**
@@ -149,6 +152,15 @@ export const GAPS = {
   owner_data: {
     inGaps: (g) => g === standard("No owner data"),
     inText: /\bowner/i,
+  },
+  /**
+   * An unknown place: the gaps carry how to ask with a point (resolve_place's how_to_ask), and the text names the
+   * coordinate fields: latitude and longitude (in one sentence, either order), or the map pin.
+   */
+  point_fields: {
+    inGaps: (g) => g === PLACE_UNKNOWN_HOW_TO_ASK,
+    inText:
+      /\blatitude\b[^.!?\n]*?\blongitude\b|\blongitude\b[^.!?\n]*?\blatitude\b|\bmap pin\b/i,
   },
 } as const satisfies Record<string, GapSpec>;
 

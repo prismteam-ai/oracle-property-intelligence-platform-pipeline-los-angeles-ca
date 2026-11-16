@@ -96,11 +96,11 @@
     "id": "e-springfield-unknown",
     "case": "e",
     "group": "e-springfield",
-    "note": "An unknown place on the served run: no center, no search.",
+    "note": "An unknown place on the served run: no center, no search. The reply names the coordinate fields to ask with: latitude and longitude, or the map pin (gap point_fields: resolve_place's how_to_ask is in the gaps, and the text names them).",
     "question": "Which properties within five miles of Springfield have roofs older than 15 years?",
     "expected": {
       "tools": ["resolve_place"],
-      "gaps": ["place_unknown", "no_center"],
+      "gaps": ["place_unknown", "no_center", "point_fields"],
       "refused": false,
       "place": { "outcome": "unknown", "name": "Springfield" }
     }
@@ -342,6 +342,20 @@
       "place": {
         "outcome": "request_center"
       }
+    }
+  },
+  {
+    "id": "r-owner-bbb-refused",
+    "case": "r",
+    "group": "r-owner-bbb",
+    "note": "Owners mixed with BBB ratings: refused by the people guard before any model call; the refusal names the missing owner data and that the data has no BBB ratings.",
+    "question": "Who owns the houses near Van Nuys and what are their roofers' BBB ratings?",
+    "expected": {
+      "tools": [],
+      "gaps": ["owner_data", "bbb"],
+      "refused": true,
+      "refusal": "people_guard",
+      "place": { "outcome": "none" }
     }
   }
 ]

@@ -12,6 +12,7 @@ import { dropDescriptions } from "../src/policy.ts";
 import {
   CANONICAL_NAME_NOTE,
   CONTRACTOR_READS_MS,
+  PLACE_UNKNOWN_HOW_TO_ASK,
   TOOL_NAMES,
   WITHIN_WINDOW_LIMIT,
   anthropicTools,
@@ -689,6 +690,26 @@ describe("runTool", () => {
     expect(detail.gaps).toEqual([
       "No permit source is listed in the run's sources: the permits are listed without a citation.",
     ]);
+  });
+  test("resolve_place, unknown: the data API's note unchanged, plus how_to_ask (a point by latitude and longitude); both in the gaps", async () => {
+    const { queries } = fakeQueries();
+    const direct = await queries.places.resolve({ name: "Springfield" });
+    const o = await runTool("resolve_place", { name: "Springfield" }, queries);
+    expect(o.ok).toBe(true);
+    expect(PLACE_UNKNOWN_HOW_TO_ASK).toBe(
+      "Ask again with a point: its latitude and longitude (the Explorer's Latitude and Longitude fields above the question, or the CRM's map pin).",
+    );
+    expect(o.content).toEqual({
+      ...direct,
+      how_to_ask: PLACE_UNKNOWN_HOW_TO_ASK,
+    });
+    expect(o.gaps).toEqual([direct.note, PLACE_UNKNOWN_HOW_TO_ASK]);
+    // A resolved or ambiguous place has no how_to_ask.
+    for (const name of ["Van Nuys", "Los Angeles"]) {
+      const r = await runTool("resolve_place", { name }, queries);
+      expect(r.content).not.toHaveProperty("how_to_ask");
+      expect(r.gaps).not.toContain(PLACE_UNKNOWN_HOW_TO_ASK);
+    }
   });
   test("resolve_place serves every center at 5 decimals, the precision its note states", async () => {
     const { queries } = fakeQueries();

@@ -77,6 +77,13 @@ export const LONG_OPEN_SCOPE = "roofing work only";
 export const WITHIN_WINDOW_LIMIT = 5;
 
 /**
+ * How to ask when resolve_place finds no place: with a point. Added to an unknown result (next to the data API's
+ * note, unchanged) and to its gaps.
+ */
+export const PLACE_UNKNOWN_HOW_TO_ASK =
+  "Ask again with a point: its latitude and longitude (the Explorer's Latitude and Longitude fields above the question, or the CRM's map pin).";
+
+/**
  * How long long_open_permits waits for the contractor rows of its within-window list: one data call's worst case
  * through the HTTP adapter (two 5 s attempts and a jitter wait of at most 500 ms), whatever the number of listed
  * parcels. The reads go through the adapter's bulkhead (at most 1 in flight); a read not finished by then is stated
@@ -758,7 +765,16 @@ const run = {
     } else r = found;
     const gaps: string[] = [];
     if (r.status !== "resolved" || !r.center_reliable) gaps.push(r.note);
-    return { content: r, gaps, fact: { tool: "resolve_place", resolution: r } };
+    // Unknown: the data API's note as it is, then how to ask with a point instead.
+    if (r.status === "unknown") gaps.push(PLACE_UNKNOWN_HOW_TO_ASK);
+    return {
+      content:
+        r.status === "unknown"
+          ? { ...r, how_to_ask: PLACE_UNKNOWN_HOW_TO_ASK }
+          : r,
+      gaps,
+      fact: { tool: "resolve_place", resolution: r },
+    };
   },
 
   async search_aged_roofs(

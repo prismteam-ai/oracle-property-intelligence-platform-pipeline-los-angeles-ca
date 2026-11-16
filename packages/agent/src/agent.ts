@@ -26,13 +26,13 @@ import {
 import {
   GAP_NO_CENTER,
   NO_TOOL_CALL_TEXT,
-  PEOPLE_REFUSAL_TEXT,
   STANDARD_GAPS,
   buildMarkdown,
   dedupeCitations,
   gapForUnverified,
   idsInText,
   isPeopleQuestion,
+  peopleRefusalText,
   uniq,
   unverifiedIds,
   type Citation,
@@ -780,10 +780,11 @@ export async function runAgent(
     const reasoning =
       "Refused before any model call: the question asks about people, and owner or resident data is neither collected nor served.";
     const gaps = [...STANDARD_GAPS];
+    const text = peopleRefusalText(req.question);
     return {
       status: "refused",
       refused_by: "people_guard",
-      text: PEOPLE_REFUSAL_TEXT,
+      text,
       reasoning,
       assumptions: [],
       records: [],
@@ -792,7 +793,7 @@ export async function runAgent(
       usage,
       elapsed_ms: now() - start,
       markdown: buildMarkdown({
-        text: PEOPLE_REFUSAL_TEXT,
+        text,
         status: "refused",
         reasoning,
         assumptions: [],
