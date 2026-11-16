@@ -962,8 +962,11 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
     watchWarmup(page, log);
     await page.goto("/");
     await page.getByRole("tab", { name: "Ask the agent" }).click();
+    // 15 s: the second explorer.sources request starts a second data API environment, 5.4–6.2 s cold (6.2 s on 16 Nov).
     await expect
-      .poll(() => [count(log, "warm:res"), count(log, "data:res")])
+      .poll(() => [count(log, "warm:res"), count(log, "data:res")], {
+        timeout: 15_000,
+      })
       .toEqual([1, 2]);
     // Both data requests went out before either answered (sent at once).
     const data = log.filter((x) => x.startsWith("data:"));
