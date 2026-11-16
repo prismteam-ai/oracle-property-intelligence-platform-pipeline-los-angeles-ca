@@ -15,8 +15,13 @@
  * - contractors: every within-window permit the text names has its contractor named as the tool returned it;
  * - stated_counts: every number the text states for the rows it shows from a long-open list equals the rows of that
  *   list the text names (totals, such as how many match, are not such statements);
- * - screen: with the request's screen values, the agent's assumptions name where the search's radius and roof age
- *   threshold came from, and the text states each value with its source.
+ * - screen: with the request's screen values, the search's radius and roof age threshold are the expected ones (the
+ *   screen's, or the question's from the prompt's tool_inputs) and the agent's assumptions name where each came from;
+ *   the text stating each value with its source is a warning, not a failure.
+ *
+ * A check fails only on what the tool calls, the tool results or the answer's structured fields (assumptions, gaps,
+ * records, status ...) verify. What only tests how the text words or places something is a warning: listed in the
+ * results, never a failure.
  */
 import type { OwnershipBasis } from "@oracle-la/api/contract";
 import {
@@ -73,6 +78,8 @@ export type CheckValue = "pass" | "fail" | "n/a";
 export interface CheckResult {
   result: CheckValue;
   details: string[];
+  /** What only the text's wording or placement misses: listed in the results, never a failure (absent when none). */
+  warnings?: string[];
 }
 export type AnswerChecks = Record<CheckName, CheckResult>;
 
@@ -150,9 +157,14 @@ export function toolCallsOf(
   return calls;
 }
 
-const check = (details: string[], ok: boolean | null): CheckResult => ({
+const check = (
+  details: string[],
+  ok: boolean | null,
+  warnings: readonly string[] = [],
+): CheckResult => ({
   result: ok === null ? "n/a" : ok ? "pass" : "fail",
   details,
+  ...(warnings.length ? { warnings: [...warnings] } : {}),
 });
 
 const listEq = (a: readonly string[], b: readonly string[]) =>
@@ -1145,9 +1157,11 @@ const sentencesOf = (text: string): string[] =>
 
 /**
  * (ix) With expected.screen: the search (search_aged_roofs or long_open_permits; the first one) has a radius, and
- * with search_aged_roofs a roof age threshold; for each, the agent's assumptions hold the deterministic line naming
- * the expected source (valueSourceAssumption), and some sentence of the text states the value (miles or years) and
- * names that source (SOURCE_WORDS). n/a without the expectation.
+ * with search_aged_roofs a roof age threshold. For each, it fails when the call's value is not the expected one (the
+ * request's screen value with source screen; the prompt's tool_inputs value for the search with source question) or
+ * when the agent's assumptions lack the deterministic line naming the expected source (valueSourceAssumption). How the
+ * text gives the value is a warning only: the value not stated, or no sentence stating it that also names its source
+ * (SOURCE_WORDS). n/a without the expectation.
  */
 export function checkScreen(
   answer: AgentAnswer,
@@ -1167,37 +1181,55 @@ export function checkScreen(
   const input = search.input!;
   const sentences = sentencesOf(answer.text);
   const details: string[] = [];
+  const warnings: string[] = [];
   let ok = true;
   const one = (
     what: "radius" | "threshold",
-    value: unknown,
+    field: "radius_miles" | "threshold_years",
     source: (typeof VALUE_SOURCES)[number],
     screenValue: number,
     text: (n: number) => RegExp,
   ) => {
+    const value = input[field];
+    const unit = (n: number) => (what === "radius" ? `${n} mi` : `${n} years`);
+    const target =
+      source === "screen"
+        ? screenValue
+        : expected.tool_inputs?.[search.name as ToolName]?.[field];
+    if (typeof target !== "number") {
+      ok = false;
+      details.push(
+        `${what}: no expected value (the prompt's tool_inputs has no ${search.name} ${field})`,
+      );
+      return;
+    }
     if (typeof value !== "number") {
       ok = false;
       details.push(`${what}: not in the search's input`);
       return;
     }
-    const line = valueSourceAssumption(what, value, source, screenValue);
+    const equal = same(value, target);
+    const line = valueSourceAssumption(what, target, source, screenValue);
     const assumed = answer.assumptions.includes(line);
-    const stated = sentences.some((x) => text(value).test(x));
-    const sourced = sentences.some(
-      (x) => text(value).test(x) && SOURCE_WORDS[source].test(x),
-    );
-    if (!assumed || !stated || !sourced) ok = false;
+    if (!equal || !assumed) ok = false;
     details.push(
-      `${what} ${value}: assumption ${assumed ? "stated" : `NOT stated ("${line}")`}; value ${stated ? "stated" : "NOT stated"} in the text; source (${source}) ${sourced ? "named with it" : "NOT named with it"}`,
+      `${what} ${unit(value)}: the call's value is ${equal ? "" : "NOT "}the ${source}'s (${unit(target)}); assumption ${assumed ? "stated" : `NOT stated ("${line}")`}`,
     );
+    // Wording and placement in the text: warnings only.
+    const stating = sentences.filter((x) => text(value).test(x));
+    const named = `its source (the ${source})`;
+    if (!stating.length)
+      warnings.push(
+        `${what} ${unit(value)}: the text does not state the value`,
+      );
+    else if (!stating.some((x) => SOURCE_WORDS[source].test(x)))
+      warnings.push(
+        sentences.some((x) => SOURCE_WORDS[source].test(x))
+          ? `${what} ${unit(value)}: the text states the value but names ${named} only in another sentence`
+          : `${what} ${unit(value)}: the text states the value but does not name ${named}`,
+      );
   };
-  one(
-    "radius",
-    input.radius_miles,
-    want.radius,
-    screen.radius_miles,
-    milesText,
-  );
+  one("radius", "radius_miles", want.radius, screen.radius_miles, milesText);
   if (want.threshold !== undefined) {
     if (search.name !== "search_aged_roofs") {
       ok = false;
@@ -1205,13 +1237,13 @@ export function checkScreen(
     } else
       one(
         "threshold",
-        input.threshold_years,
+        "threshold_years",
         want.threshold,
         screen.threshold_years,
         yearsText,
       );
   }
-  return check(details, ok);
+  return check(details, ok, warnings);
 }
 
 interface Resolution {
@@ -1395,6 +1427,10 @@ export async function checkAnswer(args: {
   };
 }
 
-/** True when no check failed. */
+/** The warnings of an answer's checks, as "check: text", in CHECK_NAMES order. */
+export const warningsOf = (c: AnswerChecks): string[] =>
+  CHECK_NAMES.flatMap((n) => (c[n].warnings ?? []).map((w) => `${n}: ${w}`));
+
+/** True when no check failed (warnings never count). */
 export const allPassed = (c: AnswerChecks): boolean =>
   CHECK_NAMES.every((n) => c[n].result !== "fail");

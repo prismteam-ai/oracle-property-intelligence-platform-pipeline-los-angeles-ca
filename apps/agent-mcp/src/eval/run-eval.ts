@@ -3,7 +3,8 @@
  * invocation. Per answer: the checks (checks.ts), its usage and spend (budget.ts), and one transcript JSON in the
  * output folder; at the end (or when the spend limit stops the eval) results.tsv and results.md. Returns the short
  * summary the CLI prints (nothing else goes to stdout) and the exit code: 1 when stopped by the budget or when any
- * answer failed, else 0.
+ * answer failed, else 0. Check warnings (wording or placement only) are listed in both files and counted in the
+ * summary; they never fail an answer.
  */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -25,6 +26,7 @@ import {
   CHECK_NAMES,
   allPassed,
   checkAnswer,
+  warningsOf,
   type AnswerChecks,
   type ToolCallRecord,
 } from "./checks.ts";
@@ -110,9 +112,15 @@ const COLUMNS = [
   "output_tokens",
   "usd",
   "ms",
+  "warnings",
 ] as const;
 
-function rowCells(r: ResultRow): Array<string | number> {
+/** One row's cells; the warnings cell: their texts (results.tsv, "none" when none) or their number (results.md). */
+function rowCells(
+  r: ResultRow,
+  warnings: "texts" | "count",
+): Array<string | number> {
+  const w = warningsOf(r.checks);
   return [
     r.run,
     r.prompt,
@@ -124,6 +132,7 @@ function rowCells(r: ResultRow): Array<string | number> {
     r.output_tokens,
     r.usd.toFixed(6),
     r.ms,
+    warnings === "count" ? w.length : w.join("; ") || "none",
   ];
 }
 
@@ -139,7 +148,7 @@ function writeTables(
     join(outDir, "results.tsv"),
     [
       COLUMNS.join("\t"),
-      ...rows.map((r) => rowCells(r).map(tsvCell).join("\t")),
+      ...rows.map((r) => rowCells(r, "texts").map(tsvCell).join("\t")),
     ]
       .map((l) => `${l}\n`)
       .join(""),
@@ -157,7 +166,17 @@ function writeTables(
     "",
     `| ${COLUMNS.join(" | ")} |`,
     `|${COLUMNS.map(() => " --- ").join("|")}|`,
-    ...rows.map((r) => `| ${rowCells(r).map(md).join(" | ")} |`),
+    ...rows.map((r) => `| ${rowCells(r, "count").map(md).join(" | ")} |`),
+    "",
+    "## Warnings",
+    "",
+    "Listed, not failures: how the text words or places something (status and pass counts are from failures only).",
+    "",
+    ...(rows.some((r) => warningsOf(r.checks).length)
+      ? rows.flatMap((r) =>
+          warningsOf(r.checks).map((w) => `- run ${r.run}, ${r.prompt}, ${w}`),
+        )
+      : ["- None"]),
     "",
   ];
   writeFileSync(join(outDir, "results.md"), lines.join("\n"));
@@ -312,7 +331,8 @@ export async function runEval(
     rs.filter((r) => r.status === s).length;
   const line = (label: string, rs: readonly ResultRow[]) => {
     const stopped = count(rs, "stopped");
-    return `${label}: ${count(rs, "pass")} passed, ${count(rs, "fail")} failed${stopped ? `, ${stopped} stopped` : ""}, ${usd(rs.reduce((n, r) => n + r.usd, 0))}`;
+    const warned = rs.reduce((n, r) => n + warningsOf(r.checks).length, 0);
+    return `${label}: ${count(rs, "pass")} passed, ${count(rs, "fail")} failed${stopped ? `, ${stopped} stopped` : ""}${warned ? `, ${warned} warning${warned === 1 ? "" : "s"}` : ""}, ${usd(rs.reduce((n, r) => n + r.usd, 0))}`;
   };
   for (let run = 1; run <= opts.runs; run++) {
     const rs = rows.filter((r) => r.run === run);

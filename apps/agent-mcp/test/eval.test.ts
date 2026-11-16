@@ -1932,13 +1932,13 @@ describe("CLI and output folder", () => {
       .trim()
       .split("\n");
     expect(tsv[0]).toBe(
-      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tstated_counts\tscreen\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms",
+      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tstated_counts\tscreen\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms\twarnings",
     );
     expect(tsv.slice(1)).toEqual([
-      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
-      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
-      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
-      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
+      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0\tnone",
+      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0\tnone",
+      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0\tnone",
+      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0\tnone",
     ]);
     const md = readFileSync(join(out, "results.md"), "utf8");
     expect(md).toContain("data run run-1");
@@ -3363,69 +3363,230 @@ describe("the CRM screen: prompts q1 and q2, place request_center and check scre
     ).toBe("fail");
   });
 
-  test("check screen: the deterministic assumptions name each source and the text states each value with it", () => {
+  test("check screen: fails on the call's value or a missing assumption; how the text words or places them is a warning", () => {
     const q1 = q("q1-crm-screen-threshold-from-question");
+    const q2 = q("q2-crm-screen-both-from-screen");
     const answer = (text: string, assumptions: string[]) =>
       ({ text, assumptions }) as unknown as AgentAnswer;
-    const ASSUMED = [
+    const Q1_ASSUMED = [
       "Radius 1 mi from the screen (the question gives no distance).",
       "Roof age threshold 25 years from the question (the screen shows 15 years).",
     ];
-    const call = [searchCall({ radius_miles: 1, threshold_years: 25 })];
+    const Q2_ASSUMED = [
+      "Radius 1 mi from the screen (the question gives no distance).",
+      "Roof age threshold 15 years from the screen (the question gives no roof age).",
+    ];
+    const q1Call = [searchCall({ radius_miles: 1, threshold_years: 25 })];
+    const q2Call = [searchCall({ radius_miles: 1, threshold_years: 15 })];
+
+    // All in one sentence each: pass, no warning.
     const good = checkScreen(
       answer(
         "I used the screen's 1-mile radius around the map pin. The roof age threshold of 25 years is from your question.",
-        ASSUMED,
+        Q1_ASSUMED,
       ),
-      call,
+      q1Call,
       q1.expected,
       q1.request,
     );
-    expect(good.result).toBe("pass");
-    expect(good.details).toEqual([
-      "radius 1: assumption stated; value stated in the text; source (screen) named with it",
-      "threshold 25: assumption stated; value stated in the text; source (question) named with it",
+    expect(good).toEqual({
+      result: "pass",
+      details: [
+        "radius 1 mi: the call's value is the screen's (1 mi); assumption stated",
+        "threshold 25 years: the call's value is the question's (25 years); assumption stated",
+      ],
+    });
+    expect(
+      checkScreen(
+        answer(
+          "Within the screen's 1-mile radius of the map pin, using the screen's roof age threshold of 15 years: 42 parcels match.",
+          Q2_ASSUMED,
+        ),
+        q2Call,
+        q2.expected,
+        q2.request,
+      ),
+    ).not.toHaveProperty("warnings");
+
+    // The call's value differs from the screen's (q2) or from the question's (q1): fail.
+    const q2Differs = checkScreen(
+      answer(
+        "Within the screen's 1-mile radius, using the screen's 25-year threshold.",
+        Q2_ASSUMED,
+      ),
+      [searchCall({ radius_miles: 1, threshold_years: 25 })],
+      q2.expected,
+      q2.request,
+    );
+    expect(q2Differs.result).toBe("fail");
+    expect(q2Differs.details).toContain(
+      "threshold 25 years: the call's value is NOT the screen's (15 years); assumption stated",
+    );
+    expect(
+      checkScreen(
+        answer(
+          "Within the screen's 2 miles; 15 years from the screen.",
+          Q2_ASSUMED,
+        ),
+        [searchCall({ radius_miles: 2, threshold_years: 15 })],
+        q2.expected,
+        q2.request,
+      ).result,
+    ).toBe("fail");
+    expect(
+      checkScreen(
+        answer("The screen's 1 mile; 15 years from the screen.", Q1_ASSUMED),
+        q2Call,
+        q1.expected,
+        q1.request,
+      ).result,
+    ).toBe("fail");
+
+    // The assumption line missing: fail, the missing line named.
+    const unassumed = checkScreen(
+      answer(
+        "I used the screen's 1-mile radius. The 25-year threshold is from your question.",
+        Q1_ASSUMED.slice(1),
+      ),
+      q1Call,
+      q1.expected,
+      q1.request,
+    );
+    expect(unassumed.result).toBe("fail");
+    expect(unassumed.details[0]).toBe(
+      `radius 1 mi: the call's value is the screen's (1 mi); assumption NOT stated ("${Q1_ASSUMED[0]}")`,
+    );
+
+    // The source named in the next sentence (a03f4d7-r1 q2 run 3): pass with a warning per value.
+    const nextSentence = checkScreen(
+      answer(
+        "**3,948 parcels** within 1 mile of the pin (34.20008, -118.48111) have roofs older than 15 years. Both the radius and the threshold come from the screen values.",
+        Q2_ASSUMED,
+      ),
+      q2Call,
+      q2.expected,
+      q2.request,
+    );
+    expect(nextSentence.result).toBe("pass");
+    expect(nextSentence.warnings).toEqual([
+      "radius 1 mi: the text states the value but names its source (the screen) only in another sentence",
+      "threshold 15 years: the text states the value but names its source (the screen) only in another sentence",
     ]);
-    // The value stated without its source; the assumption missing; the wrong value used.
+
+    // The value not stated, or stated with no source anywhere: pass with a warning saying which.
+    const unstated = checkScreen(
+      answer(
+        "I used the screen's 1-mile radius around the map pin. The threshold is from your question.",
+        Q1_ASSUMED,
+      ),
+      q1Call,
+      q1.expected,
+      q1.request,
+    );
+    expect(unstated.result).toBe("pass");
+    expect(unstated.warnings).toEqual([
+      "threshold 25 years: the text does not state the value",
+    ]);
+    const unsourced = checkScreen(
+      answer("Within 1 mile, roofs older than 25 years.", Q1_ASSUMED),
+      q1Call,
+      q1.expected,
+      q1.request,
+    );
+    expect(unsourced.result).toBe("pass");
+    expect(unsourced.warnings).toEqual([
+      "radius 1 mi: the text states the value but does not name its source (the screen)",
+      "threshold 25 years: the text states the value but does not name its source (the question)",
+    ]);
+
+    // A question source with no expected value in the prompt's tool_inputs: fail (nothing to compare the call with).
     expect(
       checkScreen(
         answer(
-          "Within 1 mile, roofs older than 25 years (from your question).",
-          ASSUMED,
+          "I used the screen's 1-mile radius. The roof age threshold of 25 years is from your question.",
+          Q1_ASSUMED,
         ),
-        call,
-        q1.expected,
+        q1Call,
+        { ...q1.expected, tool_inputs: undefined },
         q1.request,
-      ).result,
-    ).toBe("fail");
-    expect(
-      checkScreen(
-        answer(
-          "I used the screen's 1-mile radius. The 25-year threshold is from your question.",
-          ASSUMED.slice(1),
-        ),
-        call,
-        q1.expected,
-        q1.request,
-      ).result,
-    ).toBe("fail");
-    expect(
-      checkScreen(
-        answer("The screen's 1 mile; 15 years from the screen.", ASSUMED),
-        [searchCall({ radius_miles: 1, threshold_years: 15 })],
-        q1.expected,
-        q1.request,
-      ).result,
-    ).toBe("fail");
+      ).details,
+    ).toContain(
+      "threshold: no expected value (the prompt's tool_inputs has no search_aged_roofs threshold_years)",
+    );
     // n/a without the expectation.
     expect(
       checkScreen(
         answer("", []),
-        call,
+        q1Call,
         { ...q1.expected, screen: undefined },
         undefined,
       ).result,
     ).toBe("n/a");
+  });
+
+  test("a warning is listed in results.tsv and results.md and in the summary; the answer still passes", async () => {
+    const q2 = q("q2-crm-screen-both-from-screen");
+    const out = join(SCRATCH, "screen-q2-warn-out");
+    mkdirSync(out, { recursive: true });
+    const model = new ScriptedModel([
+      toolReply([
+        {
+          name: "search_aged_roofs",
+          input: {
+            lat: PIN.lat,
+            lon: PIN.lon,
+            radius_miles: 1,
+            threshold_years: 15,
+          },
+        },
+      ]),
+      textReply(
+        "42 parcels within 1 mile of the map pin have roofs older than 15 years. Both values come from the screen.",
+      ),
+    ]);
+    const r = await runEval(
+      {
+        provider: "anthropic",
+        model: "sonnet-5.5",
+        runs: 1,
+        maxUsd: 5,
+        outDir: out,
+        prompts: [q2],
+      },
+      {
+        model,
+        queries: fakeQueries().queries,
+        settings: SETTINGS,
+        now: () => 0,
+      },
+    );
+    const WARN = [
+      "radius 1 mi: the text states the value but names its source (the screen) only in another sentence",
+      "threshold 15 years: the text states the value but names its source (the screen) only in another sentence",
+    ];
+    expect(r.rows[0]!.status).toBe("pass");
+    expect(r.rows[0]!.checks.screen).toMatchObject({
+      result: "pass",
+      warnings: WARN,
+    });
+    expect(r.summary[0]).toMatch(/^run 1: 1 passed, 0 failed, 2 warnings, \$/);
+    const [head, row] = readFileSync(join(out, "results.tsv"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => l.split("\t"));
+    expect(head!.at(-1)).toBe("warnings");
+    expect(row![head!.indexOf("screen")]).toBe("pass");
+    expect(row!.at(-1)).toBe(WARN.map((w) => `screen: ${w}`).join("; "));
+    const md = readFileSync(join(out, "results.md"), "utf8");
+    expect(md).toContain(
+      [
+        "## Warnings",
+        "",
+        "Listed, not failures: how the text words or places something (status and pass counts are from failures only).",
+        "",
+        ...WARN.map((w) => `- run 1, ${q2.id}, screen: ${w}`),
+      ].join("\n"),
+    );
   });
 
   test("q2 with the scripted model: the request's center and screen reach the agent; the place, screen and tools checks pass", async () => {

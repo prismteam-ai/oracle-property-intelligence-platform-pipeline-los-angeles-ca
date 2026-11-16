@@ -264,8 +264,9 @@ export const promptSchema = z.strictObject({
      */
     stated_counts: z.literal(true).optional(),
     /**
-     * The sources of the search's radius and (search_aged_roofs) roof age threshold: the agent's assumptions name
-     * them and the text states each value with its source (check "screen"). Needs request.screen.
+     * The sources of the search's radius and (search_aged_roofs) roof age threshold: the call's value is the source's
+     * (the screen's, or for the question the value in tool_inputs) and the agent's assumptions name it; the text
+     * stating each value with its source is a warning only (check "screen"). Needs request.screen.
      */
     screen: z
       .strictObject({
