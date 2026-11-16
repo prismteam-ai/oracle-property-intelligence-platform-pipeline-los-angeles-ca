@@ -341,27 +341,76 @@ export function historyHasToolResult(
   );
 }
 
-/** If the last message asks for tools that never ran, answer them as not run (keeps the history valid). */
+/** Why a tool call the model asked for did not run, by the stop that ended the answer ("end": no stop). */
+const NOT_RUN_WHY: Record<StoppedBy | "end", string> = {
+  time_budget: "the answer's time budget ran out",
+  token_cap: "the answer's token budget ran out",
+  max_tool_turns: "the answer's tool-call limit was reached",
+  model_refusal: "the model declined to answer",
+  max_tokens: "the model's reply reached the output-token limit",
+  error: "the model call failed",
+  unexpected_stop: "the model stopped unexpectedly",
+  budget: "the spending limit was reached",
+  end: "the answer ended",
+};
+
+/** The result text of a tool call the answer closed without running it: NOT_RUN_PREFIX, the stop and why. */
+const notRunText = (reason: StoppedBy | "end"): string =>
+  `${NOT_RUN_PREFIX} (${reason}): ${NOT_RUN_WHY[reason]}.`;
+
+/** How many times each value occurs, in order of first occurrence. */
+function countBy(values: readonly string[]): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const v of values) out.set(v, (out.get(v) ?? 0) + 1);
+  return out;
+}
+
+/** The gap of the calls of one tool the answer closed without running them. */
+function notRunGap(
+  name: string,
+  calls: number,
+  reason: StoppedBy | "end",
+): string {
+  return `${calls === 1 ? `${name} was` : `${fmt(calls)} ${name} calls were`} not run: ${NOT_RUN_WHY[reason]}.`;
+}
+
+/**
+ * Answer every tool call of this answer's last assistant message that has no result, as not run (is_error, with
+ * the stop and why), so the history stays valid for the Messages API and says what happened: when the answer
+ * stopped before any call of the round, a user message of results follows; when it stopped part-way, the missing
+ * results join the round's results, in the order of the calls. Messages before `from` (the conversation so far)
+ * are not touched. Returns the calls closed this way.
+ */
 function closeDanglingToolUse(
   messages: Anthropic.MessageParam[],
-  reason: string,
-): void {
-  const last = messages.at(-1);
-  if (!last || last.role !== "assistant" || typeof last.content === "string")
-    return;
-  const pending = last.content.filter(
-    (b): b is Anthropic.ToolUseBlockParam => b.type === "tool_use",
-  );
-  if (pending.length)
-    messages.push({
-      role: "user",
-      content: pending.map((b) => ({
+  from: number,
+  reason: StoppedBy | "end",
+): Anthropic.ToolUseBlockParam[] {
+  let at = messages.length - 1;
+  while (at >= from && messages[at]!.role !== "assistant") at--;
+  const last = messages[at];
+  if (at < from || !last || typeof last.content === "string") return [];
+  const calls: Anthropic.ToolUseBlockParam[] = [];
+  for (const b of last.content) if (b.type === "tool_use") calls.push(b);
+  const next = messages[at + 1];
+  const given = new Map<string, Anthropic.ToolResultBlockParam>();
+  if (next && typeof next.content !== "string")
+    for (const b of next.content)
+      if (b.type === "tool_result") given.set(b.tool_use_id, b);
+  const pending = calls.filter((b) => !given.has(b.id));
+  if (!pending.length) return [];
+  const results = calls.map(
+    (b): Anthropic.ToolResultBlockParam =>
+      given.get(b.id) ?? {
         type: "tool_result",
         tool_use_id: b.id,
         is_error: true,
-        content: `${NOT_RUN_PREFIX} (${reason})`,
-      })),
-    });
+        content: notRunText(reason),
+      },
+  );
+  if (next) messages[at + 1] = { role: "user", content: results };
+  else messages.push({ role: "user", content: results });
+  return pending;
 }
 
 const NUMBER_WORDS: Record<string, number> = {
@@ -966,7 +1015,11 @@ export async function runAgent(
     stoppedBy = "unexpected_stop";
     break;
   }
-  closeDanglingToolUse(messages, stoppedBy ?? "end");
+  const notRun = closeDanglingToolUse(
+    messages,
+    history.length,
+    stoppedBy ?? "end",
+  );
 
   // The no-tool-call rule: a reply of the model with no tool call behind it, in this answer (no
   // tool call ran, whether it returned data or an error) or in the conversation (no earlier tool result), is never
@@ -1021,6 +1074,10 @@ export async function runAgent(
         ]
       : []),
     ...unverified.map(gapForUnverified),
+    // Each tool the model asked for that did not run, and why.
+    ...[...countBy(notRun.map((b) => b.name))].map(([name, calls]) =>
+      notRunGap(name, calls, stoppedBy ?? "end"),
+    ),
   ]);
   const status = stoppedBy ? "stopped" : "answered";
   const reasoning = [

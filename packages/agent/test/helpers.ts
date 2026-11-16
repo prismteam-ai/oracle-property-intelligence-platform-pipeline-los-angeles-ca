@@ -1,4 +1,5 @@
 /** Shared fakes for the agent tests: data queries that record their inputs, a fake clock, no network. */
+import Anthropic from "@anthropic-ai/sdk";
 import { vi } from "vitest";
 // The contract's ownership texts as the API states them (a runtime import in the fakes only; the package's own
 // sources import the contract for types).
@@ -27,7 +28,7 @@ import type {
 } from "../src/model-client.ts";
 import type { DataQueries, PermitQueries } from "../src/permit-api.ts";
 import { placeKey, type PlaceResolution } from "../../views/src/place-index.ts";
-import { textReply } from "../src/testing/scripted-model.ts";
+import { textReply, type ScriptStep } from "../src/testing/scripted-model.ts";
 
 /** Any fetch in a test is a bug: the stub throws. */
 export function blockNetwork(): void {
@@ -563,4 +564,65 @@ export function fakeClock(start = 1_000_000): {
 } {
   let t = start;
   return { now: () => t, advance: (ms) => void (t += ms) };
+}
+
+/**
+ * What the Messages API checks of a conversation's tool calls: every tool_use of an assistant message has its
+ * tool_result in the user message right after it, and every tool_result answers a tool_use of the assistant message
+ * right before it. The problems found; empty when the conversation is valid.
+ */
+export function toolPairingProblems(
+  messages: readonly Anthropic.MessageParam[],
+): string[] {
+  const blocks = (m: Anthropic.MessageParam | undefined) =>
+    m && typeof m.content !== "string" ? m.content : [];
+  const problems: string[] = [];
+  for (const [i, m] of messages.entries()) {
+    const before = messages[i - 1];
+    const uses = new Set(
+      before?.role === "assistant"
+        ? blocks(before)
+            .filter((b) => b.type === "tool_use")
+            .map((b) => (b as Anthropic.ToolUseBlockParam).id)
+        : [],
+    );
+    for (const b of blocks(m))
+      if (b.type === "tool_result" && !uses.has(b.tool_use_id))
+        problems.push(
+          `message ${i}: tool_result ${b.tool_use_id} answers no tool_use of the message before it`,
+        );
+    if (m.role !== "assistant") continue;
+    const next = messages[i + 1];
+    const answered = new Set(
+      next?.role === "user"
+        ? blocks(next)
+            .filter((b) => b.type === "tool_result")
+            .map((b) => (b as Anthropic.ToolResultBlockParam).tool_use_id)
+        : [],
+    );
+    for (const b of blocks(m))
+      if (b.type === "tool_use" && !answered.has(b.id))
+        problems.push(
+          `message ${i}: tool_use ${b.id} has no tool_result in the message after it`,
+        );
+  }
+  return problems;
+}
+
+/**
+ * A scripted step that answers like the Messages API: a request whose conversation it would reject fails with a
+ * 400 BadRequestError (invalid_request_error); a valid one gets `reply`.
+ */
+export function validatingStep(reply: Anthropic.Message): ScriptStep {
+  return (params) => {
+    const problems = toolPairingProblems(params.messages);
+    if (!problems.length) return reply;
+    const message = problems.join("; ");
+    return new Anthropic.BadRequestError(
+      400,
+      { type: "error", error: { type: "invalid_request_error", message } },
+      message,
+      new Headers(),
+    );
+  };
 }
