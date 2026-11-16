@@ -356,7 +356,9 @@ describe("runTool", () => {
       })),
     );
     expect(c.truncated).toBe(true);
+    // The fake's points are truncated (the nearest 3 of 42, all with permit data): the others were not checked.
     expect(o.gaps).toEqual([
+      "All of the nearest 3 of the 42 parcels within 5 mi that have a roof year (only those were checked: the data API marks at most 3 parcels) have permit data; the other 39 were not checked.",
       "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
     ]);
     const all = await runTool(
@@ -1144,12 +1146,14 @@ describe("long_open_permits: with_contractor_window", () => {
     const o = await runTool("long_open_permits", at, queries);
     expect(o.ok).toBe(true);
     expect(calls.filter((c) => c.fn === "permits.longOpen")).toHaveLength(1);
+    // permit_data: the fake's points are truncated (only the nearest checked).
     expect(Object.keys(o.content as object)).toEqual([
       "count",
       "returned",
       "rule",
       "scope",
       "source",
+      "permit_data",
       "items",
       "truncated",
     ]);
@@ -1213,9 +1217,11 @@ describe("long_open_permits: with_contractor_window", () => {
       limit: 5,
     });
     const c = o.content as Lists;
+    // permit_data: the fake's points are truncated (only the nearest checked).
     expect(Object.keys(c)).toEqual([
       "scope",
       "source",
+      "permit_data",
       "contractor_window",
       "longest_open",
       "within_contractor_window",
@@ -1241,6 +1247,7 @@ describe("long_open_permits: with_contractor_window", () => {
     // Both lists' truncation gaps, each naming its list; the IDs of both lists are known.
     // The fake's parcels list permits 0 and 1 only, so permit 2's contractor is not read, and said so.
     expect(o.gaps).toEqual([
+      "All of the nearest 3 of the 42 parcels within 5 mi that have a roof year (only those were checked: the data API marks at most 3 parcels) have permit data; the other 39 were not checked.",
       "Results truncated: the longest-open list returned 2 of 57 long-open permits (longest open first).",
       "Results truncated: the within-window list returned 2 of 57 long-open permits (longest open first).",
       `The contractor of permit ${FAKE_PERMITS[2]} (parcel ${FAKE_PARCELS[2]}) was not read (permit ${FAKE_PERMITS[2]} is not among parcel ${FAKE_PARCELS[2]}'s permits (permits.forParcel)); it is listed without its contractor.`,
@@ -2449,39 +2456,38 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
     });
   });
 
-  test("all inside: the result and gaps are as before (no permit_data, no status), with and without with_contractor_window", async () => {
+  test("all inside, every parcel checked: the result and gaps are as before (no permit_data, no status), with and without with_contractor_window", async () => {
     const { queries } = fakeQueries();
-    for (const q of [queries, complete(queries)]) {
-      const o = await runTool("long_open_permits", AT, q);
-      expect(Object.keys(o.content as object)).toEqual([
-        "count",
-        "returned",
-        "rule",
-        "scope",
-        "source",
-        "items",
-        "truncated",
-      ]);
-      expect(o.gaps).toEqual([
-        "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
-      ]);
-      const w = await runTool(
-        "long_open_permits",
-        { ...AT, with_contractor_window: true },
-        q,
-      );
-      const c = w.content as Record<string, Record<string, unknown>>;
-      expect(Object.keys(c)).toEqual([
-        "scope",
-        "source",
-        "contractor_window",
-        "longest_open",
-        "within_contractor_window",
-      ]);
-      expect(c.longest_open).not.toHaveProperty("status");
-      expect(c.within_contractor_window).not.toHaveProperty("status");
-      expect(w.gaps.some((g) => g.includes("City of Los Angeles"))).toBe(false);
-    }
+    const q = complete(queries);
+    const o = await runTool("long_open_permits", AT, q);
+    expect(Object.keys(o.content as object)).toEqual([
+      "count",
+      "returned",
+      "rule",
+      "scope",
+      "source",
+      "items",
+      "truncated",
+    ]);
+    expect(o.gaps).toEqual([
+      "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
+    ]);
+    const w = await runTool(
+      "long_open_permits",
+      { ...AT, with_contractor_window: true },
+      q,
+    );
+    const c = w.content as Record<string, Record<string, unknown>>;
+    expect(Object.keys(c)).toEqual([
+      "scope",
+      "source",
+      "contractor_window",
+      "longest_open",
+      "within_contractor_window",
+    ]);
+    expect(c.longest_open).not.toHaveProperty("status");
+    expect(c.within_contractor_window).not.toHaveProperty("status");
+    expect(w.gaps.some((g) => g.includes("City of Los Angeles"))).toBe(false);
   });
 
   test("no parcel with permit data but a permit found: the count stands (a permit found is never unknown)", async () => {
@@ -2544,5 +2550,129 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
       min_open_days: 1826,
       max_open_days: 4000,
     });
+  });
+
+  test("all inside among the nearest checked (truncated points): permit_data and its gap say the others were not checked; the count stands", async () => {
+    const { queries } = fakeQueries();
+    const nearest =
+      "All of the nearest 3 of the 42 parcels within 1 mi that have a roof year (only those were checked: the data API marks at most 3 parcels) have permit data; the other 39 were not checked.";
+    const permitData = {
+      checked: 3,
+      matched: 42,
+      without_permit_data: 0,
+      complete: false,
+      text: nearest,
+    };
+    const o = await runTool("long_open_permits", AT, queries);
+    expect(Object.keys(o.content as object)).toEqual([
+      "count",
+      "returned",
+      "rule",
+      "scope",
+      "source",
+      "permit_data",
+      "items",
+      "truncated",
+    ]);
+    expect(o.content).toMatchObject({ count: 57, permit_data: permitData });
+    expect(o.content).not.toHaveProperty("status");
+    expect(o.gaps).toEqual([
+      nearest,
+      "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
+    ]);
+    expect(o.fact).toMatchObject({
+      count: 57,
+      permit_data: { checked: 3, without_permit_data: 0, complete: false },
+    });
+    const w = await runTool(
+      "long_open_permits",
+      { ...AT, with_contractor_window: true },
+      queries,
+    );
+    const c = w.content as Record<string, Record<string, unknown>>;
+    expect(c.permit_data).toEqual(permitData);
+    expect(c.longest_open).not.toHaveProperty("status");
+    expect(c.within_contractor_window).not.toHaveProperty("status");
+    expect(w.gaps[0]).toBe(nearest);
+  });
+
+  /** The fake whose parcels.points read fails. */
+  function pointsFail(base: DataQueries): DataQueries {
+    return {
+      ...base,
+      parcels: {
+        ...base.parcels,
+        points: async () => {
+          throw new Error("boom");
+        },
+      },
+    };
+  }
+  const NOT_CHECKED =
+    "parcels.points failed (boom): whether the parcels within 1 mi that have a roof year have permit data (the City of Los Angeles) was not checked.";
+  const notCheckedText = (rule: string) =>
+    `Not available: whether the parcels within 1 mi that have a roof year have permit data (the City of Los Angeles) was not checked, so whether there are long-open roofing permits (${rule}) is unknown, not 0.`;
+  const RULE =
+    "an issued LADBS roofing-work permit still open at least 1,826 days";
+
+  test("the points read fails and the list finds no permit: count null with status not_available and its text, never 0", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool(
+      "long_open_permits",
+      PASADENA,
+      pointsFail(noPermits(queries)),
+    );
+    expect(o.ok).toBe(true);
+    const text = notCheckedText(RULE);
+    expect(o.content).toMatchObject({
+      count: null,
+      status: "not_available",
+      text,
+      returned: 0,
+      items: [],
+    });
+    expect(o.content).not.toHaveProperty("permit_data");
+    expect(o.gaps).toEqual([NOT_CHECKED, text]);
+    expect(o.fact).toMatchObject({ count: null, permit_data: null });
+  });
+
+  test("the points read fails with with_contractor_window: each list that finds no permit is not available with its window's text; a list that finds one keeps its count", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool(
+      "long_open_permits",
+      { ...PASADENA, with_contractor_window: true },
+      pointsFail(noPermits(queries)),
+    );
+    const c = o.content as Record<string, Record<string, unknown>>;
+    const first = notCheckedText(RULE);
+    const within = notCheckedText(`${RULE} and at most 5,062 days`);
+    expect(c).not.toHaveProperty("permit_data");
+    expect(c.longest_open).toMatchObject({
+      count: null,
+      status: "not_available",
+      text: first,
+    });
+    expect(c.within_contractor_window).toMatchObject({
+      count: null,
+      status: "not_available",
+      text: within,
+      max_open_days: 5062,
+    });
+    expect(o.gaps).toEqual([NOT_CHECKED, first, within]);
+    expect(o.fact).toMatchObject({
+      count: null,
+      within_window: { status: "read", count: null },
+    });
+    const found = await runTool(
+      "long_open_permits",
+      { ...PASADENA, with_contractor_window: true },
+      pointsFail(queries),
+    );
+    const f = found.content as Record<string, Record<string, unknown>>;
+    expect(f.longest_open).toMatchObject({ count: 57 });
+    expect(f.longest_open).not.toHaveProperty("status");
+    expect(f.within_contractor_window).not.toHaveProperty("status");
+    expect(found.gaps[0]).toBe(NOT_CHECKED);
+    expect(found.gaps.filter((g) => g.startsWith("Not available"))).toEqual([]);
   });
 });

@@ -204,13 +204,15 @@ export const TOOL_NAMES = Object.keys(toolSchemas) as ToolName[];
 export type ToolInput<N extends ToolName> = z.output<(typeof toolSchemas)[N]>;
 
 /**
- * The sentence long_open_permits' description gained with its coverage rule (the rule search_aged_roofs' description
+ * The sentences long_open_permits' description gained with its coverage rule (the rule search_aged_roofs' description
  * states for its long-open filter).
  */
 const LONG_OPEN_COVERAGE_DESCRIPTION =
-  "Permits are served for the City of Los Angeles only: where no parcel within the radius has permit data the count " +
-  "is not available (count null, status not_available), never 0, and permit_data states how many parcels in the " +
-  "circle have none.";
+  "Permits are served for the City of Los Angeles only: the parcels within the radius that have a roof year " +
+  "(only the nearest when there are more than the data API marks) are checked for permit data, and permit_data " +
+  "states how many have none and, when only the nearest were checked, how many there are in all. Where the list finds " +
+  "no permit and the check could not be made, or parcels were checked and none has permit data, the count is " +
+  "not available (count null, status not_available), never 0.";
 
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   resolve_place:
@@ -574,10 +576,10 @@ function noPermitDataText(
 function nearestCheckedText(
   c: PermitCoverage,
   aged: number,
-  ownership: boolean,
+  matching: string,
   maxPoints: number,
 ): string {
-  return `All of the nearest ${num(c.checked)} of the ${num(aged)} ${matchingPhrase(ownership)} (only those were checked: the data API marks at most ${num(maxPoints)} parcels) have permit data; the other ${num(aged - c.checked)} were not checked.`;
+  return `All of the nearest ${num(c.checked)} of the ${num(aged)} ${matching} (only those were checked: the data API marks at most ${num(maxPoints)} parcels) have permit data; the other ${num(aged - c.checked)} were not checked.`;
 }
 
 /** The long-open filter of search_aged_roofs as its result states it. */
@@ -724,19 +726,24 @@ const longOpenRuleText = (minOpenDays: number, maxOpenDays: number | null) =>
   `an issued LADBS roofing-work permit still open at least ${days(minOpenDays)}${maxOpenDays !== null ? ` and at most ${days(maxOpenDays)}` : ""}`;
 
 /**
- * A long-open list's count where the circle's parcels have no permit data: not available (null, never 0) when
- * parcels were checked, none of them has permit data or a long-open mark (all are outside the City of Los Angeles)
- * and the list found no permit; null when the count stands.
+ * A long-open list's count where the circle's parcels have no permit data, or where that was not checked: not
+ * available (null, never 0) when the list found no permit and either the coverage read failed or parcels were
+ * checked and none of them has permit data or a long-open mark (all are outside the City of Los Angeles); null when
+ * the count stands.
  */
 function notAvailableText(
-  a: AreaCoverage,
+  cov: Read<AreaCoverage>,
   count: number,
   radiusMiles: number,
   rule: string,
 ): string | null {
-  const c = a.coverage;
-  if (c.checked === 0 || c.with_permit_data > 0 || count > 0) return null;
+  if (count > 0) return null;
   const area = areaPhrase(radiusMiles);
+  if (!cov.ok)
+    return `Not available: whether the ${area} have permit data (the City of Los Angeles) was not checked, so whether there are long-open roofing permits (${rule}) is unknown, not 0.`;
+  const a = cov.value;
+  const c = a.coverage;
+  if (c.checked === 0 || c.with_permit_data > 0) return null;
   return c.complete
     ? `Not available: none of the ${num(a.parcels)} ${area} has permit data (all are outside the City of Los Angeles), so whether there are long-open roofing permits (${rule}) is unknown, not 0.`
     : `Not available: none of the nearest ${num(c.checked)} of the ${num(a.parcels)} ${area} has permit data (all are outside the City of Los Angeles; only those were checked: the data API marks at most ${num(a.max_points)} parcels), so whether there are long-open roofing permits (${rule}) is unknown, not 0. A smaller radius gives a full check.`;
@@ -750,31 +757,40 @@ const statedCount = (count: number, notAvailable: string | null) =>
 
 /**
  * The circle's permit data as a long_open_permits result states it: the permit_data block (absent when every parcel
- * checked has permit data) and its gap, or the gap of a coverage not checked.
+ * was checked and has permit data; with truncated points, how many there are in all) and its gap, or the gap of a
+ * coverage not checked.
  */
 function areaStated(
   cov: Read<AreaCoverage>,
   radiusMiles: number,
 ): { permit_data: Record<string, unknown> | null; gaps: string[] } {
+  const area = areaPhrase(radiusMiles);
   if (!cov.ok)
     return {
       permit_data: null,
       gaps: [
-        `${cov.why}: whether the ${areaPhrase(radiusMiles)} have permit data (the City of Los Angeles) was not checked.`,
+        `${cov.why}: whether the ${area} have permit data (the City of Los Angeles) was not checked.`,
       ],
     };
   const c = cov.value.coverage;
-  const text = noPermitDataText(
+  const outside = noPermitDataText(
     c,
     cov.value.parcels,
-    areaPhrase(radiusMiles),
+    area,
     cov.value.max_points,
   );
+  // Only the nearest were checked: stated even when all of them have permit data (as search_aged_roofs states it).
+  const text =
+    outside ??
+    (c.complete
+      ? null
+      : nearestCheckedText(c, cov.value.parcels, area, cov.value.max_points));
   return text === null
     ? { permit_data: null, gaps: [] }
     : {
         permit_data: {
           checked: c.checked,
+          ...(c.complete ? {} : { matched: cov.value.parcels }),
           without_permit_data: c.without_permit_data,
           complete: c.complete,
           text,
@@ -1111,7 +1127,7 @@ const run = {
         ? nearestCheckedText(
             coverage.value,
             res.count,
-            ownership !== null,
+            matchingPhrase(ownership !== null),
             points.max_points,
           )
         : null);
@@ -1223,7 +1239,8 @@ const run = {
         limit,
       });
     // Which parcels in the circle have permit data (the City of Los Angeles): parcels.points over the same circle and
-    // window. A read that fails is a stated gap, never a failed call; the counts then stand as read.
+    // window. A read that fails is a stated gap, never a failed call; a count above 0 then stands as read, and a count
+    // of 0 is not available (unknown, not 0).
     const readCoverage = () =>
       q.parcels
         .points({
@@ -1249,20 +1266,19 @@ const run = {
             why: notRead("parcels.points", err),
           }),
         );
-    // The count of a list with its window: null (not available) where no parcel checked has permit data.
+    // The count of a list with its window: null (not available) where it found no permit and no parcel checked has
+    // permit data, or the coverage was not checked.
     const notAvailable = (
       cov: Read<AreaCoverage>,
       count: number,
       maxOpenDays: number | null,
     ) =>
-      cov.ok
-        ? notAvailableText(
-            cov.value,
-            count,
-            input.radius_miles,
-            longOpenRuleText(input.min_open_days, maxOpenDays),
-          )
-        : null;
+      notAvailableText(
+        cov,
+        count,
+        input.radius_miles,
+        longOpenRuleText(input.min_open_days, maxOpenDays),
+      );
     const fact = (
       res: LongOpenResult,
       items: unknown[],

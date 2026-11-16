@@ -575,7 +575,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     expect(counts.result).toBe("pass");
   });
 
-  test("long_open_permits as prompt a2 calls it (the Van Nuys center, 5 mi, with_contractor_window): every parcel checked has permit data, so the result keeps its fields and gaps (no permit_data, no status)", async () => {
+  test("long_open_permits as prompt a2 calls it (the Van Nuys center, 5 mi, with_contractor_window): only the nearest 25,000 parcels were checked, all with permit data, and permit_data says so; the counts stand (no status)", async () => {
     const o = await runTool(
       "long_open_permits",
       {
@@ -590,10 +590,20 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     expect(Object.keys(c)).toEqual([
       "scope",
       "source",
+      "permit_data",
       "contractor_window",
       "longest_open",
       "within_contractor_window",
     ]);
+    const nearest =
+      "All of the nearest 25,000 of the 143,251 parcels within 5 mi that have a roof year (only those were checked: the data API marks at most 25,000 parcels) have permit data; the other 118,251 were not checked.";
+    expect(c.permit_data).toEqual({
+      checked: 25_000,
+      matched: 143_251,
+      without_permit_data: 0,
+      complete: false,
+      text: nearest,
+    });
     expect(c.longest_open).toMatchObject({ count: 2_309, returned: 10 });
     expect(c.longest_open).not.toHaveProperty("status");
     expect(c.within_contractor_window).toMatchObject({
@@ -602,6 +612,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     });
     expect(c.within_contractor_window).not.toHaveProperty("status");
     expect(o.gaps).toEqual([
+      nearest,
       "Results truncated: the longest-open list returned 10 of 2309 long-open permits (longest open first).",
       "Results truncated: the within-window list returned 5 of 2039 long-open permits (longest open first).",
     ]);

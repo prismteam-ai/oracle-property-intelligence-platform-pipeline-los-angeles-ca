@@ -727,7 +727,7 @@ function explain(
         break;
       }
       case "long_open_permits": {
-        // Which parcels in the circle have permit data (all of them, or the nearest checked); null: not read.
+        // Which parcels in the circle have permit data (all of them, or the nearest checked); null: not checked.
         const cov = f.permit_data;
         const without = cov?.without_permit_data ?? 0;
         // "the 8,864 parcels with a roof year", or with truncated points "the nearest 25,000 of the 115,373 ...".
@@ -736,7 +736,9 @@ function explain(
           : "";
         const matched =
           f.count === null
-            ? `none of ${parcels} has permit data (outside the City of Los Angeles), so the count is not available (unknown, not 0)`
+            ? cov
+              ? `none of ${parcels} has permit data (outside the City of Los Angeles), so the count is not available (unknown, not 0)`
+              : "whether the parcels with a roof year have permit data was not checked, so the count is not available (unknown, not 0)"
             : `${fmt(f.count)} match${without > 0 ? ` (${fmt(without)} of ${parcels} without permit data: outside the City of Los Angeles)` : ""}`;
         reasoning.push(
           `searched long-open permits, ${LONG_OPEN_SCOPE}, within ${f.radius_miles} mi of ${label} open at least ${fmt(f.min_open_days)} days${f.max_open_days !== null ? ` and at most ${fmt(f.max_open_days)}` : ""}: ${matched}, ${f.returned} listed`,

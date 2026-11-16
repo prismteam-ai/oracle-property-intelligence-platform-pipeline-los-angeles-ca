@@ -2904,6 +2904,105 @@ describe("prompt p and the long-open filter, with the scripted model", () => {
     ]);
   });
 
+  test("counts: long_open_permits with truncated points, every parcel checked with permit data: checked, matched and complete are compared; a result without the permit_data block fails", async () => {
+    const { queries } = fakeQueries();
+    const input = {
+      ...VAN_NUYS_POINT,
+      radius_miles: 1,
+      min_open_days: 1826,
+      limit: 10,
+    };
+    const o = await runTool("long_open_permits", input, queries);
+    const call = (result: unknown): ToolCallRecord => ({
+      id: "t1",
+      name: "long_open_permits",
+      input,
+      result,
+      is_error: false,
+    });
+    expect(await checkCounts([call(o.content)], queries)).toEqual({
+      result: "pass",
+      details: [
+        "long_open_permits: equal (parcels.points: the nearest 3 of 42 checked, all with permit data; permits.longOpen: count 57, 2 IDs)",
+      ],
+    });
+    const without = { ...(o.content as Record<string, unknown>) };
+    delete without.permit_data;
+    const c = await checkCounts([call(without)], queries);
+    expect(c.result).toBe("fail");
+    expect(c.details).toEqual([
+      "long_open_permits: permit_data checked: tool undefined ≠ direct 3; permit_data matched: tool undefined ≠ direct 42; permit_data complete: tool undefined ≠ direct false",
+    ]);
+  });
+
+  test("counts: long_open_permits where the parcels.points read fails: a list that finds no permit is not available (null), never 0; a count above 0 stands", async () => {
+    const { queries } = fakeQueries();
+    const failing = (longOpenCount: number | null): DataQueries => ({
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async () => {
+          throw new Error("boom");
+        },
+      },
+      permits: {
+        ...queries.permits,
+        longOpen: async (i) =>
+          longOpenCount === null
+            ? queries.permits.longOpen(i)
+            : {
+                ...(await queries.permits.longOpen(i)),
+                count: longOpenCount,
+                items: [],
+                next_offset: null,
+              },
+      },
+    });
+    const input = {
+      ...VAN_NUYS_POINT,
+      radius_miles: 1,
+      min_open_days: 1826,
+      limit: 10,
+    };
+    const call = (result: unknown): ToolCallRecord => ({
+      id: "t1",
+      name: "long_open_permits",
+      input,
+      result,
+      is_error: false,
+    });
+    const none = failing(0);
+    const o = await runTool("long_open_permits", input, none);
+    expect(await checkCounts([call(o.content)], none)).toEqual({
+      result: "pass",
+      details: [
+        "long_open_permits: equal (parcels.points: failed, not checked; permits.longOpen: count not available, 0 IDs)",
+      ],
+    });
+    const zero = await checkCounts(
+      [
+        call({
+          ...(o.content as Record<string, unknown>),
+          count: 0,
+          status: undefined,
+        }),
+      ],
+      none,
+    );
+    expect(zero.result).toBe("fail");
+    expect(zero.details).toEqual([
+      'long_open_permits: count: tool 0 ≠ direct null; status: tool undefined ≠ direct "not_available"',
+    ]);
+    const found = failing(null);
+    const f = await runTool("long_open_permits", input, found);
+    expect(await checkCounts([call(f.content)], found)).toEqual({
+      result: "pass",
+      details: [
+        "long_open_permits: equal (parcels.points: failed, not checked; permits.longOpen: count 57, 2 IDs)",
+      ],
+    });
+  });
+
   test("contractors_named needs long_open_permits among the expected tools", () => {
     const a2 = byId("a2-readme-110-follow-up");
     const bad = promptsFileSchema.safeParse([

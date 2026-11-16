@@ -333,36 +333,57 @@ async function compareDirect(
     case "long_open_permits":
       direct = async () => {
         // Which parcels in the circle have permit data or a long-open mark (parcels.points as the tool reads it): with
-        // parcels checked and none of them covered, a list that finds no permit is not available (null), never 0.
+        // parcels checked and none of them covered, or with the read failed (not checked), a list that finds no permit
+        // is not available (null), never 0.
         const own =
           typeof input.max_open_days === "number"
             ? { max_open_days: input.max_open_days }
             : {};
-        const p = await q.parcels.points({
-          lat: n("lat"),
-          lon: n("lon"),
-          radius_miles: n("radius_miles"),
-          threshold_years: COVERAGE_THRESHOLD_YEARS,
-          min_open_days: n("min_open_days"),
-          ...own,
-        });
-        const covered = p.permit_data_available.filter(
-          (m, i) => m === 1 || p.long_open_permit[i] === 1,
-        ).length;
-        const noData = p.id.length > 0 && covered === 0;
-        cmp(
-          "permit_data without_permit_data",
-          rec(r.permit_data).without_permit_data ?? 0,
-          p.id.length - covered,
-        );
+        const p = await q.parcels
+          .points({
+            lat: n("lat"),
+            lon: n("lon"),
+            radius_miles: n("radius_miles"),
+            threshold_years: COVERAGE_THRESHOLD_YEARS,
+            min_open_days: n("min_open_days"),
+            ...own,
+          })
+          .catch(() => null);
+        const said: string[] = [];
+        let noData: boolean;
+        if (p === null) {
+          // Not checked: the result has no permit_data.
+          noData = true;
+          cmp("permit_data", r.permit_data, undefined);
+          said.push("parcels.points: failed, not checked");
+        } else {
+          const covered = p.permit_data_available.filter(
+            (m, i) => m === 1 || p.long_open_permit[i] === 1,
+          ).length;
+          noData = p.id.length > 0 && covered === 0;
+          cmp(
+            "permit_data without_permit_data",
+            rec(r.permit_data).without_permit_data ?? 0,
+            p.id.length - covered,
+          );
+          // With truncated points, the nearest checked of how many there are in all (as for search_aged_roofs).
+          if (p.truncated) {
+            cmp("permit_data checked", rec(r.permit_data).checked, p.id.length);
+            cmp("permit_data matched", rec(r.permit_data).matched, p.count);
+            cmp("permit_data complete", rec(r.permit_data).complete, false);
+          }
+          // The parcels without permit data first, when there are any.
+          if (covered < p.id.length)
+            said.push(
+              `parcels.points: ${p.id.length - covered} of ${p.id.length} checked without permit data`,
+            );
+          else if (p.truncated)
+            said.push(
+              `parcels.points: the nearest ${p.id.length} of ${p.count} checked, all with permit data`,
+            );
+        }
         // Each list of the result (with with_contractor_window, the labeled longest-open and within-window lists)
-        // against its own direct query; the parcels without permit data first, when there are any.
-        const said: string[] =
-          covered < p.id.length
-            ? [
-                `parcels.points: ${p.id.length - covered} of ${p.id.length} checked without permit data`,
-              ]
-            : [];
+        // against its own direct query.
         for (const list of longOpenLists(r, input)) {
           const d = await q.permits.longOpen({
             lat: n("lat"),

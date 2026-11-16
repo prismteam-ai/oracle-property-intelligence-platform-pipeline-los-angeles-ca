@@ -1348,6 +1348,55 @@ describe("outside the City of Los Angeles", () => {
     );
   });
 
+  test("long_open_permits whose permit-data check failed and whose list found no permit: not available, said as not checked, no place gap", async () => {
+    const { queries } = fakeQueries();
+    const failing: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async () => {
+          throw new Error("boom");
+        },
+      },
+      permits: {
+        ...queries.permits,
+        longOpen: async (i) => ({
+          ...(await queries.permits.longOpen(i)),
+          count: 0,
+          items: [],
+          next_offset: null,
+        }),
+      },
+    };
+    const model = new ScriptedModel([
+      toolReply([{ name: "resolve_place", input: { name: "Pasadena" } }]),
+      (p) => {
+        const c = resolvedCenter(p);
+        return toolReply([
+          {
+            name: "long_open_permits",
+            input: { lat: c.lat, lon: c.lon, radius_miles: 1 },
+          },
+        ]);
+      },
+      textReply("Whether there is permit data there was not checked."),
+    ]);
+    const a = await runAgent(
+      {
+        question: "Which permits near Pasadena have been open for many years?",
+      },
+      { model, queries: failing, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    expect(a.reasoning).toContain(
+      "within 1 mi of Pasadena open at least 1,826 days: whether the parcels with a roof year have permit data was not checked, so the count is not available (unknown, not 0), 0 listed",
+    );
+    expect(a.gaps).toContain(
+      "parcels.points failed (boom): whether the parcels within 1 mi that have a roof year have permit data (the City of Los Angeles) was not checked.",
+    );
+    expect(a.gaps.some((g) => g.startsWith("Pasadena is outside"))).toBe(false);
+  });
+
   test("a search whose items all lack permit data adds the place's gap", async () => {
     const { queries } = fakeQueries();
     const model = new ScriptedModel([
@@ -2290,7 +2339,7 @@ const without8fc8821Additions = (prompt: string): string => {
 const DESCRIPTION_ADDED_SINCE_8FC8821: Readonly<Record<string, string>> = {
   // long_open_permits' coverage rule (the rule search_aged_roofs' description states for its long-open filter).
   long_open_permits:
-    " Permits are served for the City of Los Angeles only: where no parcel within the radius has permit data the count is not available (count null, status not_available), never 0, and permit_data states how many parcels in the circle have none.",
+    " Permits are served for the City of Los Angeles only: the parcels within the radius that have a roof year (only the nearest when there are more than the data API marks) are checked for permit data, and permit_data states how many have none and, when only the nearest were checked, how many there are in all. Where the list finds no permit and the check could not be made, or parcels were checked and none has permit data, the count is not available (count null, status not_available), never 0.",
 };
 const without8fc8821DescriptionAdditions = (
   t: Anthropic.Tool,
