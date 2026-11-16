@@ -93,6 +93,28 @@
     }
   },
   {
+    "id": "d2-pasadena-long-open",
+    "case": "d",
+    "group": "d2-pasadena-long-open",
+    "note": "Long-open permits near a place outside the City of Los Angeles: Pasadena resolves (jurisdiction PASADENA) and none of the 8,864 parcels with a roof year within one mile of its center has permit data on the served run, so long_open_permits' count is not available (null, status not_available), never 0; the counts check compares it with the direct parcels.points marks and permits.longOpen. The outside statement is a tool gap, from which the agent raises Pasadena's outside_city_of_la gap.",
+    "question": "Which permits within one mile of Pasadena have been open for many years?",
+    "expected": {
+      "tools": ["resolve_place", "long_open_permits"],
+      "tool_inputs": {
+        "long_open_permits": { "radius_miles": 1, "min_open_days": 1826 }
+      },
+      "gaps": ["outside_city_of_la"],
+      "refused": false,
+      "stated_counts": true,
+      "place": {
+        "outcome": "resolved",
+        "name": "Pasadena",
+        "jurisdiction": "PASADENA",
+        "parcel_count": 39990
+      }
+    }
+  },
+  {
     "id": "e-springfield-unknown",
     "case": "e",
     "group": "e-springfield",

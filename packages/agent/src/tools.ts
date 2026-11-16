@@ -203,6 +203,15 @@ export type ToolName = keyof typeof toolSchemas;
 export const TOOL_NAMES = Object.keys(toolSchemas) as ToolName[];
 export type ToolInput<N extends ToolName> = z.output<(typeof toolSchemas)[N]>;
 
+/**
+ * The sentence long_open_permits' description gained with its coverage rule (the rule search_aged_roofs' description
+ * states for its long-open filter).
+ */
+const LONG_OPEN_COVERAGE_DESCRIPTION =
+  "Permits are served for the City of Los Angeles only: where no parcel within the radius has permit data the count " +
+  "is not available (count null, status not_available), never 0, and permit_data states how many parcels in the " +
+  "circle have none.";
+
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   resolve_place:
     "Resolve a place name (city, community or postal city) to a search center using only the run's own parcels: " +
@@ -229,7 +238,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "with_contractor_window, a second list follows: the longest-open permits issued within the contractor window " +
     "(at most the stated number of days open), each list labeled; each of its items carries its permit's contractor " +
     "rows (business name, license number, license class, canonical name, name variant count, owner-builder) and " +
-    "contractor_status: named, owner-builder, none stated or not read (with why).",
+    "contractor_status: named, owner-builder, none stated or not read (with why). " +
+    LONG_OPEN_COVERAGE_DESCRIPTION,
   parcel_detail:
     "One parcel's property facts (address, year built, effective roof year and basis, use type, coordinates, " +
     "whether permit data covers it) and its provenance: source name and collection time (for a PERMIT roof year also " +
@@ -290,8 +300,11 @@ export type ToolFact =
       radius_miles: number;
       min_open_days: number;
       max_open_days: number | null;
-      count: number;
+      /** Null: not available (no parcel checked in the circle has permit data), never 0. */
+      count: number | null;
       returned: number;
+      /** Which parcels in the circle have permit data (parcels.points) and how many it counts; null: not read. */
+      permit_data: (PermitCoverage & { parcels: number }) | null;
       /** With with_contractor_window: the within-window list (or why it is missing); absent without it. */
       within_window?: WithinWindowFact;
     }
@@ -500,6 +513,15 @@ export interface PermitCoverage {
  * coverage guessed.
  */
 function permitCoverage(p: PointsResult, aged: number): PermitCoverage {
+  if (p.count !== aged)
+    throw new Error(
+      `the data API's parcels.points counted ${p.count} parcels and its search ${aged}`,
+    );
+  return markedCoverage(p);
+}
+
+/** The permit-data coverage of the points drawn, from their marks (an error when a mark column is missing). */
+function markedCoverage(p: PointsResult): PermitCoverage {
   const marks = p.permit_data_available as unknown;
   if (!Array.isArray(marks) || marks.length !== p.id.length)
     throw new Error(
@@ -509,10 +531,6 @@ function permitCoverage(p: PointsResult, aged: number): PermitCoverage {
   if (!Array.isArray(longOpen) || longOpen.length !== p.id.length)
     throw new Error(
       "the data API's parcels.points did not mark the long-open parcels",
-    );
-  if (p.count !== aged)
-    throw new Error(
-      `the data API's parcels.points counted ${p.count} parcels and its search ${aged}`,
     );
   const withData = marks.filter((m, i) => m === 1 || longOpen[i] === 1).length;
   return {
@@ -534,11 +552,10 @@ const matchingPhrase = (ownership: boolean) =>
 function noPermitDataText(
   c: PermitCoverage,
   aged: number,
-  ownership: boolean,
+  matching: string,
   maxPoints: number,
 ): string | null {
   if (c.without_permit_data === 0) return null;
-  const matching = matchingPhrase(ownership);
   const outside = "outside the City of Los Angeles: no permit data there.";
   if (c.complete)
     return c.with_permit_data === 0
@@ -655,6 +672,115 @@ function longOpenParcels(
       text,
     },
   };
+}
+
+/**
+ * The roof-age threshold of long_open_permits' parcels.points read: the points always apply a roof-age rule, and 1
+ * year (its smallest) keeps every parcel in the circle whose roof year is more than a year before the roll year.
+ */
+export const COVERAGE_THRESHOLD_YEARS = 1;
+
+/** The parcels long_open_permits checks for permit data, as its texts name them. */
+const areaPhrase = (radiusMiles: number) =>
+  `parcels within ${radiusMiles} mi that have a roof year`;
+
+/**
+ * Which parcels in a long_open_permits circle have permit data: parcels.points over the circle at
+ * COVERAGE_THRESHOLD_YEARS with the call's open-duration window, so a parcel marked long-open counts as having permit
+ * data (as in search_aged_roofs). `parcels` is how many the points count; with truncated points only the nearest
+ * are checked.
+ */
+interface AreaCoverage {
+  coverage: PermitCoverage;
+  parcels: number;
+  max_points: number;
+}
+
+/** The coverage of a long_open_permits circle; an error when the points applied another window or filter. */
+function areaCoverage(
+  p: PointsResult,
+  input: ToolInput<"long_open_permits">,
+): AreaCoverage {
+  if (
+    p.long_open?.min_open_days !== input.min_open_days ||
+    p.long_open.max_open_days !== (input.max_open_days ?? null)
+  )
+    throw new Error(
+      "the data API's parcels.points applied another open-duration window than the call's",
+    );
+  if (p.ownership !== null)
+    throw new Error(
+      "the data API's parcels.points applied an ownership filter",
+    );
+  return {
+    coverage: markedCoverage(p),
+    parcels: p.count,
+    max_points: p.max_points,
+  };
+}
+
+/** The long-open rule as the not-available text names it. */
+const longOpenRuleText = (minOpenDays: number, maxOpenDays: number | null) =>
+  `an issued LADBS roofing-work permit still open at least ${days(minOpenDays)}${maxOpenDays !== null ? ` and at most ${days(maxOpenDays)}` : ""}`;
+
+/**
+ * A long-open list's count where the circle's parcels have no permit data: not available (null, never 0) when
+ * parcels were checked, none of them has permit data or a long-open mark (all are outside the City of Los Angeles)
+ * and the list found no permit; null when the count stands.
+ */
+function notAvailableText(
+  a: AreaCoverage,
+  count: number,
+  radiusMiles: number,
+  rule: string,
+): string | null {
+  const c = a.coverage;
+  if (c.checked === 0 || c.with_permit_data > 0 || count > 0) return null;
+  const area = areaPhrase(radiusMiles);
+  return c.complete
+    ? `Not available: none of the ${num(a.parcels)} ${area} has permit data (all are outside the City of Los Angeles), so whether there are long-open roofing permits (${rule}) is unknown, not 0.`
+    : `Not available: none of the nearest ${num(c.checked)} of the ${num(a.parcels)} ${area} has permit data (all are outside the City of Los Angeles; only those were checked: the data API marks at most ${num(a.max_points)} parcels), so whether there are long-open roofing permits (${rule}) is unknown, not 0. A smaller radius gives a full check.`;
+}
+
+/** A long-open list's count as the result states it: the count, or null with status not_available and why. */
+const statedCount = (count: number, notAvailable: string | null) =>
+  notAvailable === null
+    ? { count }
+    : { count: null, status: "not_available" as const, text: notAvailable };
+
+/**
+ * The circle's permit data as a long_open_permits result states it: the permit_data block (absent when every parcel
+ * checked has permit data) and its gap, or the gap of a coverage not checked.
+ */
+function areaStated(
+  cov: Read<AreaCoverage>,
+  radiusMiles: number,
+): { permit_data: Record<string, unknown> | null; gaps: string[] } {
+  if (!cov.ok)
+    return {
+      permit_data: null,
+      gaps: [
+        `${cov.why}: whether the ${areaPhrase(radiusMiles)} have permit data (the City of Los Angeles) was not checked.`,
+      ],
+    };
+  const c = cov.value.coverage;
+  const text = noPermitDataText(
+    c,
+    cov.value.parcels,
+    areaPhrase(radiusMiles),
+    cov.value.max_points,
+  );
+  return text === null
+    ? { permit_data: null, gaps: [] }
+    : {
+        permit_data: {
+          checked: c.checked,
+          without_permit_data: c.without_permit_data,
+          complete: c.complete,
+          text,
+        },
+        gaps: [text],
+      };
 }
 
 /** Allowlisted permit fields shared by long_open_permits and parcel_permits (the contract's PermitFields). */
@@ -973,7 +1099,7 @@ const run = {
         ? noPermitDataText(
             coverage.value,
             res.count,
-            ownership !== null,
+            matchingPhrase(ownership !== null),
             points.max_points,
           )
         : null;
@@ -1096,46 +1222,103 @@ const run = {
         offset: 0,
         limit,
       });
-    const fact = (res: LongOpenResult, items: unknown[]) => ({
+    // Which parcels in the circle have permit data (the City of Los Angeles): parcels.points over the same circle and
+    // window. A read that fails is a stated gap, never a failed call; the counts then stand as read.
+    const readCoverage = () =>
+      q.parcels
+        .points({
+          lat: input.lat,
+          lon: input.lon,
+          radius_miles: input.radius_miles,
+          threshold_years: COVERAGE_THRESHOLD_YEARS,
+          min_open_days: input.min_open_days,
+          ...(input.max_open_days !== undefined
+            ? { max_open_days: input.max_open_days }
+            : {}),
+        })
+        .then(
+          (p): Read<AreaCoverage> => {
+            try {
+              return { ok: true, value: areaCoverage(p, input) };
+            } catch (err) {
+              return { ok: false, why: shortMessage(err) };
+            }
+          },
+          (err: unknown): Read<AreaCoverage> => ({
+            ok: false,
+            why: notRead("parcels.points", err),
+          }),
+        );
+    // The count of a list with its window: null (not available) where no parcel checked has permit data.
+    const notAvailable = (
+      cov: Read<AreaCoverage>,
+      count: number,
+      maxOpenDays: number | null,
+    ) =>
+      cov.ok
+        ? notAvailableText(
+            cov.value,
+            count,
+            input.radius_miles,
+            longOpenRuleText(input.min_open_days, maxOpenDays),
+          )
+        : null;
+    const fact = (
+      res: LongOpenResult,
+      items: unknown[],
+      cov: Read<AreaCoverage>,
+      na: string | null,
+    ) => ({
       tool: "long_open_permits" as const,
       lat: input.lat,
       lon: input.lon,
       radius_miles: input.radius_miles,
       min_open_days: input.min_open_days,
       max_open_days: input.max_open_days ?? null,
-      count: res.count,
+      count: na === null ? res.count : null,
       returned: items.length,
+      permit_data: cov.ok
+        ? { ...cov.value.coverage, parcels: cov.value.parcels }
+        : null,
     });
     if (!input.with_contractor_window) {
-      const [res, src] = await Promise.all([
+      const [res, src, cov] = await Promise.all([
         longOpen(input.max_open_days),
         q.explorer.sources(),
+        readCoverage(),
       ]);
       const ref = sourceRef(src, "permit");
       const list = longOpenList(res, ref, "long_open_permits");
+      const na = notAvailable(cov, res.count, input.max_open_days ?? null);
+      const area = areaStated(cov, input.radius_miles);
       return {
         content: {
-          count: res.count,
+          ...statedCount(res.count, na),
           returned: list.items.length,
           rule: res.rule.text,
           scope: LONG_OPEN_SCOPE,
           source: ref,
+          ...(area.permit_data ? { permit_data: area.permit_data } : {}),
           items: list.items,
           truncated: list.truncated,
         },
         records: list.records,
         ids: list.ids,
-        gaps: list.gaps,
-        fact: fact(res, list.items),
+        gaps: [...area.gaps, ...(na === null ? [] : [na]), ...list.gaps],
+        fact: fact(res, list.items, cov, na),
       };
     }
     // with_contractor_window: one call at a time, each through the data layer's own per-call
     // cap and retry (http-data.ts). The default list first; the window from explorer.sources (the answer's read for
-    // the prompt's contractor end: onceSources, no new call in the agent); then the within-window list.
+    // the prompt's contractor end: onceSources, no new call in the agent); the circle's permit data; then the
+    // within-window list.
     const res = await longOpen(input.max_open_days);
     const src = await q.explorer.sources();
+    const cov = await readCoverage();
     const ref = sourceRef(src, "permit");
     const first = longOpenList(res, ref, "the longest-open list");
+    const na = notAvailable(cov, res.count, input.max_open_days ?? null);
+    const area = areaStated(cov, input.radius_miles);
     const within = await withinWindow(
       input,
       res.rule.reference_date,
@@ -1145,10 +1328,12 @@ const run = {
     let second: ReturnType<typeof longOpenList> | null = null;
     let withinContent: Record<string, unknown>;
     let withinFact: WithinWindowFact;
+    let withinNa: string | null = null;
     let contractorRecords: Citation[] = [];
     let contractorGaps: string[] = [];
     if (within.status === "read") {
       second = longOpenList(within.res, ref, "the within-window list");
+      withinNa = notAvailable(cov, within.res.count, within.maxOpenDays);
       // Each within-window item with its permit's contractor rows, read here.
       const c = await withContractors(
         q,
@@ -1161,7 +1346,7 @@ const run = {
       contractorGaps = c.gaps;
       withinContent = {
         label: `Longest-open permits issued within the contractor window (open at least ${days(input.min_open_days)} and at most ${days(within.maxOpenDays)})`,
-        count: within.res.count,
+        ...statedCount(within.res.count, withinNa),
         returned: second.items.length,
         max_open_days: within.maxOpenDays,
         rule: within.res.rule.text,
@@ -1174,7 +1359,7 @@ const run = {
       withinFact = {
         status: "read",
         max_open_days: within.maxOpenDays,
-        count: within.res.count,
+        count: withinNa === null ? within.res.count : null,
         returned: second.items.length,
         contractors: c.summary,
       };
@@ -1190,10 +1375,11 @@ const run = {
       content: {
         scope: LONG_OPEN_SCOPE,
         source: ref,
+        ...(area.permit_data ? { permit_data: area.permit_data } : {}),
         contractor_window: within.window,
         longest_open: {
           label: `Longest-open permits, any issue date (open at least ${days(input.min_open_days)}${input.max_open_days !== undefined ? ` and at most ${days(input.max_open_days)}` : ""})`,
-          count: res.count,
+          ...statedCount(res.count, na),
           returned: first.items.length,
           rule: res.rule.text,
           items: first.items,
@@ -1208,12 +1394,15 @@ const run = {
       ]),
       ids: [...first.ids, ...(second?.ids ?? [])],
       gaps: [
+        ...area.gaps,
+        ...(na === null ? [] : [na]),
+        ...(withinNa === null ? [] : [withinNa]),
         ...first.gaps,
         ...(second?.gaps ?? []),
         ...contractorGaps,
         ...(withinFact.status === "not_listed" ? [withinFact.gap] : []),
       ],
-      fact: { ...fact(res, first.items), within_window: withinFact },
+      fact: { ...fact(res, first.items, cov, na), within_window: withinFact },
     };
   },
 
@@ -1469,7 +1658,8 @@ export type WithinWindowFact =
   | {
       status: "read";
       max_open_days: number;
-      count: number;
+      /** Null: not available (no parcel checked in the circle has permit data), never 0. */
+      count: number | null;
       returned: number;
       /** How many listed permits got each contractor status. */
       contractors: ContractorSummary;

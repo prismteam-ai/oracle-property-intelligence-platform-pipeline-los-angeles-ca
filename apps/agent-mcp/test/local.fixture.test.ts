@@ -468,7 +468,10 @@ describe("permit tools over the real permits router (writePermitFixture)", () =>
           collected_at: permitSource.retrieved,
         })),
       );
-      expect(o.gaps).toEqual([]);
+      // The fixture's one parcel outside the City of Los Angeles, stated (the count stands).
+      expect(o.gaps).toEqual([
+        `1 of the 9 parcels within ${radius} mi that have a roof year are outside the City of Los Angeles: no permit data there.`,
+      ]);
       expect(JSON.stringify(o.content)).not.toContain(PERMIT_WORK_DESC);
     },
   );
@@ -1071,7 +1074,7 @@ describe("conversation on the permit fixture: pipeline README lines 108 then 110
       },
     ]);
     expect(a2.reasoning).toBe(
-      "Searched long-open permits, roofing work only, within 5 mi of Test City open at least 1,826 days: 5 match, 5 listed; read the permits of parcel 0000000022 (1 permit, 1 contractor row). Rule: long-open permits are roofing work only (the data API's rule: an issued permit for roofing work, open at least 1,826 days; a roof-coating-only permit counts and is flagged).",
+      "Searched long-open permits, roofing work only, within 5 mi of Test City open at least 1,826 days: 5 match (1 of the 9 parcels with a roof year without permit data: outside the City of Los Angeles), 5 listed; read the permits of parcel 0000000022 (1 permit, 1 contractor row). Rule: long-open permits are roofing work only (the data API's rule: an issued permit for roofing work, open at least 1,826 days; a roof-coating-only permit counts and is flagged).",
     );
     expect(a2.assumptions).toContain(
       "Radius and center reused from the previous question (Test City, 5 mi).",

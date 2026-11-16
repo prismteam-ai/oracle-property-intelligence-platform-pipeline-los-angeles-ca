@@ -280,6 +280,17 @@ describe("runTool", () => {
         },
       },
       { fn: "explorer.sources", input: undefined },
+      // The circle's permit data: parcels.points at the coverage threshold with the call's window.
+      {
+        fn: "parcels.points",
+        input: {
+          lat: 34.2,
+          lon: -118.45,
+          radius_miles: 5,
+          threshold_years: 1,
+          min_open_days: 1826,
+        },
+      },
     ]);
     const c = o.content as {
       rule: string;
@@ -354,7 +365,7 @@ describe("runTool", () => {
       queries,
     );
     expect(all.ok).toBe(true);
-    expect(calls[2]!.input).toMatchObject({ max_open_days: 9000, limit: 25 });
+    expect(calls[3]!.input).toMatchObject({ max_open_days: 9000, limit: 25 });
   });
   test("roof-age basis: the first word of the stored label", () => {
     expect(basisWord(ROOF_AGE_BASIS.proxy)).toBe("PROXY");
@@ -1144,7 +1155,7 @@ describe("long_open_permits: with_contractor_window", () => {
     ]);
   });
 
-  test("on: the default call, then explorer.sources, then the within-window call (one at a time); both lists labeled, the limit and the two dates stated", async () => {
+  test("on: the default call, then explorer.sources, then parcels.points (the circle's permit data), then the within-window call (one at a time); both lists labeled, the limit and the two dates stated", async () => {
     const { queries, calls } = fakeQueries();
     let inFlight = 0;
     let most = 0;
@@ -1160,6 +1171,10 @@ describe("long_open_permits: with_contractor_window", () => {
       };
     const q: DataQueries = {
       ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: tracked(queries.parcels.points),
+      },
       explorer: {
         runSummary: queries.explorer.runSummary,
         sources: tracked(queries.explorer.sources),
@@ -1180,12 +1195,19 @@ describe("long_open_permits: with_contractor_window", () => {
     expect(calls.map((c) => c.fn)).toEqual([
       "permits.longOpen",
       "explorer.sources",
+      "parcels.points",
       "permits.longOpen",
       "permits.forParcel",
       "permits.forParcel",
     ]);
     expect(calls[0]!.input).not.toHaveProperty("max_open_days");
-    expect(calls[2]!.input).toMatchObject({
+    // The points with the call's window (no maximum) at the coverage threshold.
+    expect(calls[2]!.input).toEqual({
+      ...at,
+      threshold_years: 1,
+      min_open_days: 1826,
+    });
+    expect(calls[3]!.input).toMatchObject({
       min_open_days: 1826,
       max_open_days: 5062,
       limit: 5,
@@ -2240,5 +2262,287 @@ describe("search_aged_roofs: permit data of the matching parcels (the City of Lo
         .sort(),
     ).toEqual(["parcels.points", "parcels.search"]);
     expect(api.peak()).toBe(1);
+  });
+});
+
+describe("long_open_permits: permit data of the circle's parcels (the City of Los Angeles only)", () => {
+  const PASADENA = { ...PASADENA_RESOLVED, radius_miles: 1 };
+  const MIXED = { ...MIXED_CENTER, radius_miles: 1 };
+  const AT = { lat: 34.2, lon: -118.45, radius_miles: 1 };
+  /** The fake with every parcel in the circle drawn (3 of 3, not truncated). */
+  function complete(base: DataQueries): DataQueries {
+    return {
+      ...base,
+      parcels: {
+        ...base.parcels,
+        points: async (i) => ({
+          ...(await base.parcels.points(i)),
+          count: 3,
+          truncated: false,
+        }),
+      },
+    };
+  }
+  /** The fake where permits.longOpen finds no permit (as at a place outside the City of Los Angeles). */
+  function noPermits(base: DataQueries): DataQueries {
+    return {
+      ...base,
+      permits: {
+        ...base.permits,
+        longOpen: async (i) => ({
+          ...(await base.permits.longOpen(i)),
+          count: 0,
+          items: [],
+          next_offset: null,
+        }),
+      },
+    };
+  }
+  const ALL_OUTSIDE =
+    "All 3 parcels within 1 mi that have a roof year are outside the City of Los Angeles: no permit data there.";
+  const NOT_AVAILABLE =
+    "Not available: none of the 3 parcels within 1 mi that have a roof year has permit data (all are outside the City of Los Angeles), so whether there are long-open roofing permits (an issued LADBS roofing-work permit still open at least 1,826 days) is unknown, not 0.";
+
+  test("all outside: count null with status not_available and its text, never 0; permit_data and both statements in the gaps; the fact's count null", async () => {
+    const { queries, calls } = fakeQueries();
+    const o = await runTool(
+      "long_open_permits",
+      PASADENA,
+      noPermits(complete(queries)),
+    );
+    expect(o.ok).toBe(true);
+    expect(o.content).toEqual({
+      count: null,
+      status: "not_available",
+      text: NOT_AVAILABLE,
+      returned: 0,
+      rule: "Open at least min_open_days days (fake rule).",
+      scope: "roofing work only",
+      source: {
+        source_name: FAKE_SOURCES.permit,
+        license: null,
+        attribution: "LADBS",
+        retrieved: PERMIT_RETRIEVED,
+      },
+      permit_data: {
+        checked: 3,
+        without_permit_data: 3,
+        complete: true,
+        text: ALL_OUTSIDE,
+      },
+      items: [],
+      truncated: false,
+    });
+    // The outside statement (no place: the agent adds the place's gap), then the not-available text.
+    expect(o.gaps).toEqual([ALL_OUTSIDE, NOT_AVAILABLE]);
+    expect(o.fact).toMatchObject({
+      tool: "long_open_permits",
+      count: null,
+      returned: 0,
+      permit_data: {
+        checked: 3,
+        with_permit_data: 0,
+        without_permit_data: 3,
+        complete: true,
+        parcels: 3,
+      },
+    });
+    expect(calls.find((c) => c.fn === "parcels.points")!.input).toEqual({
+      ...PASADENA,
+      threshold_years: 1,
+      min_open_days: 1826,
+    });
+  });
+
+  test("all outside among the nearest checked (truncated points): not available among those, stated as such", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool("long_open_permits", PASADENA, noPermits(queries));
+    const text =
+      "Not available: none of the nearest 3 of the 42 parcels within 1 mi that have a roof year has permit data (all are outside the City of Los Angeles; only those were checked: the data API marks at most 3 parcels), so whether there are long-open roofing permits (an issued LADBS roofing-work permit still open at least 1,826 days) is unknown, not 0. A smaller radius gives a full check.";
+    const outside =
+      "All of the nearest 3 of the 42 parcels within 1 mi that have a roof year (only those were checked: the data API marks at most 3 parcels) are outside the City of Los Angeles: no permit data there.";
+    expect(o.content).toMatchObject({
+      count: null,
+      status: "not_available",
+      text,
+      permit_data: {
+        checked: 3,
+        without_permit_data: 3,
+        complete: false,
+        text: outside,
+      },
+    });
+    expect(o.gaps).toEqual([outside, text]);
+  });
+
+  test("all outside with with_contractor_window: both lists not available (null, each with its window's text), permit_data once", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool(
+      "long_open_permits",
+      { ...PASADENA, with_contractor_window: true },
+      noPermits(complete(queries)),
+    );
+    expect(o.ok).toBe(true);
+    const withinText =
+      "Not available: none of the 3 parcels within 1 mi that have a roof year has permit data (all are outside the City of Los Angeles), so whether there are long-open roofing permits (an issued LADBS roofing-work permit still open at least 1,826 days and at most 5,062 days) is unknown, not 0.";
+    const c = o.content as Record<string, Record<string, unknown>>;
+    expect(Object.keys(c)).toEqual([
+      "scope",
+      "source",
+      "permit_data",
+      "contractor_window",
+      "longest_open",
+      "within_contractor_window",
+    ]);
+    expect(c.permit_data).toEqual({
+      checked: 3,
+      without_permit_data: 3,
+      complete: true,
+      text: ALL_OUTSIDE,
+    });
+    expect(c.longest_open).toMatchObject({
+      count: null,
+      status: "not_available",
+      text: NOT_AVAILABLE,
+      returned: 0,
+      items: [],
+    });
+    expect(c.within_contractor_window).toMatchObject({
+      count: null,
+      status: "not_available",
+      text: withinText,
+      returned: 0,
+      max_open_days: 5062,
+      items: [],
+    });
+    expect(o.gaps).toEqual([ALL_OUTSIDE, NOT_AVAILABLE, withinText]);
+    expect(o.fact).toMatchObject({
+      count: null,
+      within_window: { status: "read", count: null, returned: 0 },
+    });
+  });
+
+  test("mixed: the count stands; permit_data says how many parcels in the circle have no permit data", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool("long_open_permits", MIXED, complete(queries));
+    const outside =
+      "1 of the 3 parcels within 1 mi that have a roof year are outside the City of Los Angeles: no permit data there.";
+    const c = o.content as Record<string, unknown>;
+    expect(c).toMatchObject({
+      count: 57,
+      returned: 2,
+      permit_data: {
+        checked: 3,
+        without_permit_data: 1,
+        complete: true,
+        text: outside,
+      },
+    });
+    expect(c).not.toHaveProperty("status");
+    expect(o.gaps).toEqual([
+      outside,
+      "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
+    ]);
+    expect(o.fact).toMatchObject({
+      count: 57,
+      permit_data: { with_permit_data: 2, without_permit_data: 1 },
+    });
+  });
+
+  test("all inside: the result and gaps are as before (no permit_data, no status), with and without with_contractor_window", async () => {
+    const { queries } = fakeQueries();
+    for (const q of [queries, complete(queries)]) {
+      const o = await runTool("long_open_permits", AT, q);
+      expect(Object.keys(o.content as object)).toEqual([
+        "count",
+        "returned",
+        "rule",
+        "scope",
+        "source",
+        "items",
+        "truncated",
+      ]);
+      expect(o.gaps).toEqual([
+        "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
+      ]);
+      const w = await runTool(
+        "long_open_permits",
+        { ...AT, with_contractor_window: true },
+        q,
+      );
+      const c = w.content as Record<string, Record<string, unknown>>;
+      expect(Object.keys(c)).toEqual([
+        "scope",
+        "source",
+        "contractor_window",
+        "longest_open",
+        "within_contractor_window",
+      ]);
+      expect(c.longest_open).not.toHaveProperty("status");
+      expect(c.within_contractor_window).not.toHaveProperty("status");
+      expect(w.gaps.some((g) => g.includes("City of Los Angeles"))).toBe(false);
+    }
+  });
+
+  test("no parcel with permit data but a permit found: the count stands (a permit found is never unknown)", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool("long_open_permits", PASADENA, complete(queries));
+    expect(o.content).toMatchObject({
+      count: 57,
+      permit_data: { without_permit_data: 3, text: ALL_OUTSIDE },
+    });
+    expect(o.content).not.toHaveProperty("status");
+    expect(o.gaps).toContain(ALL_OUTSIDE);
+  });
+
+  test("the points read fails or applies another window: a stated gap, the count as read; max_open_days reaches the points", async () => {
+    const { queries, calls } = fakeQueries();
+    const failing: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async () => {
+          throw new Error("boom");
+        },
+      },
+    };
+    const o = await runTool("long_open_permits", PASADENA, failing);
+    expect(o.ok).toBe(true);
+    expect(o.content).toMatchObject({ count: 57 });
+    expect(o.gaps[0]).toBe(
+      "parcels.points failed (boom): whether the parcels within 1 mi that have a roof year have permit data (the City of Los Angeles) was not checked.",
+    );
+    expect(o.fact).toMatchObject({ count: 57, permit_data: null });
+    const otherWindow: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async (i) => ({
+          ...(await queries.parcels.points(i)),
+          long_open: { min_open_days: 1826, max_open_days: null },
+        }),
+      },
+    };
+    const w = await runTool(
+      "long_open_permits",
+      { ...PASADENA, max_open_days: 4000 },
+      otherWindow,
+    );
+    expect(w.gaps[0]).toBe(
+      "the data API's parcels.points applied another open-duration window than the call's: whether the parcels within 1 mi that have a roof year have permit data (the City of Los Angeles) was not checked.",
+    );
+    await runTool(
+      "long_open_permits",
+      { ...PASADENA, max_open_days: 4000 },
+      queries,
+    );
+    expect(
+      calls.filter((c) => c.fn === "parcels.points").at(-1)!.input,
+    ).toEqual({
+      ...PASADENA,
+      threshold_years: 1,
+      min_open_days: 1826,
+      max_open_days: 4000,
+    });
   });
 });

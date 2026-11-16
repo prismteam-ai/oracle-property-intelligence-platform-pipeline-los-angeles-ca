@@ -154,8 +154,10 @@ describe("the server over the hosted data API", () => {
         (res.content as Array<{ text: string }>)[0]!.text,
       ) as { result: { count: number } };
       expect(body.result.count).toBe(57);
+      // The permits, their source and the circle's permit data (parcels.points).
       expect(api.requests.map((r) => r.route).sort()).toEqual([
         "explorer.sources",
+        "parcels.points",
         "permits.longOpen",
       ]);
       for (const r of api.requests)

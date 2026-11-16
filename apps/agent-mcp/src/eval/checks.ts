@@ -20,6 +20,7 @@
  */
 import type { OwnershipBasis } from "@oracle-la/api/contract";
 import {
+  COVERAGE_THRESHOLD_YEARS,
   DEFAULT_MIN_OPEN_DAYS,
   DEFAULT_OWNERSHIP_BASIS,
   NOT_RUN_PREFIX,
@@ -331,9 +332,37 @@ async function compareDirect(
       break;
     case "long_open_permits":
       direct = async () => {
+        // Which parcels in the circle have permit data or a long-open mark (parcels.points as the tool reads it): with
+        // parcels checked and none of them covered, a list that finds no permit is not available (null), never 0.
+        const own =
+          typeof input.max_open_days === "number"
+            ? { max_open_days: input.max_open_days }
+            : {};
+        const p = await q.parcels.points({
+          lat: n("lat"),
+          lon: n("lon"),
+          radius_miles: n("radius_miles"),
+          threshold_years: COVERAGE_THRESHOLD_YEARS,
+          min_open_days: n("min_open_days"),
+          ...own,
+        });
+        const covered = p.permit_data_available.filter(
+          (m, i) => m === 1 || p.long_open_permit[i] === 1,
+        ).length;
+        const noData = p.id.length > 0 && covered === 0;
+        cmp(
+          "permit_data without_permit_data",
+          rec(r.permit_data).without_permit_data ?? 0,
+          p.id.length - covered,
+        );
         // Each list of the result (with with_contractor_window, the labeled longest-open and within-window lists)
-        // against its own direct query.
-        const said: string[] = [];
+        // against its own direct query; the parcels without permit data first, when there are any.
+        const said: string[] =
+          covered < p.id.length
+            ? [
+                `parcels.points: ${p.id.length - covered} of ${p.id.length} checked without permit data`,
+              ]
+            : [];
         for (const list of longOpenLists(r, input)) {
           const d = await q.permits.longOpen({
             lat: n("lat"),
@@ -348,7 +377,13 @@ async function compareDirect(
             limit: list.limit,
           });
           const tag = list.name ? `${list.name} ` : "";
-          cmp(`${tag}count`, list.r.count, d.count);
+          const notAvailable = noData && d.count === 0;
+          cmp(`${tag}count`, list.r.count, notAvailable ? null : d.count);
+          cmp(
+            `${tag}status`,
+            list.r.status,
+            notAvailable ? "not_available" : undefined,
+          );
           cmpList(
             `${tag}permit numbers`,
             ids(list.r.items, "permit_number"),
@@ -360,7 +395,7 @@ async function compareDirect(
             d.items.map((x) => x.parcel_id),
           );
           said.push(
-            `permits.longOpen${list.name ? ` (${list.name})` : ""}: count ${d.count}, ${d.items.length} IDs`,
+            `permits.longOpen${list.name ? ` (${list.name})` : ""}: count ${notAvailable ? "not available" : d.count}, ${d.items.length} IDs`,
           );
         }
         return said.join("; ");

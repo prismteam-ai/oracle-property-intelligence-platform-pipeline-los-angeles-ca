@@ -180,6 +180,7 @@ export { systemPrompt } from "./prompt.ts";
 export {
   CANONICAL_NAME_NOTE,
   CONTRACTOR_READS_MS,
+  COVERAGE_THRESHOLD_YEARS,
   DEFAULT_MIN_OPEN_DAYS,
   LONG_OPEN_SCOPE,
   MAX_OPEN_DAYS,

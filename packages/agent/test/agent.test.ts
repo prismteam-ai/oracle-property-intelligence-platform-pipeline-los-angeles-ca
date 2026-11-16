@@ -30,7 +30,7 @@ import {
   STANDARD_GAPS,
   peopleRefusalText,
 } from "../src/policy.ts";
-import type { SourceList } from "../src/permit-api.ts";
+import type { DataQueries, SourceList } from "../src/permit-api.ts";
 import { systemPrompt } from "../src/prompt.ts";
 import { anthropicTools } from "../src/tools.ts";
 import {
@@ -313,6 +313,7 @@ describe("demo prompts with a center (pipeline README lines 108 and 110, [city x
     expect(calls.map((c) => c.fn)).toEqual([
       "explorer.sources",
       "permits.longOpen",
+      "parcels.points",
       "permits.forParcel",
     ]);
     expect(calls[1]!.input).toEqual({
@@ -324,7 +325,7 @@ describe("demo prompts with a center (pipeline README lines 108 and 110, [city x
       offset: 0,
       limit: 10,
     });
-    expect(calls[2]!.input).toEqual({ parcel_id: "1000000001" });
+    expect(calls[3]!.input).toEqual({ parcel_id: "1000000001" });
     expect(a.records.map((r) => `${r.kind}:${r.id}`)).toEqual([
       "permit:16010-10000-00001",
       "permit:16010-10000-00003",
@@ -513,6 +514,7 @@ describe("CRM README line 13 ([city xyz] → Van Nuys)", () => {
       "explorer.sources",
       "places.resolve",
       "permits.longOpen",
+      "parcels.points",
     ]);
     expect(calls[1]!.input).toEqual({ name: "Van Nuys" });
     expect(calls[2]!.input).toEqual({
@@ -1275,6 +1277,74 @@ describe("outside the City of Los Angeles", () => {
     const filtered = await ask(true);
     expect(filtered.reasoning).toContain(
       ": 42 match, of which at least 1 parcels (not permits) have a long-open roofing permit (open at least 1,826 days) among the nearest checked; 1 of the nearest checked have no permit data (outside the City of Los Angeles), unknown there, 1 listed",
+    );
+  });
+
+  test("long_open_permits where no parcel in the circle has permit data: the count is not available, the place's gap is added, the mixed case says how many lack it", async () => {
+    const { queries } = fakeQueries();
+    // permits.longOpen finds no permit at Pasadena (outside the City of Los Angeles); the points draw all 3 parcels.
+    const outside: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async (i) => ({
+          ...(await queries.parcels.points(i)),
+          count: 3,
+          truncated: false,
+        }),
+      },
+      permits: {
+        ...queries.permits,
+        longOpen: async (i) =>
+          i.lat === PASADENA_RESOLVED.lat && i.lon === PASADENA_RESOLVED.lon
+            ? {
+                ...(await queries.permits.longOpen(i)),
+                count: 0,
+                items: [],
+                next_offset: null,
+              }
+            : queries.permits.longOpen(i),
+      },
+    };
+    const ask = async (name: string, center?: { lat: number; lon: number }) => {
+      const model = new ScriptedModel([
+        toolReply([{ name: "resolve_place", input: { name } }]),
+        (p) => {
+          const c = center ?? resolvedCenter(p);
+          return toolReply([
+            {
+              name: "long_open_permits",
+              input: { lat: c.lat, lon: c.lon, radius_miles: 1 },
+            },
+          ]);
+        },
+        textReply("Permit data covers the City of Los Angeles only."),
+      ]);
+      return runAgent(
+        {
+          question: `Which permits near ${name} have been open for many years?`,
+        },
+        { model, queries: outside, settings: SETTINGS },
+      );
+    };
+    const a = await ask("Pasadena");
+    expect(a.status).toBe("answered");
+    expect(a.gaps).toContain(
+      "Pasadena is outside the City of Los Angeles: no permit data there.",
+    );
+    expect(a.gaps).toContain(
+      "All 3 parcels within 1 mi that have a roof year are outside the City of Los Angeles: no permit data there.",
+    );
+    expect(a.reasoning).toContain(
+      "within 1 mi of Pasadena open at least 1,826 days: none of the 3 parcels with a roof year has permit data (outside the City of Los Angeles), so the count is not available (unknown, not 0), 0 listed",
+    );
+    // A circle across the city line: the count stands, the parcels without permit data are stated, no place gap.
+    const mixed = await ask("Van Nuys", MIXED_CENTER);
+    expect(mixed.reasoning).toContain(
+      ": 57 match (1 of the 3 parcels with a roof year without permit data: outside the City of Los Angeles), 2 listed",
+    );
+    expect(mixed.gaps.some((g) => g.startsWith("Van Nuys is outside"))).toBe(
+      false,
     );
   });
 
@@ -2213,6 +2283,27 @@ const without8fc8821Additions = (prompt: string): string => {
   return out;
 };
 
+/**
+ * Tool-description sentences added since 8fc8821, each appended once after a space; nothing else of a description
+ * changed.
+ */
+const DESCRIPTION_ADDED_SINCE_8FC8821: Readonly<Record<string, string>> = {
+  // long_open_permits' coverage rule (the rule search_aged_roofs' description states for its long-open filter).
+  long_open_permits:
+    " Permits are served for the City of Los Angeles only: where no parcel within the radius has permit data the count is not available (count null, status not_available), never 0, and permit_data states how many parcels in the circle have none.",
+};
+const without8fc8821DescriptionAdditions = (
+  t: Anthropic.Tool,
+): Anthropic.Tool => {
+  const added = DESCRIPTION_ADDED_SINCE_8FC8821[t.name];
+  if (added === undefined) return t;
+  expect(t.description!.split(added)).toEqual([
+    t.description!.slice(0, -added.length),
+    "",
+  ]);
+  return { ...t, description: t.description!.slice(0, -added.length) };
+};
+
 /** A tool definition without its cache marker. */
 const unmarked = (t: Anthropic.Tool): Anthropic.Tool => {
   const copy = { ...t };
@@ -2272,7 +2363,7 @@ describe("prompt caching (provider anthropic)", () => {
       }
   });
 
-  test("no word changes: the system text and every tool's name, description and input_schema are byte-identical to 8fc8821's", async () => {
+  test("no word changes: the system text and every tool's name, description and input_schema are byte-identical to 8fc8821's, but for the listed additions", async () => {
     expect(without8fc8821Additions(systemPrompt(5))).toBe(
       AT_8FC8821.system.default_5,
     );
@@ -2281,7 +2372,9 @@ describe("prompt caching (provider anthropic)", () => {
     );
     // The tools as the anthropic request sends them, marker removed.
     const [p] = await ask("anthropic");
-    const sent = (p!.tools as Anthropic.Tool[]).map(unmarked);
+    const sent = (p!.tools as Anthropic.Tool[])
+      .map(unmarked)
+      .map(without8fc8821DescriptionAdditions);
     expect(sent.map((t) => t.name)).toEqual(
       AT_8FC8821.tools.map((t) => t.name),
     );

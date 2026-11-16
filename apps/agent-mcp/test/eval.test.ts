@@ -43,6 +43,7 @@ import {
   FAKE_PARCELS,
   FAKE_PERMITS,
   OUTSIDE_PARCEL,
+  PASADENA_RESOLVED,
   blockNetwork,
   fakeClock,
   fakeQueries,
@@ -246,8 +247,8 @@ describe("prompts file (eval/prompts.json)", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byCase = (c: string) => prompts.filter((p) => p.case === c);
 
-  test("twenty entries, valid: cases a–i, then the scope and abuse cases j–n, the coverage case o, p, the CRM screen case q and owners with BBB r", () => {
-    expect(prompts.length).toBe(20);
+  test("twenty-one entries, valid: cases a–i (d twice: aged roofs, then long-open permits), then the scope and abuse cases j–n, the coverage case o, p, the CRM screen case q and owners with BBB r", () => {
+    expect(prompts.length).toBe(21);
     expect(new Set(prompts.map((p) => p.case))).toEqual(new Set(PROMPT_CASES));
     expect(new Set(prompts.map((p) => p.id)).size).toBe(prompts.length);
   });
@@ -275,6 +276,22 @@ describe("prompts file (eval/prompts.json)", () => {
     });
     expect(byCase("d")[0]!.expected).toMatchObject({
       gaps: ["outside_city_of_la"],
+      place: {
+        outcome: "resolved",
+        name: "Pasadena",
+        jurisdiction: "PASADENA",
+        parcel_count: 39990,
+      },
+    });
+    // d2: long-open permits near the same place; the count is not available there (counts check).
+    expect(byCase("d")[1]!.expected).toEqual({
+      tools: ["resolve_place", "long_open_permits"],
+      tool_inputs: {
+        long_open_permits: { radius_miles: 1, min_open_days: 1826 },
+      },
+      gaps: ["outside_city_of_la"],
+      refused: false,
+      stated_counts: true,
       place: {
         outcome: "resolved",
         name: "Pasadena",
@@ -930,6 +947,101 @@ describe("checks: prompt i with no search required and a forbidden tool, and the
     expect(c.tools.details).toContain(
       "a tool was called although none was expected",
     );
+  });
+
+  describe("d2: long-open permits near Pasadena (no permit data in the circle)", () => {
+    const d2 = byId("d2-pasadena-long-open");
+    /** The fake where Pasadena's circle draws all three parcels (none with permit data) and no permit is found. */
+    function outside(): DataQueries {
+      const { queries } = fakeQueries();
+      return {
+        ...queries,
+        parcels: {
+          ...queries.parcels,
+          points: async (i) => ({
+            ...(await queries.parcels.points(i)),
+            count: 3,
+            truncated: false,
+          }),
+        },
+        permits: {
+          ...queries.permits,
+          longOpen: async (i) => ({
+            ...(await queries.permits.longOpen(i)),
+            count: 0,
+            items: [],
+            next_offset: null,
+          }),
+        },
+      };
+    }
+    const flow = (
+      text: string,
+    ): ConstructorParameters<typeof ScriptedModel>[0] => [
+      toolReply([{ name: "resolve_place", input: { name: "Pasadena" } }]),
+      (p) => {
+        const { center } = lastToolResult(p, "resolve_place") as {
+          center: { lat: number; lon: number };
+        };
+        return toolReply([
+          {
+            name: "long_open_permits",
+            input: { ...center, radius_miles: 1 },
+          },
+        ]);
+      },
+      () => textReply(text),
+    ];
+
+    test("resolve_place then long_open_permits; the count is not available (null) and agrees with the direct queries; the outside gap is in the gaps and the text", async () => {
+      const queries = outside();
+      const a = await ask(
+        d2.question,
+        flow(
+          "Permit data covers the City of Los Angeles only, and Pasadena is outside it, so long-open permits there are unknown.",
+        ),
+        { queries },
+      );
+      const c = await checksOf(d2, a, { queries });
+      for (const k of [
+        "tools",
+        "place",
+        "gaps",
+        "gaps_text",
+        "counts",
+        "stated_counts",
+      ] as const)
+        expect(c[k].result).toBe("pass");
+      expect(c.counts.details).toEqual([
+        "resolve_place: equal (places.resolve: resolved)",
+        "long_open_permits: equal (parcels.points: 3 of 3 checked without permit data; permits.longOpen: count not available, 0 IDs)",
+      ]);
+    });
+
+    test("the counts check follows the rule: a count of 0 where no parcel in the circle has permit data fails", async () => {
+      const input = {
+        ...PASADENA_RESOLVED,
+        radius_miles: 1,
+        min_open_days: 1826,
+        limit: 10,
+      };
+      const counts = await checkCounts(
+        [
+          {
+            id: "t1",
+            name: "long_open_permits",
+            input,
+            result: { count: 0, returned: 0, items: [], truncated: false },
+            is_error: false,
+          },
+        ],
+        outside(),
+      );
+      expect(counts.result).toBe("fail");
+      expect(counts.details).toEqual([
+        'long_open_permits: permit_data without_permit_data: tool 0 ≠ direct 3; count: tool 0 ≠ direct null; status: tool undefined ≠ direct "not_available"',
+      ]);
+    });
   });
 
   describe('gaps_text outside_city_of_la: "permit data does not cover <place>"', () => {
@@ -2938,7 +3050,7 @@ describe("check stated_counts: numbers of rows shown equal the rows the text lis
     expect(run("Nothing to list.", []).result).toBe("n/a");
   });
 
-  test("the prompts file: stated_counts on a2, b and h (every prompt that expects long_open_permits), and it needs that tool", () => {
+  test("the prompts file: stated_counts on a2, b, d2 and h (every prompt that expects long_open_permits), and it needs that tool", () => {
     const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
     const withLongOpen = prompts
       .filter((p) => p.expected.tools.includes("long_open_permits"))
@@ -2946,6 +3058,7 @@ describe("check stated_counts: numbers of rows shown equal the rows the text lis
     expect(withLongOpen).toEqual([
       "a2-readme-110-follow-up",
       "b-crm-van-nuys",
+      "d2-pasadena-long-open",
       "h-bbb-van-nuys",
     ]);
     expect(

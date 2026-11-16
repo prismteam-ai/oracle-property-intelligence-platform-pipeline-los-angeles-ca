@@ -677,16 +677,30 @@ function explain(
         if (f.ownership_basis) rules.push(ownershipRuleLine(f.ownership_basis));
         break;
       }
-      case "long_open_permits":
+      case "long_open_permits": {
+        // Which parcels in the circle have permit data (all of them, or the nearest checked); null: not read.
+        const cov = f.permit_data;
+        const without = cov?.without_permit_data ?? 0;
+        // "the 8,864 parcels with a roof year", or with truncated points "the nearest 25,000 of the 115,373 ...".
+        const parcels = cov
+          ? `${cov.complete ? "" : `the nearest ${fmt(cov.checked)} of `}the ${fmt(cov.parcels)} parcels with a roof year`
+          : "";
+        const matched =
+          f.count === null
+            ? `none of ${parcels} has permit data (outside the City of Los Angeles), so the count is not available (unknown, not 0)`
+            : `${fmt(f.count)} match${without > 0 ? ` (${fmt(without)} of ${parcels} without permit data: outside the City of Los Angeles)` : ""}`;
         reasoning.push(
-          `searched long-open permits, ${LONG_OPEN_SCOPE}, within ${f.radius_miles} mi of ${label} open at least ${fmt(f.min_open_days)} days${f.max_open_days !== null ? ` and at most ${fmt(f.max_open_days)}` : ""}: ${fmt(f.count)} match, ${f.returned} listed`,
+          `searched long-open permits, ${LONG_OPEN_SCOPE}, within ${f.radius_miles} mi of ${label} open at least ${fmt(f.min_open_days)} days${f.max_open_days !== null ? ` and at most ${fmt(f.max_open_days)}` : ""}: ${matched}, ${f.returned} listed`,
         );
+        // No parcel in the circle has permit data (of those checked): the place is outside the City of Los Angeles.
+        if (cov && cov.checked > 0 && cov.with_permit_data === 0)
+          gaps.push(outsideCityGap(label));
         assumptions.push(durationAssumption(req.question, f.min_open_days));
         rules.push(longOpenRuleLine(f.min_open_days, f.max_open_days));
         // with_contractor_window: the second list, within the contractor window (its limit computed by the tool).
         if (f.within_window?.status === "read") {
           reasoning.push(
-            `listed the long-open permits issued within the contractor window (open at most ${fmt(f.within_window.max_open_days)} days): ${fmt(f.within_window.count)} match, ${f.within_window.returned} listed, each with its permit's contractor rows (${contractorPhrase(f.within_window.contractors)})`,
+            `listed the long-open permits issued within the contractor window (open at most ${fmt(f.within_window.max_open_days)} days): ${f.within_window.count === null ? "not available (unknown, not 0)" : `${fmt(f.within_window.count)} match`}, ${f.within_window.returned} listed, each with its permit's contractor rows (${contractorPhrase(f.within_window.contractors)})`,
           );
           rules.push(
             longOpenRuleLine(f.min_open_days, f.within_window.max_open_days),
@@ -696,6 +710,7 @@ function explain(
             "did not list the long-open permits within the contractor window (stated as a gap)",
           );
         break;
+      }
       case "parcel_detail":
         reasoning.push(
           `read parcel ${f.parcel_id}'s property facts and provenance`,

@@ -447,6 +447,166 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     expect(plain.gaps).toContain(ALL_OUTSIDE);
   });
 
+  /** long_open_permits' statements at the Pasadena center, 1 mi: all 8,864 parcels with a roof year are outside. */
+  const LONG_OPEN_ALL_OUTSIDE =
+    "All 8,864 parcels within 1 mi that have a roof year are outside the City of Los Angeles: no permit data there.";
+  const LONG_OPEN_NOT_AVAILABLE =
+    "Not available: none of the 8,864 parcels within 1 mi that have a roof year has permit data (all are outside the City of Los Angeles), so whether there are long-open roofing permits (an issued LADBS roofing-work permit still open at least 1,826 days) is unknown, not 0.";
+
+  test("long_open_permits at the Pasadena center, 1 mi, default window: the count is not available (null, not 0), the 8,864 parcels without permit data are stated, and the answer raises Pasadena's outside-the-City gap", async () => {
+    const input = { ...PASADENA_CALL, radius_miles: 1 };
+    const o = await runTool("long_open_permits", input, data.queries);
+    expect(o.ok).toBe(true);
+    expect(o.content).toMatchObject({
+      count: null,
+      status: "not_available",
+      text: LONG_OPEN_NOT_AVAILABLE,
+      returned: 0,
+      items: [],
+      truncated: false,
+      permit_data: {
+        checked: 8_864,
+        without_permit_data: 8_864,
+        complete: true,
+        text: LONG_OPEN_ALL_OUTSIDE,
+      },
+    });
+    expect(o.gaps).toEqual([LONG_OPEN_ALL_OUTSIDE, LONG_OPEN_NOT_AVAILABLE]);
+    const counts = await checkCounts(
+      [
+        {
+          id: "t1",
+          name: "long_open_permits",
+          input: { ...input, min_open_days: 1826, limit: 10 },
+          result: o.content,
+          is_error: false,
+        },
+      ],
+      data.queries,
+    );
+    expect(counts).toEqual({
+      result: "pass",
+      details: [
+        "long_open_permits: equal (parcels.points: 8864 of 8864 checked without permit data; permits.longOpen: count not available, 0 IDs)",
+      ],
+    });
+    const model = new ScriptedModel([
+      toolReply([{ name: "resolve_place", input: { name: "Pasadena" } }]),
+      toolReply([{ name: "long_open_permits", input }]),
+      textReply(
+        "Permit data covers the City of Los Angeles only. Pasadena is a separate city, so whether it has long-open roofing permits is unknown.",
+      ),
+    ]);
+    const a = await runAgent(
+      {
+        question: "Which permits near Pasadena have been open for many years?",
+      },
+      { model, queries: data.queries, settings: SETTINGS },
+    );
+    expect(a.status).toBe("answered");
+    // Both outside statements: the tool's (the parcel count, no place), then the agent's (the place).
+    expect(
+      a.gaps.filter((g) =>
+        g.endsWith("outside the City of Los Angeles: no permit data there."),
+      ),
+    ).toEqual([
+      LONG_OPEN_ALL_OUTSIDE,
+      "Pasadena is outside the City of Los Angeles: no permit data there.",
+    ]);
+    expect(a.gaps).toContain(LONG_OPEN_NOT_AVAILABLE);
+    expect(GAPS.outside_city_of_la.inText("Pasadena").test(a.text)).toBe(true);
+  });
+
+  test("long_open_permits with with_contractor_window at the Pasadena center, 1 mi: both lists not available (null), the outside statement once", async () => {
+    const o = await runTool(
+      "long_open_permits",
+      { ...PASADENA_CALL, radius_miles: 1, with_contractor_window: true },
+      data.queries,
+    );
+    const c = o.content as Record<string, Record<string, unknown>>;
+    expect(c.permit_data).toMatchObject({
+      without_permit_data: 8_864,
+      text: LONG_OPEN_ALL_OUTSIDE,
+    });
+    expect(c.longest_open).toMatchObject({
+      count: null,
+      status: "not_available",
+      text: LONG_OPEN_NOT_AVAILABLE,
+    });
+    expect(c.within_contractor_window).toMatchObject({
+      count: null,
+      status: "not_available",
+    });
+    expect(o.gaps.filter((g) => g === LONG_OPEN_ALL_OUTSIDE)).toHaveLength(1);
+  });
+
+  test("long_open_permits in the mixed area (34.145, -118.18, 1 mi): the count of 17 stands; 1,979 of the 3,005 parcels stated as without permit data", async () => {
+    const input = { ...MIXED, radius_miles: 1 };
+    const o = await runTool("long_open_permits", input, data.queries);
+    const outside =
+      "1,979 of the 3,005 parcels within 1 mi that have a roof year are outside the City of Los Angeles: no permit data there.";
+    expect(o.content).toMatchObject({
+      count: 17,
+      returned: 10,
+      permit_data: {
+        checked: 3_005,
+        without_permit_data: 1_979,
+        complete: true,
+        text: outside,
+      },
+    });
+    expect(o.content).not.toHaveProperty("status");
+    expect(o.gaps).toEqual([
+      outside,
+      "Results truncated: long_open_permits returned 10 of 17 long-open permits (longest open first).",
+    ]);
+    const counts = await checkCounts(
+      [
+        {
+          id: "t1",
+          name: "long_open_permits",
+          input: { ...input, min_open_days: 1826, limit: 10 },
+          result: o.content,
+          is_error: false,
+        },
+      ],
+      data.queries,
+    );
+    expect(counts.result).toBe("pass");
+  });
+
+  test("long_open_permits as prompt a2 calls it (the Van Nuys center, 5 mi, with_contractor_window): every parcel checked has permit data, so the result keeps its fields and gaps (no permit_data, no status)", async () => {
+    const o = await runTool(
+      "long_open_permits",
+      {
+        ...VAN_NUYS_CENTER,
+        radius_miles: 5,
+        limit: 10,
+        with_contractor_window: true,
+      },
+      data.queries,
+    );
+    const c = o.content as Record<string, Record<string, unknown>>;
+    expect(Object.keys(c)).toEqual([
+      "scope",
+      "source",
+      "contractor_window",
+      "longest_open",
+      "within_contractor_window",
+    ]);
+    expect(c.longest_open).toMatchObject({ count: 2_309, returned: 10 });
+    expect(c.longest_open).not.toHaveProperty("status");
+    expect(c.within_contractor_window).toMatchObject({
+      count: 2_039,
+      returned: 5,
+    });
+    expect(c.within_contractor_window).not.toHaveProperty("status");
+    expect(o.gaps).toEqual([
+      "Results truncated: the longest-open list returned 10 of 2309 long-open permits (longest open first).",
+      "Results truncated: the within-window list returned 5 of 2039 long-open permits (longest open first).",
+    ]);
+  });
+
   test("prompt d's flow with only the filtered call, on the real data: the answer's gaps include Pasadena's outside-the-City gap", async () => {
     const model = new ScriptedModel([
       toolReply([{ name: "resolve_place", input: { name: "Pasadena" } }]),
@@ -523,6 +683,43 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
       expect(body.gaps).toEqual([
         ALL_OUTSIDE,
         body.result.long_open_permit.text,
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  test("long_open_permits over MCP (the SDK's in-memory transport) at the Pasadena center, 1 mi: the shared tool layer gives count null, status not_available, the outside statement then the not-available text", async () => {
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer(data.queries);
+    await server.connect(serverSide);
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientSide);
+    try {
+      const res = await client.callTool({
+        name: "long_open_permits",
+        arguments: { ...PASADENA_CALL, radius_miles: 1 },
+      });
+      expect(res.isError).toBeFalsy();
+      const body = JSON.parse(
+        (res.content as Array<{ type: string; text: string }>)[0]!.text,
+      ) as {
+        result: {
+          count: number | null;
+          status: string;
+          text: string;
+          permit_data: { text: string };
+        };
+        gaps: string[];
+      };
+      expect(body.result.count).toBeNull();
+      expect(body.result.status).toBe("not_available");
+      expect(body.result.text).toBe(LONG_OPEN_NOT_AVAILABLE);
+      expect(body.result.permit_data.text).toBe(LONG_OPEN_ALL_OUTSIDE);
+      expect(body.gaps).toEqual([
+        LONG_OPEN_ALL_OUTSIDE,
+        LONG_OPEN_NOT_AVAILABLE,
       ]);
     } finally {
       await client.close();
