@@ -1268,6 +1268,61 @@ describe("budget stop (--max-usd)", () => {
   });
 });
 
+describe("results: cache tokens, cost and time per answer", () => {
+  test("results.tsv and results.md show each answer's cache writes, cache reads, cost and time", async () => {
+    const out = join(SCRATCH, "cache-columns-out");
+    mkdirSync(out, { recursive: true });
+    const first = toolReply([{ name: "run_summary", input: {} }], {
+      input: 100,
+      output: 50,
+    });
+    first.usage.cache_creation_input_tokens = 4_000;
+    const second = textReply("Run run-1.", { input: 200, output: 60 });
+    second.usage.cache_read_input_tokens = 4_000;
+    let t = 0;
+    const r = await runEval(
+      {
+        provider: "anthropic",
+        model: "sonnet-5.5",
+        runs: 1,
+        maxUsd: 5,
+        outDir: out,
+        prompts: [PROMPTS_SMALL[1]!],
+      },
+      {
+        model: new ScriptedModel([first, second]),
+        queries: fakeQueries().queries,
+        settings: { ...SETTINGS, provider: "anthropic" },
+        now: () => (t += 10),
+      },
+    );
+    // Sonnet 5.5: input $2, cache write $2.50, cache read $0.10, output $10 per MTok.
+    const usd = (300 * 2 + 4_000 * 2.5 + 4_000 * 0.1 + 110 * 10) / 1_000_000;
+    expect(r.rows).toHaveLength(1);
+    expect(r.rows[0]).toMatchObject({
+      input_tokens: 300,
+      cache_creation_input_tokens: 4_000,
+      cache_read_input_tokens: 4_000,
+      output_tokens: 110,
+    });
+    expect(r.rows[0]!.usd).toBeCloseTo(usd, 12);
+    const ms = r.rows[0]!.ms;
+    expect(ms).toBeGreaterThan(0);
+    const [head, row] = readFileSync(join(out, "results.tsv"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => l.split("\t"));
+    const cell = (name: string) => row![head!.indexOf(name)];
+    expect(cell("cache_write_tokens")).toBe("4000");
+    expect(cell("cache_read_tokens")).toBe("4000");
+    expect(cell("usd")).toBe(usd.toFixed(6));
+    expect(cell("ms")).toBe(String(ms));
+    expect(readFileSync(join(out, "results.md"), "utf8")).toContain(
+      `| 300 | 4000 | 4000 | 110 | ${usd.toFixed(6)} | ${ms} |`,
+    );
+  });
+});
+
 describe("CLI and output folder", () => {
   const io = () => {
     const stdout: string[] = [];

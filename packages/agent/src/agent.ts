@@ -12,6 +12,7 @@ import {
   type WindowRead,
 } from "./contractor-coverage.ts";
 import { modelErrorName, type ModelClient } from "./model-client.ts";
+import type { Provider } from "./models.ts";
 import { ownershipRuleLine } from "./ownership.ts";
 import { onceSources, type DataQueries } from "./permit-api.ts";
 import {
@@ -212,6 +213,33 @@ export function estimateInputTokens(
   return previous
     ? previous.input_tokens + previous.output_tokens + chars
     : chars;
+}
+
+/** The prompt-cache marker: a 5-minute cache of the request prefix up to and including the marked block. */
+export const PROMPT_CACHE_CONTROL = { type: "ephemeral" } as const;
+
+/**
+ * The system prompt and tool definitions as one request sends them. Provider "anthropic": the system prompt as one
+ * text block and the last tool definition, each with PROMPT_CACHE_CONTROL (tools render before the system prompt, so
+ * the two markers cache the tools, then tools and system); the text of the prompt and of every tool is unchanged.
+ * Any other provider (the Bedrock path), or none: the system prompt as a string and the tools unmarked, as before.
+ */
+export function promptCacheParts(
+  provider: Provider | undefined,
+  system: string,
+  tools: Anthropic.Tool[],
+): { system: string | Anthropic.TextBlockParam[]; tools: Anthropic.Tool[] } {
+  if (provider !== "anthropic") return { system, tools };
+  return {
+    system: [
+      { type: "text", text: system, cache_control: PROMPT_CACHE_CONTROL },
+    ],
+    tools: tools.map((t, i) =>
+      i === tools.length - 1
+        ? { ...t, cache_control: PROMPT_CACHE_CONTROL }
+        : t,
+    ),
+  };
 }
 
 /** The result text of a tool call the answer closed without running it (closeDanglingToolUse). */
@@ -650,10 +678,14 @@ export async function runAgent(
     ...history,
     userTurn(req, prevArea),
   ];
-  const tools = anthropicTools();
-  const system = systemPrompt(
-    s.maxToolTurns,
-    windowRead.status === "stated" ? windowRead.window : null,
+  // Provider "anthropic": both marked for prompt caching (promptCacheParts); their text is unchanged.
+  const { system, tools } = promptCacheParts(
+    s.provider,
+    systemPrompt(
+      s.maxToolTurns,
+      windowRead.status === "stated" ? windowRead.window : null,
+    ),
+    anthropicTools(),
   );
   const outcomes: ToolOutcome[] = [];
   let toolRounds = 0;

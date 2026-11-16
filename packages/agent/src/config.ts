@@ -39,6 +39,11 @@ export interface AgentSettings {
   /** Wall-clock budget of one answer, in milliseconds (≤ 28,000). */
   timeBudgetMs: number;
   effort: Effort;
+  /**
+   * The provider the model client calls. With "anthropic" the system prompt and the tool definitions are marked for
+   * prompt caching (agent.ts promptCacheParts); any other provider, or none, sends them unmarked.
+   */
+  provider?: Provider;
 }
 
 export interface AgentConfig extends AgentSettings {

@@ -5,10 +5,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { OWNERSHIP_BASIS, OWNERSHIP_PROXY_NOTE } from "@oracle-la/api/contract";
 import { beforeAll, describe, expect, test } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   InvalidRequestError,
   MIN_ANSWER_TOKENS,
   NOT_RUN_PREFIX,
+  PROMPT_CACHE_CONTROL,
   estimateInputTokens,
   historyHasToolResult,
   longOpenRuleLine,
@@ -29,6 +31,7 @@ import {
 } from "../src/policy.ts";
 import type { SourceList } from "../src/permit-api.ts";
 import { systemPrompt } from "../src/prompt.ts";
+import { anthropicTools } from "../src/tools.ts";
 import {
   ScriptedModel,
   lastToolResult,
@@ -2143,5 +2146,169 @@ describe("the reasoning states the long-open parcel count and the within-window 
     expect(
       a.records.filter((r) => r.kind === "contractor").map((r) => r.id),
     ).toEqual([FAKE_PERMITS[0]]);
+  });
+});
+
+/**
+ * The system prompt and tool definitions as 8fc8821 built them (packages/agent/test/fixtures/prompt-tools-8fc8821.json,
+ * written from that commit's systemPrompt and anthropicTools): `system.default_5` is systemPrompt(5),
+ * `system.window_5` systemPrompt(5, FIXTURE_WINDOW).
+ */
+const AT_8FC8821 = JSON.parse(
+  readFileSync(
+    new URL("./fixtures/prompt-tools-8fc8821.json", import.meta.url),
+    "utf8",
+  ),
+) as {
+  system: { default_5: string; window_5: string };
+  tools: Anthropic.Tool[];
+};
+const FIXTURE_WINDOW = {
+  source_name: "LADBS contractor rows",
+  field: "permit_issue_date",
+  first: "2018-01-01",
+  last: "2023-05-31",
+};
+/** System-prompt lines added since 8fc8821 (each once, as its own line); nothing else of the text changed. */
+const PROMPT_LINES_ADDED_SINCE_8FC8821: readonly string[] = [];
+const without8fc8821Additions = (prompt: string): string => {
+  let out = prompt;
+  for (const line of PROMPT_LINES_ADDED_SINCE_8FC8821) {
+    expect(out.split(`\n${line}\n`)).toHaveLength(2);
+    out = out.replace(`\n${line}\n`, "\n");
+  }
+  return out;
+};
+
+/** A tool definition without its cache marker. */
+const unmarked = (t: Anthropic.Tool): Anthropic.Tool => {
+  const copy = { ...t };
+  delete copy.cache_control;
+  return copy;
+};
+
+describe("prompt caching (provider anthropic)", () => {
+  const ask = async (provider?: "anthropic" | "bedrock") => {
+    const { queries } = fakeQueries();
+    const model = new ScriptedModel([
+      toolReply([{ name: "run_summary", input: {} }]),
+      textReply("Run run-1."),
+    ]);
+    const a = await runAgent(
+      { question: "What run is served?" },
+      {
+        model,
+        queries,
+        settings: provider ? { ...SETTINGS, provider } : SETTINGS,
+      },
+    );
+    expect(a.status).toBe("answered");
+    return model.requests.map((r) => r.params);
+  };
+
+  test("anthropic: the system prompt is one text block and the last tool carries the marker, on every call", async () => {
+    const plain = await ask();
+    const cached = await ask("anthropic");
+    expect(cached).toHaveLength(2);
+    for (const [i, p] of cached.entries()) {
+      // The same text as the unmarked request sends, in one block with the marker.
+      expect(p.system).toEqual([
+        {
+          type: "text",
+          text: plain[i]!.system as string,
+          cache_control: { type: "ephemeral" },
+        },
+      ]);
+      const tools = p.tools as Anthropic.Tool[];
+      expect(tools.at(-1)!.cache_control).toEqual(PROMPT_CACHE_CONTROL);
+      expect(tools.slice(0, -1).every((t) => !("cache_control" in t))).toBe(
+        true,
+      );
+      // Marker removed, the tools are exactly the unmarked request's.
+      expect(tools.map(unmarked)).toEqual(plain[i]!.tools);
+    }
+    expect(PROMPT_CACHE_CONTROL).toEqual({ type: "ephemeral" });
+  });
+
+  test("bedrock, or no provider: the system prompt is a string and no tool is marked (unchanged)", async () => {
+    for (const params of [await ask("bedrock"), await ask()])
+      for (const p of params) {
+        expect(typeof p.system).toBe("string");
+        expect(JSON.stringify(p.tools)).not.toContain("cache_control");
+        expect(p.tools).toEqual(anthropicTools());
+      }
+  });
+
+  test("no word changes: the system text and every tool's name, description and input_schema are byte-identical to 8fc8821's", async () => {
+    expect(without8fc8821Additions(systemPrompt(5))).toBe(
+      AT_8FC8821.system.default_5,
+    );
+    expect(without8fc8821Additions(systemPrompt(5, FIXTURE_WINDOW))).toBe(
+      AT_8FC8821.system.window_5,
+    );
+    // The tools as the anthropic request sends them, marker removed.
+    const [p] = await ask("anthropic");
+    const sent = (p!.tools as Anthropic.Tool[]).map(unmarked);
+    expect(sent.map((t) => t.name)).toEqual(
+      AT_8FC8821.tools.map((t) => t.name),
+    );
+    for (const [i, t] of sent.entries()) {
+      const was = AT_8FC8821.tools[i]!;
+      expect(t.description).toBe(was.description);
+      expect(JSON.stringify(t.input_schema)).toBe(
+        JSON.stringify(was.input_schema),
+      );
+    }
+    expect(JSON.stringify(sent)).toBe(JSON.stringify(AT_8FC8821.tools));
+    // The system text sent is systemPrompt's, unchanged (the fake run's contractor window).
+    expect((p!.system as Anthropic.TextBlockParam[])[0]!.text).toBe(
+      systemPrompt(SETTINGS.maxToolTurns, {
+        source_name: FAKE_SOURCES.contractor,
+        field: "permit_issue_date",
+        first: "2013-01-02",
+        last: "2023-05-19",
+      }),
+    );
+  });
+
+  test("cache writes and reads count against the 80,000-token cap and in the next call's estimate", async () => {
+    const { queries } = fakeQueries();
+    const first = toolReply([{ name: "run_summary", input: {} }], {
+      input: 1_000,
+      output: 100,
+    });
+    first.usage.cache_creation_input_tokens = 30_000;
+    first.usage.cache_read_input_tokens = 20_000;
+    const model = new ScriptedModel([first, textReply("never reached")]);
+    const a = await runAgent(
+      { question: "What run is served?" },
+      {
+        model,
+        queries,
+        settings: { ...SETTINGS, provider: "anthropic", maxTokens: 80_000 },
+      },
+    );
+    // Call 1: 1,000 + 30,000 + 20,000 input, 100 output: 51,100 used, 28,900 left. The next estimate starts from
+    // 51,000 + 100 (call 1's whole input, cache tokens included, and its reply) and is over what is left.
+    expect(a.usage).toMatchObject({
+      input_tokens: 51_000,
+      output_tokens: 100,
+      model_calls: 1,
+    });
+    expect(model.requests).toHaveLength(1);
+    expect(a).toMatchObject({ status: "stopped", stopped_by: "token_cap" });
+    const m =
+      /its input was estimated at ([\d,]+) tokens with 28,900 of the 80,000-token cap left\.$/.exec(
+        a.reasoning,
+      );
+    expect(m).not.toBeNull();
+    const estimate = Number(m![1]!.replace(/,/g, ""));
+    expect(estimate).toBeGreaterThan(51_100);
+    expect(estimate).toBe(
+      estimateInputTokens(
+        { input_tokens: 51_000, output_tokens: 100 },
+        a.history.slice(model.requests[0]!.params.messages.length + 1),
+      ),
+    );
   });
 });
