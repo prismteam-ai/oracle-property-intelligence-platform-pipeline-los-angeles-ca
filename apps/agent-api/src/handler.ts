@@ -3,6 +3,7 @@
  * (`apps/agent-api/src/handler.ts`, export `handler`). Routes, both behind the shared token authorizer:
  * - POST /agent/answer: one answer per request; body { question, center?, screen?, history?, session?, signature? }.
  * - GET /agent/warm: loads the configuration and reads both SSM parameters, builds the model client; no model call.
+ *   Returns { status: "warm", commit }: the agent's commit (AGENT_COMMIT).
  *
  * Environment (names only, no secret): DATA_API_URL; KEY_PARAMETER_NAME and HISTORY_SECRET_PARAMETER_NAME (the two
  * SecureStrings /oracle-la/agent/anthropic-api-key and /oracle-la/agent/history-signing-secret); the AGENT_*
@@ -62,6 +63,15 @@ import {
   type AgentSecrets,
 } from "./secrets.ts";
 
+/** Set by the bundle's esbuild define (agent-api-stack.ts agentCommit); absent when not bundled. */
+declare const __AGENT_COMMIT__: string | undefined;
+/**
+ * The short hash of the last commit that changed the agent's own code, fixed at build (CDK synth); "unbundled" when
+ * the handler runs from source (tests, local runs).
+ */
+export const AGENT_COMMIT: string =
+  typeof __AGENT_COMMIT__ === "string" ? __AGENT_COMMIT__ : "unbundled";
+
 /** The clients the agent serves (the authorizer's context.client); the "mcp" client reads data routes only. */
 export const AGENT_CLIENTS: ReadonlySet<string> = new Set(["crm", "explorer"]);
 export const ANSWER_ROUTE = "POST /agent/answer";
@@ -87,6 +97,8 @@ export interface HandlerDeps {
   /** The data API adapter's fetch (default the global fetch; tests pass a fake data API). */
   dataFetch?: HttpDataQueriesOptions["fetch"];
   now?: () => number;
+  /** The commit GET /agent/warm reports (default AGENT_COMMIT). */
+  commit?: string;
 }
 
 const bodySchema = z.strictObject({
@@ -204,7 +216,10 @@ export function createHandler(deps: HandlerDeps) {
           line.error_class = err.errorClass;
           return finish(json(503, { error: NOT_CONFIGURED }), "not_configured");
         }
-        return finish(json(200, { status: "warm" }), "warm");
+        return finish(
+          json(200, { status: "warm", commit: deps.commit ?? AGENT_COMMIT }),
+          "warm",
+        );
       }
 
       // The body: capped on its raw bytes before anything parses it.

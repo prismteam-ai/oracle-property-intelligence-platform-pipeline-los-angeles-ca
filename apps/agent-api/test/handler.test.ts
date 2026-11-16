@@ -38,6 +38,7 @@ import {
   fakeQueries,
 } from "../../../packages/agent/test/helpers.ts";
 import {
+  AGENT_COMMIT,
   ANSWER_ROUTE,
   WARM_ROUTE,
   createHandler,
@@ -111,6 +112,7 @@ function setup(
     env?: Record<string, string | undefined>;
     steps?: ConstructorParameters<typeof ScriptedModel>[0];
     api?: ReturnType<typeof fakeDataApi>;
+    commit?: string;
   } = {},
 ) {
   const lines: Array<{ message: string; line: AgentLogLine }> = [];
@@ -128,6 +130,7 @@ function setup(
       return model;
     },
     dataFetch: api.fetch,
+    ...(opts.commit !== undefined ? { commit: opts.commit } : {}),
   };
   return { handler: createHandler(deps), lines, usd, model, keys, api };
 }
@@ -158,7 +161,9 @@ describe("the two SSM parameters", () => {
     const s = setup();
     const res = await s.handler(event(WARM_ROUTE), CONTEXT);
     expect(status(res)).toBe(200);
-    expect(parse(res)).toEqual({ status: "warm" });
+    // Run from source (no esbuild define), the commit is "unbundled".
+    expect(AGENT_COMMIT).toBe("unbundled");
+    expect(parse(res)).toEqual({ status: "warm", commit: AGENT_COMMIT });
     const calls = ssm.commandCalls(GetParameterCommand);
     expect(
       calls
@@ -174,6 +179,14 @@ describe("the two SSM parameters", () => {
     expect(
       s.lines.map((l) => [l.message, l.line.http_status, l.line.status]),
     ).toEqual([["agent_warm", 200, "warm"]]);
+  });
+
+  test("GET /agent/warm returns the agent's commit (the bundle's define; here given to the handler)", async () => {
+    const s = setup({ commit: "abc1234" });
+    const res = await s.handler(event(WARM_ROUTE), CONTEXT);
+    expect(status(res)).toBe(200);
+    expect(parse(res)).toEqual({ status: "warm", commit: "abc1234" });
+    expect(s.model.requests).toHaveLength(0);
   });
 
   test("read once per container: the second request reads no parameter", async () => {

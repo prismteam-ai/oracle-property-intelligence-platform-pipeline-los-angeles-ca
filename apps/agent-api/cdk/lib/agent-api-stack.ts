@@ -5,6 +5,7 @@
  * itself, on first use, from two SecureStrings placed by hand; this stack only knows their names and grants
  * ssm:GetParameter on exactly those two ARNs. No secret value is read, created or passed here.
  */
+import { execFileSync } from "node:child_process";
 import * as cdk from "aws-cdk-lib";
 import * as apigwv2 from "aws-cdk-lib/aws-apigatewayv2";
 import {
@@ -39,6 +40,38 @@ export const AGENT_API_CLIENTS = ["crm", "explorer"] as const;
 export const USD_PER_DAY_THRESHOLD = 2;
 /** Estimated model spend within one 5-minute period at or above which the burst alarm fires. */
 export const USD_BURST_THRESHOLD = 1;
+/**
+ * The repository paths the agent bundle's code comes from: every input of the bundle outside node_modules lies
+ * under one of them (a test checks it against esbuild's metafile), and the lockfile pins the third-party code. A
+ * commit that changes none of them (e.g. docs only) leaves the bundle byte-identical.
+ */
+export const AGENT_SOURCE_PATHS = [
+  "apps/agent-api/src",
+  "packages/agent/src",
+  "packages/api-client/src",
+  "packages/views/src/place-index.ts",
+  "packages/views/src/sql.ts",
+  "pnpm-lock.yaml",
+] as const;
+
+/**
+ * The short hash (7 characters) of the last commit that changed AGENT_SOURCE_PATHS, read with git at synth; with
+ * "-dirty" appended when those paths have uncommitted changes. GET /agent/warm returns it (an esbuild define in
+ * the bundle: no environment variable, nothing in the template but the code asset).
+ */
+export function agentCommit(repoRoot: string): string {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+  const full = git("log", "-1", "--format=%H", "--", ...AGENT_SOURCE_PATHS);
+  if (!/^[0-9a-f]{40}$/.test(full))
+    throw new Error(
+      `no commit found for the agent's source paths in ${repoRoot} (git log printed "${full}")`,
+    );
+  const dirty =
+    git("status", "--porcelain", "--", ...AGENT_SOURCE_PATHS) !== "";
+  return `${full.slice(0, 7)}${dirty ? "-dirty" : ""}`;
+}
+
 /** The data API's URL as OracleLaDataApi outputs it (`ApiUrl`, the HTTP API's default endpoint). */
 const DATA_API_URL =
   /^https:\/\/[a-z0-9]+\.execute-api\.eu-north-1\.amazonaws\.com$/;
@@ -107,6 +140,10 @@ export class AgentApiStack extends cdk.Stack {
         minify: true,
         sourceMap: true,
         target: "node22",
+        // The agent's commit, for GET /agent/warm (handler.ts AGENT_COMMIT).
+        define: {
+          __AGENT_COMMIT__: JSON.stringify(agentCommit(props.repoRoot)),
+        },
       },
     });
     // GetParameter (with decryption, aws/ssm key) on the two parameters only: no path read, no other parameter.

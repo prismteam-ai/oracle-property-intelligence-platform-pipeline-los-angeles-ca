@@ -6,7 +6,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, relative, resolve } from "node:path";
 import * as cdk from "aws-cdk-lib";
 import { Annotations, Match, Template } from "aws-cdk-lib/assertions";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -17,9 +17,11 @@ import {
 } from "../../api/cdk/lib/clients.ts";
 import {
   AGENT_API_CLIENTS,
+  AGENT_SOURCE_PATHS,
   AgentApiStack,
   HISTORY_SECRET_PARAMETER_NAME,
   KEY_PARAMETER_NAME,
+  agentCommit,
 } from "../cdk/lib/agent-api-stack.ts";
 import { AGENT_CLIENTS } from "../src/handler.ts";
 
@@ -441,6 +443,45 @@ describe("OracleLaAgentApi", () => {
     expect(
       map.sources.some((s) => s.endsWith("apps/agent-api/src/handler.ts")),
     ).toBe(true);
+  });
+
+  test("bundle: the agent's commit is defined in it; AGENT_SOURCE_PATHS cover every repository file it includes", () => {
+    const code = only(t, "AWS::Lambda::Function").Properties.Code as {
+      S3Key: string;
+    };
+    const dir = join(outdir, `asset.${code.S3Key.replace(/\.zip$/, "")}`);
+    const commit = agentCommit(repoRoot);
+    expect(commit).toMatch(/^[0-9a-f]{7}(-dirty)?$/);
+    // git log -1 over the source paths, as the stack reads it.
+    const last = execFileSync(
+      "git",
+      ["log", "-1", "--format=%H", "--", ...AGENT_SOURCE_PATHS],
+      { cwd: repoRoot, encoding: "utf8" },
+    ).trim();
+    expect(commit.slice(0, 7)).toBe(last.slice(0, 7));
+    const js = readFileSync(join(dir, "index.js"), "utf8");
+    expect(js).toContain(JSON.stringify(commit));
+    expect(js).not.toContain("__AGENT_COMMIT__");
+    // Every source of the bundle outside node_modules is under one of the paths.
+    const map = JSON.parse(readFileSync(join(dir, "index.js.map"), "utf8")) as {
+      sources: string[];
+    };
+    const own = map.sources
+      .map((s) => relative(repoRoot, resolve(dir, s)))
+      .filter((s) => !s.split("/").includes("node_modules"));
+    expect(own).toContain("apps/agent-api/src/handler.ts");
+    expect(own).toContain("packages/agent/src/agent.ts");
+    expect(
+      own.filter(
+        (s) =>
+          !AGENT_SOURCE_PATHS.some((p) => s === p || s.startsWith(`${p}/`)),
+      ),
+    ).toEqual([]);
+    // No environment variable carries it.
+    const fn = only(t, "AWS::Lambda::Function").Properties as {
+      Environment: { Variables: Record<string, unknown> };
+    };
+    expect(JSON.stringify(fn.Environment.Variables)).not.toContain(commit);
   });
 });
 
