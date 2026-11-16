@@ -762,6 +762,7 @@ function permitsLead(
  * A long-open list's count where the circle's parcels have no permit data, or where that is not known: not
  * available (null, never 0) when the list found no permit and either the coverage read failed or none of the parcels
  * counted has permit data or a long-open mark (all are outside the City of Los Angeles); null when the count stands.
+ * After a failed read the text does not repeat the gap that says how many lie outside is not known (areaStated's).
  */
 function notAvailableText(
   cov: Read<AreaCoverage>,
@@ -773,7 +774,7 @@ function notAvailableText(
   const area = areaPhrase(radiusMiles);
   const unknown = `so whether there are long-open roofing permits (${rule}) is unknown, not 0.`;
   if (!cov.ok)
-    return `Not available: how many of the ${area} ${OUTSIDE_CITY}, is not known, ${unknown}`;
+    return `Not available: the list found no permit within ${radiusMiles} mi, and the parcels there may ${OUTSIDE_CITY}, ${unknown}`;
   const a = cov.value;
   const c = a.coverage;
   if (c.checked === 0 || c.with_permit_data > 0) return null;

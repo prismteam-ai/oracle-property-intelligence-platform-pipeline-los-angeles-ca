@@ -436,6 +436,112 @@ describe("timeouts and the answer's deadline", () => {
   });
 });
 
+describe("a timeout the answer's deadline ends: the gap says how many attempts were made and that the time budget ended the call", () => {
+  /** runSummary's attempts never answer; the first call (explorer.sources) is answered at once. */
+  const hangs = () =>
+    fakeDataApi(fakeQueries().queries, {
+      behaviour: (r) =>
+        r === "explorer.runSummary" ? { kind: "hang" } : { kind: "answer" },
+    });
+  const budgetGap = (attempts: string) =>
+    `data API timeout: explorer.runSummary not read (${attempts} made; the answer's time budget ended the call)`;
+  /** runSummary's error after `ms` of fake time, with the answer's deadline `deadlineMs` after the start. */
+  async function timedOut(
+    deadlineMs: number,
+    ms: number,
+    random = 0,
+  ): Promise<{ err: unknown; requests: number; waits: number[] }> {
+    vi.useFakeTimers();
+    const api = hangs();
+    const { q, waits } = adapter(api, {
+      deadline: Date.now() + deadlineMs,
+      now: () => Date.now(),
+      random: () => random,
+    });
+    await q.explorer.sources();
+    const p = q.explorer.runSummary().catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(ms);
+    return { err: await p, requests: api.requests.length, waits };
+  }
+
+  test("an attempt the deadline cuts short (3 s of 5 s): 1 attempt made, not 'twice'", async () => {
+    const { err, requests } = await timedOut(3_000, 3_000);
+    expect(err).toBeInstanceOf(DataApiUnavailableError);
+    expect(err).toMatchObject({
+      reason: "timeout",
+      gap: budgetGap("1 attempt"),
+    });
+    expect(requests).toBe(2);
+  });
+
+  test("a full 5 s attempt with no time left for the retry: 1 attempt made", async () => {
+    const { err, requests, waits } = await timedOut(
+      CALL_TIMEOUT_MS,
+      CALL_TIMEOUT_MS,
+      0.5,
+    );
+    expect(err).toMatchObject({
+      reason: "timeout",
+      gap: budgetGap("1 attempt"),
+    });
+    expect(requests).toBe(2);
+    expect(waits).toEqual([]);
+  });
+
+  test("a full 5 s attempt, then a retry the deadline cuts short (3 s): 2 attempts made", async () => {
+    const { err, requests, waits } = await timedOut(8_000, 8_000);
+    expect(err).toMatchObject({
+      reason: "timeout",
+      gap: budgetGap("2 attempts"),
+    });
+    expect(requests).toBe(3);
+    expect(waits).toEqual([0]);
+  });
+
+  test("two full attempts within the deadline: 'no answer within 5 s, twice', as before", async () => {
+    const { err } = await timedOut(20_000, 2 * CALL_TIMEOUT_MS);
+    expect(err).toMatchObject({
+      reason: "timeout",
+      gap: "data API timeout: explorer.runSummary not read (no answer within 5 s, twice)",
+    });
+  });
+
+  test("a busy answer, then the wait for the retry uses up the deadline: that answer's gap, not 'not called'", async () => {
+    let t = 0;
+    const api = fakeDataApi(fakeQueries().queries, {
+      behaviour: busyFirst("explorer.runSummary"),
+    });
+    const q = httpDataQueries({
+      apiUrl: FAKE_API_URL,
+      apiToken: TOKEN,
+      fetch: api.fetch,
+      deadline: 260,
+      now: () => t,
+      random: () => 0.5,
+      sleep: async () => void (t = 300),
+    });
+    const err = await q.explorer.runSummary().catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      reason: "busy",
+      gap: "data API busy: explorer.runSummary not read",
+    });
+    expect(api.requests).toHaveLength(1);
+  });
+
+  test("the gap wording with the attempts made", () => {
+    expect(
+      unavailableGap("parcels.search", "timeout", null, CALL_TIMEOUT_MS, 1),
+    ).toBe(
+      "data API timeout: parcels.search not read (1 attempt made; the answer's time budget ended the call)",
+    );
+    expect(
+      unavailableGap("parcels.search", "timeout", null, CALL_TIMEOUT_MS, 2),
+    ).toBe(
+      "data API timeout: parcels.search not read (2 attempts made; the answer's time budget ended the call)",
+    );
+  });
+});
+
 describe("the first data call: 10 s per attempt (a cold data API environment), every other call 5 s", () => {
   /** A route's attempts as the fake data API takes them: `ms` each (answered after it unless aborted first). */
   const slow =

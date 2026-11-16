@@ -23,8 +23,10 @@
  *   is retried once, after a full-jitter wait of random × min(RETRY_CAP_MS, RETRY_BASE_MS × 2) = 0–500 ms, and only
  *   if the deadline leaves time for it. Any other status (400, 401, 403, 404, ...) is not retried.
  * - fallback: when the retry fails too, the call throws DataApiUnavailableError. runTool turns it into a failed
- *   tool result with the gap "data API busy: <route> not read" (or its timeout / error / time-budget wording);
- *   search_aged_roofs lists a parcel whose parcels.detail was not read with that gap, never a silent null.
+ *   tool result with the gap "data API busy: <route> not read" (or its timeout / error / time-budget wording; a
+ *   timeout the deadline ended, by cutting an attempt short or leaving no time for the retry, says how many attempts
+ *   were made instead of "twice"); search_aged_roofs lists a parcel whose parcels.detail was not read with that
+ *   gap, never a silent null.
  * The route list is the tools' (permit-api.ts DataQueries). explorer.sources returns the sources only: a page list
  * the data API may still send is dropped here, so it can never reach a tool result or the model.
  */
@@ -72,8 +74,10 @@ export class DataApiUnavailableError extends Error {
     status: number | null = null,
     /** The call's per-attempt limit, named by the timeout gap: CALL_TIMEOUT_MS, or FIRST_CALL_TIMEOUT_MS. */
     timeoutMs: number = CALL_TIMEOUT_MS,
+    /** A timeout the answer's deadline ended (an attempt cut short, or no time left for the retry): the attempts made. */
+    budgetEndedAfter?: number,
   ) {
-    super(unavailableGap(route, reason, status, timeoutMs));
+    super(unavailableGap(route, reason, status, timeoutMs, budgetEndedAfter));
     this.name = "DataApiUnavailableError";
     this.route = route;
     this.reason = reason;
@@ -85,18 +89,25 @@ export class DataApiUnavailableError extends Error {
   }
 }
 
-/** The gap text of a call not read: "data API busy: <route> not read" and the other reasons' wording. */
+/**
+ * The gap text of a call not read: "data API busy: <route> not read" and the other reasons' wording. A timeout names
+ * its two full attempts ("no answer within 5 s, twice"), or, when the answer's deadline ended it (budgetEndedAfter),
+ * how many attempts were made.
+ */
 export function unavailableGap(
   route: string,
   reason: UnavailableReason,
   status: number | null = null,
   timeoutMs: number = CALL_TIMEOUT_MS,
+  budgetEndedAfter?: number,
 ): string {
   switch (reason) {
     case "busy":
       return `data API busy: ${route} not read`;
     case "timeout":
-      return `data API timeout: ${route} not read (no answer within ${timeoutMs / 1000} s, twice)`;
+      return budgetEndedAfter !== undefined
+        ? `data API timeout: ${route} not read (${budgetEndedAfter === 1 ? "1 attempt" : `${budgetEndedAfter} attempts`} made; the answer's time budget ended the call)`
+        : `data API timeout: ${route} not read (no answer within ${timeoutMs / 1000} s, twice)`;
     case "error":
       return `data API error${status !== null ? ` ${status}` : ""}: ${route} not read`;
     case "time_budget":
@@ -239,10 +250,32 @@ export function guardedFetch(opts: HttpDataQueriesOptions): {
     inFlight++;
     peak = Math.max(peak, inFlight);
     try {
+      /** An attempt shorter than its limit (the deadline cut it), and the last attempt's failure. */
+      let cut = false;
+      let last: { reason: UnavailableReason; status: number | null } | null =
+        null;
       for (let n = 1; ; n++) {
         const timeoutMs = Math.min(limit, left());
-        if (timeoutMs <= 0)
+        if (timeoutMs <= 0) {
+          // No time left: no call made, or no retry after the attempt that failed (stated as that attempt's).
+          if (last?.reason === "timeout")
+            throw new DataApiUnavailableError(
+              route,
+              "timeout",
+              null,
+              nominal,
+              n - 1,
+            );
+          if (last)
+            throw new DataApiUnavailableError(
+              route,
+              last.reason,
+              last.status,
+              nominal,
+            );
           throw new DataApiUnavailableError(route, "time_budget");
+        }
+        if (timeoutMs < limit) cut = true;
         const res = await attempt(input, init, timeoutMs);
         if (res !== "timeout" && !TRANSIENT_STATUSES.has(res.status))
           return res;
@@ -255,8 +288,16 @@ export function guardedFetch(opts: HttpDataQueriesOptions): {
               : "error";
         // Full jitter: a uniform wait from 0 to min(cap, base × 2^n) ms.
         const wait = random() * Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** n);
+        // A timeout the deadline ended (an attempt cut short, or no retry for lack of time) says how many were made.
         if (n >= MAX_ATTEMPTS || left() - wait <= 0)
-          throw new DataApiUnavailableError(route, reason, status, nominal);
+          throw new DataApiUnavailableError(
+            route,
+            reason,
+            status,
+            nominal,
+            reason === "timeout" && (cut || n < MAX_ATTEMPTS) ? n : undefined,
+          );
+        last = { reason, status };
         await sleep(wait);
       }
     } finally {

@@ -2622,8 +2622,12 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
   /** The gap of the failed read, after what the result covers (`lead`). */
   const notKnown = (lead: string) =>
     `${lead} parcels.points failed (boom): how many of the parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, is not known.`;
+  /** A list's not-available text after the failed read: it does not repeat the gap's "is not known". */
   const notCheckedText = (rule: string) =>
-    `Not available: how many of the parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, is not known, so whether there are long-open roofing permits (${rule}) is unknown, not 0.`;
+    `Not available: the list found no permit within 1 mi, and the parcels there may lie outside the City of Los Angeles, where there is no permit data, so whether there are long-open roofing permits (${rule}) is unknown, not 0.`;
+  /** How many gaps say the failed read's "is not known": once. */
+  const notKnownOnce = (gaps: readonly string[]) =>
+    expect(gaps.filter((g) => g.includes("is not known"))).toHaveLength(1);
   const RULE =
     "an issued LADBS roofing-work permit still open at least 1,826 days";
 
@@ -2648,6 +2652,7 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
       notKnown("The list covers every permit within 1 mi."),
       text,
     ]);
+    notKnownOnce(o.gaps);
     expect(o.fact).toMatchObject({ count: null, permit_data: null });
   });
 
@@ -2678,6 +2683,7 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
       first,
       within,
     ]);
+    notKnownOnce(o.gaps);
     expect(o.fact).toMatchObject({
       count: null,
       within_window: { status: "read", count: null },
