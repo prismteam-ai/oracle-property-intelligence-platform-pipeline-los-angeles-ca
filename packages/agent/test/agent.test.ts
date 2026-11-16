@@ -1240,7 +1240,7 @@ describe("outside the City of Los Angeles", () => {
       long_open_permit: { status: "not_available", count: null },
     });
     expect(a.reasoning).toContain(
-      "searched parcels within 1 mi of Pasadena built before 2006 (roofs older than 20 years): 42 match, none of the nearest checked with permit data (outside the City of Los Angeles), so whether they have a long-open roofing permit is not available (unknown, not 0), 0 listed",
+      "searched parcels within 1 mi of Pasadena built before 2006 (roofs older than 20 years): 42 match (roof age covers all 42); how many lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3: all 3 do, so whether they have a long-open roofing permit is not available (unknown, not 0), 0 listed",
     );
   });
 
@@ -1274,11 +1274,11 @@ describe("outside the City of Los Angeles", () => {
       "the pin is outside the City of Los Angeles: no permit data there.",
     );
     expect(plain.reasoning).toContain(
-      ": 42 match (1 of the nearest checked without permit data: outside the City of Los Angeles), 3 listed",
+      ": 42 match (roof age covers all 42; how many lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3: 1 of them), 3 listed",
     );
     const filtered = await ask(true);
     expect(filtered.reasoning).toContain(
-      ": 42 match, of which at least 1 parcels (not permits) have a long-open roofing permit (open at least 1,826 days) among the nearest checked; 1 of the nearest checked have no permit data (outside the City of Los Angeles), unknown there, 1 listed",
+      ": 42 match (roof age covers all 42), of which at least 1 parcels (not permits) have a long-open roofing permit (open at least 1,826 days), counted among the nearest 3 only; 1 of those 3 have no permit data (outside the City of Los Angeles), unknown there, 1 listed",
     );
   });
 
@@ -1350,7 +1350,59 @@ describe("outside the City of Los Angeles", () => {
     );
   });
 
-  test("long_open_permits whose permit-data check failed and whose list found no permit: not available, said as not checked, no place gap", async () => {
+  test("long_open_permits with truncated points: the reasoning says first that the count and the list cover every permit, and that the outside-the-City count was made only for the nearest", async () => {
+    const { queries } = fakeQueries();
+    // The fake's points draw the nearest 3 of the 42 parcels with a roof year (truncated); permits.longOpen finds no
+    // permit at Pasadena (outside the City of Los Angeles).
+    const truncated: DataQueries = {
+      ...queries,
+      permits: {
+        ...queries.permits,
+        longOpen: async (i) =>
+          i.lat === PASADENA_RESOLVED.lat && i.lon === PASADENA_RESOLVED.lon
+            ? {
+                ...(await queries.permits.longOpen(i)),
+                count: 0,
+                items: [],
+                next_offset: null,
+              }
+            : queries.permits.longOpen(i),
+      },
+    };
+    const ask = (center: { lat: number; lon: number }) =>
+      runAgent(
+        {
+          question: "Which permits near the pin have been open for many years?",
+          center: { ...center, label: "the pin" },
+        },
+        {
+          model: new ScriptedModel([
+            toolReply([
+              {
+                name: "long_open_permits",
+                input: { ...center, radius_miles: 1 },
+              },
+            ]),
+            textReply("Done."),
+          ]),
+          queries: truncated,
+          settings: SETTINGS,
+        },
+      );
+    const mixed = await ask(MIXED_CENTER);
+    expect(mixed.reasoning).toContain(
+      "within 1 mi of the pin open at least 1,826 days: 57 match (the count and the list cover every permit within 1 mi; how many of the 42 parcels with a roof year lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3: 1 of them), 2 listed",
+    );
+    const outside = await ask(PASADENA_RESOLVED);
+    expect(outside.reasoning).toContain(
+      "within 1 mi of the pin open at least 1,826 days: the list covers every permit within 1 mi and found none; how many of the 42 parcels with a roof year lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3: all 3 do, so the count is not available (unknown, not 0), 0 listed",
+    );
+    // Neither line says parcels or permit data were "checked".
+    for (const a of [mixed, outside])
+      expect(a.reasoning).not.toMatch(/checked/);
+  });
+
+  test("long_open_permits whose permit-data read failed and whose list found no permit: not available, said as not known, no place gap", async () => {
     const { queries } = fakeQueries();
     const failing: DataQueries = {
       ...queries,
@@ -1391,7 +1443,7 @@ describe("outside the City of Los Angeles", () => {
     );
     expect(a.status).toBe("answered");
     expect(a.reasoning).toContain(
-      "within 1 mi of Pasadena open at least 1,826 days: whether the parcels with a roof year have permit data was not checked, so the count is not available (unknown, not 0), 0 listed",
+      "within 1 mi of Pasadena open at least 1,826 days: the list covers every permit within 1 mi and found none; how many of the parcels with a roof year lie outside the City of Los Angeles, where there is no permit data, is not known (that read failed), so the count is not available (unknown, not 0), 0 listed",
     );
     expect(a.gaps).toContain(
       "The list covers every permit within 1 mi. parcels.points failed (boom): how many of the parcels within 1 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, is not known.",
@@ -1429,6 +1481,10 @@ describe("outside the City of Los Angeles", () => {
     expect(a.status).toBe("answered");
     expect(a.gaps).toContain(
       "Pasadena is outside the City of Los Angeles: no permit data there.",
+    );
+    // Truncated points: roof age covers every matching parcel; the outside-the-City count, only the nearest.
+    expect(a.reasoning).toContain(
+      ": 42 match (roof age covers all 42; how many lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3: all 3 do), 3 listed",
     );
     expect(a.session.area).toMatchObject({
       label: "Pasadena",
@@ -2258,7 +2314,7 @@ describe("the reasoning states the long-open parcel count and the within-window 
     );
     expect(a.status).toBe("answered");
     expect(a.reasoning).toContain(
-      "Searched parcels within 1 mi of Van Nuys built before 2011 (roofs older than 15 years): 42 match, of which at least 2 parcels (not permits) have a long-open roofing permit (open at least 1,826 days) among the nearest checked, 2 listed",
+      "Searched parcels within 1 mi of Van Nuys built before 2011 (roofs older than 15 years): 42 match (roof age covers all 42), of which at least 2 parcels (not permits) have a long-open roofing permit (open at least 1,826 days), counted among the nearest 3 only, 2 listed",
     );
     expect(
       a.gaps.some((g) => g.startsWith("At least 2 of the 42 parcels")),

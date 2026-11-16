@@ -694,18 +694,27 @@ function explain(
     }
     switch (f.tool) {
       case "search_aged_roofs": {
-        // Which matching parcels have permit data (all of them, or the nearest checked); null: not read.
+        // Which matching parcels have permit data: all of them counted, or (truncated points) only the nearest;
+        // null: that read failed. Roof age covers every matching parcel either way, and with truncated points the
+        // line says so first, then that the outside-the-City count was made only for the nearest.
         const cov = f.matched_permit_data;
         const without = cov?.without_permit_data ?? 0;
         const lo = f.long_open;
-        const nearest = cov && !cov.complete ? " of the nearest checked" : "";
+        const nearest = cov && !cov.complete ? cov.checked : null;
+        const roofAge = (n: number) => `roof age covers all ${fmt(n)}`;
+        const countedNearest = (n: number) =>
+          `how many lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest ${fmt(n)}`;
         let matched: string;
         if (lo && lo.count === null)
-          matched = `${fmt(lo.of)} match, none${nearest} with permit data (outside the City of Los Angeles), so whether they have a long-open roofing permit is not available (unknown, not 0)`;
+          matched =
+            nearest === null
+              ? `${fmt(lo.of)} match, none with permit data (outside the City of Los Angeles), so whether they have a long-open roofing permit is not available (unknown, not 0)`
+              : `${fmt(lo.of)} match (${roofAge(lo.of)}); ${countedNearest(nearest)}: all ${fmt(nearest)} do, so whether they have a long-open roofing permit is not available (unknown, not 0)`;
+        // The long-open count itself comes from the nearest parcels when the points are truncated: a lower bound.
         else if (lo)
-          matched = `${fmt(lo.of)} match, of which ${lo.complete ? "" : "at least "}${fmt(lo.count ?? 0)} parcels (not permits) have a long-open roofing permit (open at least ${fmt(lo.min_open_days)} days)${lo.complete ? "" : " among the nearest checked"}${without > 0 ? `; ${fmt(without)}${nearest} have no permit data (outside the City of Los Angeles), unknown there` : ""}`;
+          matched = `${fmt(lo.of)} match${nearest === null ? "" : ` (${roofAge(lo.of)})`}, of which ${lo.complete ? "" : "at least "}${fmt(lo.count ?? 0)} parcels (not permits) have a long-open roofing permit (open at least ${fmt(lo.min_open_days)} days)${lo.complete ? "" : `, counted among the nearest${nearest === null ? "" : ` ${fmt(nearest)}`} only`}${without > 0 ? `; ${fmt(without)}${nearest === null ? "" : ` of those ${fmt(nearest)}`} have no permit data (outside the City of Los Angeles), unknown there` : ""}`;
         else
-          matched = `${fmt(f.matched)} match${without > 0 ? ` (${fmt(without)}${nearest} without permit data: outside the City of Los Angeles)` : ""}`;
+          matched = `${fmt(f.matched)} match${without === 0 ? "" : nearest === null ? ` (${fmt(without)} without permit data: outside the City of Los Angeles)` : ` (${roofAge(f.matched)}; ${countedNearest(nearest)}: ${outsideOf(without, nearest)})`}`;
         reasoning.push(
           `searched parcels within ${f.radius_miles} mi of ${label} built before ${f.built_before_year} (roofs older than ${f.threshold_years} years)${f.ownership_basis ? `, owner unchanged for 10 years or more by the "${f.ownership_basis}" basis` : ""}: ${matched}, ${f.returned} listed`,
         );
@@ -714,7 +723,7 @@ function explain(
             ? `Roof age is the assessor year-built proxy: older than ${f.threshold_years} years means built before ${f.built_before_year} (roll year ${f.roll_year} − ${f.threshold_years}).`
             : `Roof age counts from the effective roof year: a finaled roofing permit's year where the basis is PERMIT, else the assessor year-built proxy; older than ${f.threshold_years} years means an effective roof year before ${f.built_before_year}.`,
         );
-        // No matching parcel has permit data (of those checked: the nearest, when the map points are truncated).
+        // No matching parcel has permit data (of those counted: the nearest, when the map points are truncated).
         // Without that read, the listed parcels decide, as they did before it.
         if (
           cov
@@ -727,23 +736,28 @@ function explain(
         break;
       }
       case "long_open_permits": {
-        // Which parcels in the circle have permit data (all of them, or the nearest checked); null: not checked.
+        // Which parcels in the circle have permit data: all of them counted, or (truncated points) only the nearest;
+        // null: that read failed. The count and the list cover every permit in the circle either way, and with
+        // truncated points or a failed read the line says so first, then what is known of the outside-the-City count.
         const cov = f.permit_data;
         const without = cov?.without_permit_data ?? 0;
-        // "the 8,864 parcels with a roof year", or with truncated points "the nearest 25,000 of the 115,373 ...".
-        const parcels = cov
-          ? `${cov.complete ? "" : `the nearest ${fmt(cov.checked)} of `}the ${fmt(cov.parcels)} parcels with a roof year`
-          : "";
-        const matched =
-          f.count === null
-            ? cov
-              ? `none of ${parcels} has permit data (outside the City of Los Angeles), so the count is not available (unknown, not 0)`
-              : "whether the parcels with a roof year have permit data was not checked, so the count is not available (unknown, not 0)"
-            : `${fmt(f.count)} match${without > 0 ? ` (${fmt(without)} of ${parcels} without permit data: outside the City of Los Angeles)` : ""}`;
+        const r = f.radius_miles;
+        // "how many of the 42 parcels with a roof year lie outside ..., was counted only for the nearest 3"
+        const countedNearest = (c: NonNullable<typeof cov>) =>
+          `how many of the ${fmt(c.parcels)} parcels with a roof year lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest ${fmt(c.checked)}`;
+        let matched: string;
+        if (f.count !== null)
+          matched = `${fmt(f.count)} match${!cov || without === 0 ? "" : cov.complete ? ` (${fmt(without)} of the ${fmt(cov.parcels)} parcels with a roof year without permit data: outside the City of Los Angeles)` : ` (the count and the list cover every permit within ${r} mi; ${countedNearest(cov)}: ${outsideOf(without, cov.checked)})`}`;
+        else if (!cov)
+          matched = `the list covers every permit within ${r} mi and found none; how many of the parcels with a roof year lie outside the City of Los Angeles, where there is no permit data, is not known (that read failed), so the count is not available (unknown, not 0)`;
+        else if (cov.complete)
+          matched = `none of the ${fmt(cov.parcels)} parcels with a roof year has permit data (outside the City of Los Angeles), so the count is not available (unknown, not 0)`;
+        else
+          matched = `the list covers every permit within ${r} mi and found none; ${countedNearest(cov)}: all ${fmt(cov.checked)} do, so the count is not available (unknown, not 0)`;
         reasoning.push(
           `searched long-open permits, ${LONG_OPEN_SCOPE}, within ${f.radius_miles} mi of ${label} open at least ${fmt(f.min_open_days)} days${f.max_open_days !== null ? ` and at most ${fmt(f.max_open_days)}` : ""}: ${matched}, ${f.returned} listed`,
         );
-        // No parcel in the circle has permit data (of those checked): the place is outside the City of Los Angeles.
+        // No parcel in the circle has permit data (of those counted): the place is outside the City of Los Angeles.
         if (cov && cov.checked > 0 && cov.with_permit_data === 0)
           gaps.push(outsideCityGap(label));
         assumptions.push(durationAssumption(req.question, f.min_open_days));
@@ -794,6 +808,10 @@ function explain(
     centerKnown,
   };
 }
+
+/** How many of the nearest parcels counted lie outside the City of Los Angeles: "all 3 do" or "1 of them". */
+const outsideOf = (without: number, counted: number) =>
+  without === counted ? `all ${fmt(counted)} do` : `${fmt(without)} of them`;
 
 /** "8 named, 1 owner-builder, 1 not read": the contractor statuses of the within-window list, those that occur. */
 function contractorPhrase(c: ContractorSummary): string {
