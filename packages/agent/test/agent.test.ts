@@ -1185,6 +1185,19 @@ describe("outside the City of Los Angeles", () => {
     expect(a.gaps).toContain(
       "Pasadena is outside the City of Los Angeles: no permit data there.",
     );
+    // Both outside statements are listed: the tool's (how many parcels, no place) and the agent's (the place);
+    // the answer's gaps are deduplicated by their exact text only.
+    expect(
+      a.gaps.filter((g) =>
+        g.endsWith("outside the City of Los Angeles: no permit data there."),
+      ),
+    ).toEqual([
+      "All of the nearest 3 of the 42 parcels that match the roof-age rule (only those were checked: the data API marks at most 3 parcels) are outside the City of Los Angeles: no permit data there.",
+      "Pasadena is outside the City of Los Angeles: no permit data there.",
+    ]);
+    expect(a.gaps.filter((g) => g.startsWith("Not available:"))).toHaveLength(
+      1,
+    );
     // The model saw a count that is not available, never 0, and nothing listed.
     expect(result).toMatchObject({
       count: null,

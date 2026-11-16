@@ -786,11 +786,16 @@ describe("MCP server over the SDK's in-memory transport", () => {
         status: "not_available",
         count: null,
       });
-      expect(b.gaps).toHaveLength(1);
-      expect(b.gaps[0]).toMatch(
+      // The outside statement (where the agent states the place outside the City), then the not-available text.
+      expect(b.gaps).toHaveLength(2);
+      expect(b.gaps[0]).toBe(b.result.permit_data!.text);
+      expect(b.gaps[0]).toBe(
+        "All of the nearest 3 of the 42 parcels that match the roof-age rule (only those were checked: the data API marks at most 3 parcels) are outside the City of Los Angeles: no permit data there.",
+      );
+      expect(b.gaps[1]).toMatch(
         /^Not available: none of the nearest 3 of the 42 parcels that match the roof-age rule has permit data \(all are outside the City of Los Angeles;/,
       );
-      expect(b.gaps[0]).toContain("unknown, not 0");
+      expect(b.gaps[1]).toContain("unknown, not 0");
       const plain = body(await call(false));
       expect(plain.result.count).toBe(42);
       expect(plain.result.permit_data?.without_permit_data).toBe(3);

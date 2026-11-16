@@ -26,6 +26,7 @@ import {
   lastToolResult,
   message,
   runAgent,
+  runTool,
   textReply,
   toolReply,
   toolUseBlock,
@@ -53,6 +54,7 @@ import {
   OWNER_NAMED,
   allPassed,
   checkAnswer,
+  checkCounts,
   checkLicenseStatus,
   checkPlace,
   type AnswerChecks,
@@ -2578,6 +2580,90 @@ describe("prompt p and the long-open filter, with the scripted model", () => {
     const c = await checksOf(p, answer, { queries: oneMarked });
     expect(c.counts.result).toBe("fail");
     expect(c.counts.details.join(" ")).toContain("count: tool 2 ≠ direct 1");
+  });
+
+  test("counts: a parcel with a long-open mark but no permit data is counted as having permit data; the count without it fails", async () => {
+    const { queries } = fakeQueries();
+    // The third parcel is outside the City of Los Angeles (permit_data_available 0) with a joined long-open permit.
+    const q: DataQueries = {
+      ...queries,
+      parcels: {
+        ...queries.parcels,
+        points: async (i) => ({
+          ...(await queries.parcels.points(i)),
+          permit_data_available: [1, 1, 0],
+          long_open_permit: [1, 0, 1],
+        }),
+      },
+    };
+    const input = {
+      ...VAN_NUYS_POINT,
+      radius_miles: 1,
+      threshold_years: 15,
+      limit: 10,
+      long_open_permit: true,
+    };
+    const o = await runTool("search_aged_roofs", input, q);
+    const call = (result: unknown): ToolCallRecord => ({
+      id: "t1",
+      name: "search_aged_roofs",
+      input,
+      result,
+      is_error: false,
+    });
+    expect(await checkCounts([call(o.content)], q)).toEqual({
+      result: "pass",
+      details: [
+        "search_aged_roofs: equal (parcels.points: 2 of 42 parcels marked long-open, 2 IDs)",
+      ],
+    });
+    // The count among the parcels in the City only (the marked outside parcel left out) fails.
+    const r = o.content as {
+      items: unknown[];
+      long_open_permit: Record<string, unknown>;
+    };
+    const cityOnly = await checkCounts(
+      [
+        call({
+          ...r,
+          count: 1,
+          items: r.items.slice(0, 1),
+          long_open_permit: { ...r.long_open_permit, with_permit_data: 2 },
+        }),
+      ],
+      q,
+    );
+    expect(cityOnly.result).toBe("fail");
+    expect(cityOnly.details.join(" ")).toContain("count: tool 1 ≠ direct 2");
+    expect(cityOnly.details.join(" ")).toContain(
+      "long_open_permit with_permit_data: tool 2 ≠ direct 3",
+    );
+  });
+
+  test("counts: without the filter and with truncated points, the permit_data block's checked, matched and complete are compared; a result without it fails", async () => {
+    const { queries } = fakeQueries();
+    const input = {
+      ...VAN_NUYS_POINT,
+      radius_miles: 1,
+      threshold_years: 15,
+      limit: 10,
+    };
+    const o = await runTool("search_aged_roofs", input, queries);
+    const call = (result: unknown): ToolCallRecord => ({
+      id: "t1",
+      name: "search_aged_roofs",
+      input,
+      result,
+      is_error: false,
+    });
+    expect((await checkCounts([call(o.content)], queries)).result).toBe("pass");
+    const without = { ...(o.content as Record<string, unknown>) };
+    delete without.permit_data;
+    const c = await checkCounts([call(without)], queries);
+    expect(c.result).toBe("fail");
+    expect(c.details).toEqual([
+      "search_aged_roofs: permit_data checked: tool undefined ≠ direct 3; permit_data matched: tool undefined ≠ direct 42; permit_data complete: tool undefined ≠ direct false",
+    ]);
   });
 
   test("contractors_named needs long_open_permits among the expected tools", () => {

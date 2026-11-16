@@ -20,6 +20,9 @@ import {
   type ContractorWindow,
 } from "@oracle-la/agent";
 import { beforeAll, describe, expect, test as vitestTest } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createMcpServer } from "../src/create-server.ts";
 import { checkCounts } from "../src/eval/checks.ts";
 import { GAPS } from "../src/eval/prompts.ts";
 import {
@@ -377,6 +380,8 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
 
   /** Prompt d's search center (the model's call): every parcel within 1 mi lies outside the City of Los Angeles. */
   const PASADENA_CALL = { lat: 34.1528, lon: -118.13578 };
+  const ALL_OUTSIDE =
+    "All 7,845 parcels that match the roof-age rule are outside the City of Los Angeles: no permit data there.";
   /** A 1 mi area across the city line west of Pasadena: some matching parcels in the City of Los Angeles. */
   const MIXED = { lat: 34.145, lon: -118.18 };
 
@@ -406,7 +411,8 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
         },
         permit_data: { checked: 7_845, without_permit_data: 7_845 },
       });
-      expect(o.gaps).toEqual([notAvailable]);
+      // The outside statement (as the agent raises it for the place) and the not-available text.
+      expect(o.gaps).toEqual([ALL_OUTSIDE, notAvailable]);
       expect(o.records).toEqual([]);
       const counts = await checkCounts(
         [
@@ -429,9 +435,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     }
     const plain = await runTool("search_aged_roofs", filter, data.queries);
     expect(plain.content).toMatchObject({ count: 7_845, returned: 10 });
-    expect(plain.gaps).toContain(
-      "All 7,845 parcels that match the roof-age rule are outside the City of Los Angeles: no permit data there.",
-    );
+    expect(plain.gaps).toContain(ALL_OUTSIDE);
   });
 
   test("prompt d's flow with only the filtered call, on the real data: the answer's gaps include Pasadena's outside-the-City gap", async () => {
@@ -464,7 +468,57 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     expect(a.gaps).toContain(
       "Pasadena is outside the City of Los Angeles: no permit data there.",
     );
+    // Both outside statements: the tool's (the parcel count, no place), then the agent's (the place).
+    expect(
+      a.gaps.filter((g) =>
+        g.endsWith("outside the City of Los Angeles: no permit data there."),
+      ),
+    ).toEqual([
+      ALL_OUTSIDE,
+      "Pasadena is outside the City of Los Angeles: no permit data there.",
+    ]);
     expect(GAPS.outside_city_of_la.inText("Pasadena").test(a.text)).toBe(true);
+  });
+
+  test("search_aged_roofs over MCP (the SDK's in-memory transport) at the Pasadena center, 1 mi, 20 years, limit 10, long_open_permit: the gaps list the outside statement, then the not-available text", async () => {
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer(data.queries);
+    await server.connect(serverSide);
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientSide);
+    try {
+      const res = await client.callTool({
+        name: "search_aged_roofs",
+        arguments: {
+          ...PASADENA_CALL,
+          radius_miles: 1,
+          threshold_years: 20,
+          limit: 10,
+          long_open_permit: true,
+        },
+      });
+      expect(res.isError).toBeFalsy();
+      const body = JSON.parse(
+        (res.content as Array<{ type: string; text: string }>)[0]!.text,
+      ) as {
+        result: {
+          count: number | null;
+          long_open_permit: { status: string; text: string };
+          permit_data: { text: string };
+        };
+        gaps: string[];
+      };
+      expect(body.result.count).toBeNull();
+      expect(body.result.long_open_permit.status).toBe("not_available");
+      expect(body.result.permit_data.text).toBe(ALL_OUTSIDE);
+      expect(body.gaps).toEqual([
+        ALL_OUTSIDE,
+        body.result.long_open_permit.text,
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 
   test("search_aged_roofs in a mixed area (34.145, -118.18, 1 mi, 20 years): 16 long-open of the 788 parcels with permit data; the other 1,924 of 2,712 stated as without permit data, with and without the filter", async () => {
@@ -517,6 +571,111 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
           name: "search_aged_roofs",
           input: { ...filter, limit: 10 },
           result: plain.content,
+          is_error: false,
+        },
+      ],
+      data.queries,
+    );
+    expect(counts.result).toBe("pass");
+  });
+
+  test("search_aged_roofs with long_open_permit within 0.1 mi of parcel 4366022031 (outside the City of Los Angeles, with a long-open mark), 5 years: the count is the 3 parcels.points marks; the marked parcel counts as having permit data", async () => {
+    const filter = {
+      lat: 34.07311,
+      lon: -118.45758,
+      radius_miles: 0.1,
+      threshold_years: 5,
+    };
+    const p = await data.queries.parcels.points({
+      ...filter,
+      min_open_days: 1826,
+    });
+    const marked = p.id.filter((_, i) => p.long_open_permit[i] === 1);
+    expect(marked).toHaveLength(3);
+    expect(marked).toContain("4366022031");
+    expect(p.permit_data_available[p.id.indexOf("4366022031")]).toBe(0);
+    const input = { ...filter, limit: 10, long_open_permit: true };
+    const o = await runTool("search_aged_roofs", input, data.queries);
+    expect(o.content).toMatchObject({
+      count: 3,
+      returned: 3,
+      long_open_permit: {
+        status: "available",
+        count: 3,
+        of: 56,
+        checked: 56,
+        with_permit_data: 56,
+        complete: true,
+        text: "3 of the 56 parcels that match the roof-age rule have a long-open roofing permit (an issued LADBS roofing-work permit still open at least 1,826 days). This counts parcels, not permits: a parcel with several long-open permits counts once, and a building-level (condominium) permit marks every unit it links.",
+      },
+    });
+    expect(o.content).not.toHaveProperty("permit_data");
+    expect(
+      (o.content as { items: Array<{ parcel_id: string }> }).items.map(
+        (it) => it.parcel_id,
+      ),
+    ).toEqual(marked);
+    expect(o.gaps.some((g) => g.includes("City of Los Angeles"))).toBe(false);
+    const plain = await runTool(
+      "search_aged_roofs",
+      { ...filter, limit: 10 },
+      data.queries,
+    );
+    expect(plain.content).toMatchObject({ count: 56 });
+    expect(plain.content).not.toHaveProperty("permit_data");
+    const counts = await checkCounts(
+      [
+        {
+          id: "t1",
+          name: "search_aged_roofs",
+          input,
+          result: o.content,
+          is_error: false,
+        },
+        {
+          id: "t2",
+          name: "search_aged_roofs",
+          input: { ...filter, limit: 10 },
+          result: plain.content,
+          is_error: false,
+        },
+      ],
+      data.queries,
+    );
+    expect(counts).toEqual({
+      result: "pass",
+      details: [
+        "search_aged_roofs: equal (parcels.points: 3 of 56 parcels marked long-open, 3 IDs)",
+        "search_aged_roofs: equal (parcels.search: count 56, 10 IDs; parcels.points: 0 of 56 checked without permit data)",
+      ],
+    });
+  });
+
+  test("search_aged_roofs without the filter at the Van Nuys center, 5 mi (15 years): the nearest 25,000 of 115,373 checked, all with permit data, stated as such with the total", async () => {
+    const input = { ...VAN_NUYS_CENTER, radius_miles: 5, threshold_years: 15 };
+    const o = await runTool("search_aged_roofs", input, data.queries);
+    const text =
+      "All of the nearest 25,000 of the 115,373 parcels that match the roof-age rule (only those were checked: the data API marks at most 25,000 parcels) have permit data; the other 90,373 were not checked.";
+    expect(o.content).toMatchObject({
+      count: 115_373,
+      returned: 10,
+      permit_data: {
+        checked: 25_000,
+        matched: 115_373,
+        without_permit_data: 0,
+        complete: false,
+        text,
+      },
+    });
+    expect(o.gaps).toContain(text);
+    expect(o.gaps.some((g) => g.includes("City of Los Angeles"))).toBe(false);
+    const counts = await checkCounts(
+      [
+        {
+          id: "t1",
+          name: "search_aged_roofs",
+          input: { ...input, limit: 10 },
+          result: o.content,
           is_error: false,
         },
       ],

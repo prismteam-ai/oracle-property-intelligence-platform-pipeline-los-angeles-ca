@@ -205,8 +205,9 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "states the basis, its weakness and that the bases are proxies from the County roll, not sales records. Optional " +
     "long_open_permit, off by default: keeps only the parcels with a long-open roofing permit (the CRM map's rule); " +
     "the result's long_open_permit states the parcel count, of how many aged-roof parcels, and that it counts parcels, not permits. " +
-    "Permits are served for the City of Los Angeles only: where no matching parcel has permit data the long-open count is " +
-    "not available (count null, status not_available), never 0, and permit_data states how many matching parcels have none.",
+    "Permits are served for the City of Los Angeles only: where no matching parcel has permit data or a long-open mark the " +
+    "long-open count is not available (count null, status not_available), never 0, and permit_data states how many matching " +
+    "parcels have none (and, when only the nearest were checked, how many match).",
   long_open_permits:
     "City of Los Angeles (LADBS) roofing-work permits, issued and still open, within a radius: open at least " +
     "min_open_days days (optionally at most max_open_days), longest open first, each counted once at its nearest " +
@@ -467,9 +468,10 @@ function rowFromDetail(
 }
 
 /**
- * Which parcels that match a search have permit data (parcels.points' permit_data_available: 1 = in the City of Los
- * Angeles, where LADBS permits are served). Checked over the points drawn: all matching parcels, or the nearest
- * max_points when the points are truncated.
+ * Which parcels that match a search have permit data: parcels.points' permit_data_available 1 (in the City of Los
+ * Angeles, where LADBS permits are served) or a long-open mark (long_open_permit 1: a permit joined to the parcel,
+ * wherever it is). Checked over the points drawn: all matching parcels, or the nearest max_points when the points
+ * are truncated.
  */
 export interface PermitCoverage {
   checked: number;
@@ -481,7 +483,8 @@ export interface PermitCoverage {
 
 /**
  * The permit-data coverage of a search's parcels from parcels.points with the same filter. The points must be the
- * search's parcels (the same count) and mark each one; otherwise an error, never a coverage guessed.
+ * search's parcels (the same count) and mark each one (permit data and long-open); otherwise an error, never a
+ * coverage guessed.
  */
 function permitCoverage(p: PointsResult, aged: number): PermitCoverage {
   const marks = p.permit_data_available as unknown;
@@ -489,11 +492,16 @@ function permitCoverage(p: PointsResult, aged: number): PermitCoverage {
     throw new Error(
       "the data API's parcels.points did not mark the parcels with permit data",
     );
+  const longOpen = p.long_open_permit as unknown;
+  if (!Array.isArray(longOpen) || longOpen.length !== p.id.length)
+    throw new Error(
+      "the data API's parcels.points did not mark the long-open parcels",
+    );
   if (p.count !== aged)
     throw new Error(
       `the data API's parcels.points counted ${p.count} parcels and its search ${aged}`,
     );
-  const withData = marks.filter((m) => m === 1).length;
+  const withData = marks.filter((m, i) => m === 1 || longOpen[i] === 1).length;
   return {
     checked: p.id.length,
     with_permit_data: withData,
@@ -529,13 +537,27 @@ function noPermitDataText(
     : `${num(c.without_permit_data)} of ${nearest} are ${outside}`;
 }
 
+/**
+ * A search's permit data when only the nearest parcels were checked (truncated points) and every one of them has
+ * it: the others were not checked.
+ */
+function nearestCheckedText(
+  c: PermitCoverage,
+  aged: number,
+  ownership: boolean,
+  maxPoints: number,
+): string {
+  return `All of the nearest ${num(c.checked)} of the ${num(aged)} ${matchingPhrase(ownership)} (only those were checked: the data API marks at most ${num(maxPoints)} parcels) have permit data; the other ${num(aged - c.checked)} were not checked.`;
+}
+
 /** The long-open filter of search_aged_roofs as its result states it. */
 export interface LongOpenParcelsStated {
   /** What the count counts. */
   unit: "parcels";
   /**
-   * "available": the count is of the checked parcels that have permit data. "not_available": none of them has
-   * permit data (all are outside the City of Los Angeles), so the filter can't be evaluated: count is null, not 0.
+   * "available": the count is of the checked parcels that have permit data (or a long-open mark). "not_available":
+   * none of them has permit data or a mark (all are outside the City of Los Angeles), so the filter can't be
+   * evaluated: count is null, not 0.
    */
   status: "available" | "not_available";
   /** Parcels with a long-open roofing permit (among those checked that have permit data); null when not available. */
@@ -544,7 +566,7 @@ export interface LongOpenParcelsStated {
   of: number;
   /** How many of them were checked: all, or the nearest MAX_POINTS when the data API's map points are truncated. */
   checked: number;
-  /** How many of those checked have permit data: the parcels the count is of. */
+  /** How many of those checked have permit data (or a long-open mark): the parcels the count is of. */
   with_permit_data: number;
   complete: boolean;
   min_open_days: number;
@@ -552,12 +574,12 @@ export interface LongOpenParcelsStated {
 }
 
 /**
- * The parcels parcels.points marks long-open (long_open_permit 1) among those with permit data, nearest first, and
- * the count as stated: of parcels, not permits. The points are the search's parcels (the same filter); a different
- * count, a missing column or another window is an error, never shown as filtered. A parcel without permit data
- * (outside the City of Los Angeles) is not counted either way: when none checked has permit data the count is not
- * available, never 0. When the points are truncated (more parcels than the data API draws) only the nearest are
- * checked: the count is a lower bound, stated as such.
+ * The parcels parcels.points marks long-open (long_open_permit 1), nearest first, and the count as stated: of
+ * parcels, not permits. The points are the search's parcels (the same filter); a different count, a missing column
+ * or another window is an error, never shown as filtered. A marked parcel has permit data (its permit is joined),
+ * even outside the City of Los Angeles; a parcel with neither permit data nor a mark is not counted either way: when
+ * none checked has permit data or a mark the count is not available, never 0. When the points are truncated (more
+ * parcels than the data API draws) only the nearest are checked: the count is a lower bound, stated as such.
  */
 function longOpenParcels(
   p: PointsResult,
@@ -582,9 +604,7 @@ function longOpenParcels(
       `the data API's parcels.points applied a long-open window other than at least ${num(DEFAULT_MIN_OPEN_DAYS)} days`,
     );
   const coverage = permitCoverage(p, aged);
-  const ids = p.id.filter(
-    (_, i) => marks[i] === 1 && p.permit_data_available[i] === 1,
-  );
+  const ids = p.id.filter((_, i) => marks[i] === 1);
   const complete = coverage.complete;
   const available = coverage.checked === 0 || coverage.with_permit_data > 0;
   const count = available ? ids.length : null;
@@ -934,9 +954,22 @@ const run = {
             points.max_points,
           )
         : null;
+    // Without the filter and with truncated points: only the nearest were checked, stated even when all of them
+    // have permit data.
+    const permitData =
+      noPermitData ??
+      (!longOpen && coverage?.ok && points && !coverage.value.complete
+        ? nearestCheckedText(
+            coverage.value,
+            res.count,
+            ownership !== null,
+            points.max_points,
+          )
+        : null);
     const notAvailable = longOpen?.stated.status === "not_available";
-    // Not available: its own text (pushed below) says that all are outside the City of Los Angeles.
-    if (noPermitData && !notAvailable) gaps.push(noPermitData);
+    // Also when not available: the outside statement is a gap wherever the agent states the place outside the City
+    // of Los Angeles (no parcel checked has permit data or a long-open mark), the long-open text after it.
+    if (permitData) gaps.push(permitData);
     else if (coverage && !coverage.ok)
       gaps.push(
         `${coverage.why}: whether the matching parcels have permit data (the City of Los Angeles) was not checked.`,
@@ -967,14 +1000,18 @@ const run = {
       ...(ownership ? { ownership: ownershipStated(ownership) } : {}),
       // The long-open filter applied: the parcel count (or not available), of how many, and its unit (parcels).
       ...(longOpen ? { long_open_permit: longOpen.stated } : {}),
-      // How many matching parcels have no permit data (outside the City of Los Angeles), when any has none.
-      ...(noPermitData && coverage?.ok
+      // How many matching parcels have no permit data (outside the City of Los Angeles), when any has none; without
+      // the filter also when only the nearest were checked, with how many match in all.
+      ...(permitData && coverage?.ok
         ? {
             permit_data: {
               checked: coverage.value.checked,
+              ...(!longOpen && !coverage.value.complete
+                ? { matched: res.count }
+                : {}),
               without_permit_data: coverage.value.without_permit_data,
               complete: coverage.value.complete,
-              text: noPermitData,
+              text: permitData,
             },
           }
         : {}),

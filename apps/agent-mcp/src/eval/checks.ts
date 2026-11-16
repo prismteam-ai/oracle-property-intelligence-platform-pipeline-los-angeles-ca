@@ -247,13 +247,13 @@ async function compareDirect(
             ...filter,
             min_open_days: DEFAULT_MIN_OPEN_DAYS,
           });
-          // Counted among the parcels with permit data only; with none of them, not available (null), never 0.
-          const covered = p.permit_data_available.filter((m) => m === 1).length;
+          // A parcel with a long-open mark has permit data; with no parcel that has permit data or a mark, not
+          // available (null), never 0.
+          const covered = p.permit_data_available.filter(
+            (m, i) => m === 1 || p.long_open_permit[i] === 1,
+          ).length;
           const available = p.id.length === 0 || covered > 0;
-          const marked = p.id.filter(
-            (_, i) =>
-              p.long_open_permit[i] === 1 && p.permit_data_available[i] === 1,
-          );
+          const marked = p.id.filter((_, i) => p.long_open_permit[i] === 1);
           cmp("count", r.count, available ? marked.length : null);
           cmp("long_open_permit unit", rec(r.long_open_permit).unit, "parcels");
           cmp(
@@ -286,17 +286,25 @@ async function compareDirect(
           ids(r.items, "parcel_id"),
           d.items.map((x) => x.parcel_id),
         );
-        // The matching parcels without permit data, as the result states them (absent: none), from the points.
+        // The matching parcels without permit data (nor a long-open mark), as the result states them (absent: none),
+        // from the points; with truncated points, the nearest checked of how many match.
         const p = await q.parcels.points({
           ...filter,
           min_open_days: DEFAULT_MIN_OPEN_DAYS,
         });
-        const without = p.permit_data_available.filter((m) => m === 0).length;
+        const without = p.permit_data_available.filter(
+          (m, i) => m === 0 && p.long_open_permit[i] !== 1,
+        ).length;
         cmp(
           "permit_data without_permit_data",
           rec(r.permit_data).without_permit_data ?? 0,
           without,
         );
+        if (p.truncated) {
+          cmp("permit_data checked", rec(r.permit_data).checked, p.id.length);
+          cmp("permit_data matched", rec(r.permit_data).matched, p.count);
+          cmp("permit_data complete", rec(r.permit_data).complete, false);
+        }
         return `parcels.search: count ${d.count}, ${d.items.length} IDs; parcels.points: ${without} of ${p.id.length} checked without permit data`;
       };
       break;
