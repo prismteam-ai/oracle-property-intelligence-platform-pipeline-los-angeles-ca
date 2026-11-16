@@ -8,8 +8,9 @@
  * interactive caller only with a strict client timeout (5 s at most), a bulkhead and a fallback ("Synchronous
  * Exception Criteria"), and transient failures are retried with exponential backoff and full jitter, never the
  * non-retriable ones ("Retries with Exponential Backoff and Jitter"):
- * - bulkhead: at most MAX_IN_FLIGHT (2) data API calls in flight per adapter; further calls wait for a slot. Two
- *   answers in parallel (the agent's reserved concurrency) hold at most 4 of the data API's 5.
+ * - bulkhead: at most MAX_IN_FLIGHT (1) data API call in flight per adapter; further calls wait for the slot. Two
+ *   answers in parallel (the agent's reserved concurrency) hold at most 2 of the data API's 5. One, not more: the data
+ *   API keeps one environment warm, and a second call in flight starts a cold one (3.9–5.1 s measured).
  * - timeout: each attempt (response headers and body) has CALL_TIMEOUT_MS (5,000 ms) at most, cut to what is left
  *   of the answer's deadline when one is given. An attempt given up here may still run in the data API until it
  *   ends (a cold start takes 8–12 s), holding one of its 5 slots meanwhile; the bulkhead counts this side only.
@@ -30,8 +31,8 @@
 import { createApiClient } from "@oracle-la/api-client";
 import type { DataQueries } from "./permit-api.ts";
 
-/** Data API calls in flight at once per adapter. */
-export const MAX_IN_FLIGHT = 2;
+/** Data API calls in flight at once per adapter: one (a second starts a cold data API environment). */
+export const MAX_IN_FLIGHT = 1;
 /** Longest one attempt may take, headers and body (the kit's synchronous exception: 5 s at most). */
 export const CALL_TIMEOUT_MS = 5_000;
 /**

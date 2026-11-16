@@ -1555,7 +1555,7 @@ describe("long_open_permits: the contractor of every within-window item", () => 
     );
   });
 
-  test("through the HTTP adapter: the reads overlap, never more than 2 data calls in flight", async () => {
+  test("through the HTTP adapter: the reads wait for the one slot, never more than 1 data call in flight", async () => {
     const { queries } = fakeQueries();
     const { q: inner } = within(queries);
     const api = fakeDataApi(inner, { delayMs: 20 });
@@ -1573,7 +1573,7 @@ describe("long_open_permits: the contractor of every within-window item", () => 
     expect(
       api.requests.filter((r) => r.route === "permits.forParcel"),
     ).toHaveLength(3);
-    expect(api.peak()).toBe(2);
+    expect(api.peak()).toBe(1);
     expect(withinOf(o).items.map((it) => it.contractor_status)).toEqual([
       "named",
       "owner-builder",
@@ -2132,7 +2132,7 @@ describe("search_aged_roofs: permit data of the matching parcels (the City of Lo
     ).toMatchObject({ ok: false, error: "boom" });
   });
 
-  test("through the HTTP adapter: the search and points overlap, never more than 2 data calls in flight", async () => {
+  test("through the HTTP adapter: the search and points both start, never more than 1 data call in flight", async () => {
     const { queries } = fakeQueries();
     const api = fakeDataApi(queries, { delayMs: 20 });
     const q = httpDataQueries({
@@ -2148,6 +2148,6 @@ describe("search_aged_roofs: permit data of the matching parcels (the City of Lo
         .map((r) => r.route)
         .sort(),
     ).toEqual(["parcels.points", "parcels.search"]);
-    expect(api.peak()).toBe(2);
+    expect(api.peak()).toBe(1);
   });
 });

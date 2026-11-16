@@ -1,6 +1,6 @@
 /**
  * The HTTP DataQueries adapter (http-data.ts) against a fake data API speaking tRPC's GET format: parity with the
- * in-process queries on every route, the forwarded bearer token, at most 2 calls in flight, the one retry with
+ * in-process queries on every route, the forwarded bearer token, one call in flight at a time, the one retry with
  * full jitter on a refused (429/503) or transient call or a timeout, the gap when the retry fails too, the 5 s
  * attempt cap, the first call's 10 s attempts (a cold data API environment), the answer's deadline, and that no page list reaches a tool result or the model. No network.
  */
@@ -146,7 +146,7 @@ describe("parity and the request", () => {
   });
 });
 
-describe("at most 2 data API calls in flight per adapter", () => {
+describe("one data API call in flight per adapter", () => {
   test(`${MAX_IN_FLIGHT} in flight at most, also when a tool fans out (search_aged_roofs reads each parcel's detail)`, async () => {
     const api = fakeDataApi(fakeQueries().queries, { delayMs: 20 });
     const { q } = adapter(api);
@@ -155,6 +155,7 @@ describe("at most 2 data API calls in flight per adapter", () => {
         q.parcels.detail({ parcel_id: FAKE_PARCELS[i % 3]! }),
       ),
     );
+    expect(MAX_IN_FLIGHT).toBe(1);
     expect(api.peak()).toBe(MAX_IN_FLIGHT);
     expect(q.peakInFlight()).toBe(MAX_IN_FLIGHT);
     const api2 = fakeDataApi(fakeQueries().queries, { delayMs: 20 });
@@ -168,7 +169,7 @@ describe("at most 2 data API calls in flight per adapter", () => {
     expect(
       api2.requests.filter((r) => r.route === "parcels.detail"),
     ).toHaveLength(3);
-    expect(api2.peak()).toBe(2);
+    expect(api2.peak()).toBe(1);
   });
 });
 
@@ -539,7 +540,8 @@ describe("the first data call: 10 s per attempt (a cold data API environment), e
     const { q } = adapter(api);
     const a = q.explorer.sources();
     const b = q.explorer.runSummary();
-    await vi.advanceTimersByTimeAsync(6_000);
+    // The second waits for the one slot (6 s), then its first attempt is cut at 5 s and its retry is read.
+    await vi.advanceTimersByTimeAsync(6_000 + CALL_TIMEOUT_MS);
     expect((await a).sources).toHaveLength(3);
     expect((await b).run.run_id).toBe("run-1");
     expect(api.requests.map((r) => r.route)).toEqual([

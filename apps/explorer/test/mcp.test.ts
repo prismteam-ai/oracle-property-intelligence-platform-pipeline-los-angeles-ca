@@ -108,8 +108,8 @@ describe("the MCP tab and the MCP server", () => {
     } finally {
       await close();
     }
-    // At most 2 data API requests in flight (the adapter's bulkhead), as the server's hosted mode.
-    expect(api.peak()).toBeLessThanOrEqual(2);
+    // At most 1 data API request in flight (the adapter's bulkhead), as the server's hosted mode.
+    expect(api.peak()).toBeLessThanOrEqual(1);
   });
 
   test("a data API that refuses: the example's result is an error with the gap, as the server's", async () => {
