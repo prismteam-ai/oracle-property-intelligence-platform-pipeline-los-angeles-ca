@@ -1615,7 +1615,7 @@ describe("search_aged_roofs: long_open_permit", () => {
     });
   });
 
-  test("off: parcels.points with the same filter, in flight with the search, for permit data only; no long_open_permit in the result", async () => {
+  test("off: parcels.points with the same filter, after the search (one data call in flight), for permit data only; no long_open_permit in the result", async () => {
     const { queries, calls } = fakeQueries();
     const o = await runTool("search_aged_roofs", VN, queries);
     expect(calls.slice(0, 2)).toEqual([
