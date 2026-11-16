@@ -71,6 +71,12 @@ export const MAX_OPEN_DAYS: typeof API_MAX_OPEN_DAYS = 36_525;
 export const LONG_OPEN_SCOPE = "roofing work only";
 
 /**
+ * Most permits the within-window list of long_open_permits asks for and lists: min(limit, 5). Each of them carries its
+ * contractor rows, so the list stays short; the longest-open list keeps `limit` (default 10).
+ */
+export const WITHIN_WINDOW_LIMIT = 5;
+
+/**
  * How long long_open_permits waits for the contractor rows of its within-window list: one data call's worst case
  * through the HTTP adapter (two 5 s attempts and a jitter wait of at most 500 ms), whatever the number of listed
  * parcels. The reads go through the adapter's bulkhead (at most 1 in flight); a read not finished by then is stated
@@ -1063,7 +1069,7 @@ const run = {
       input.max_open_days < input.min_open_days
     )
       throw new ToolInputError("max_open_days is below min_open_days");
-    const longOpen = (maxOpenDays: number | undefined) =>
+    const longOpen = (maxOpenDays: number | undefined, limit = input.limit) =>
       q.permits.longOpen({
         lat: input.lat,
         lon: input.lon,
@@ -1072,7 +1078,7 @@ const run = {
         ...(maxOpenDays !== undefined ? { max_open_days: maxOpenDays } : {}),
         sort: "open_days",
         offset: 0,
-        limit: input.limit,
+        limit,
       });
     const fact = (res: LongOpenResult, items: unknown[]) => ({
       tool: "long_open_permits" as const,
@@ -1625,13 +1631,14 @@ interface WindowStated {
  * The within-window call of long_open_permits: a permit issued on or after the window's first day has been open at
  * most (reference date − first day) days, so the limit is that number of days (lowered to the call's own
  * max_open_days when it is smaller), computed here, never by the model. No call when there is no window, or when
- * the limit is below min_open_days (no permit can be both); a failed call is a stated gap, the first list stays.
+ * the limit is below min_open_days (no permit can be both); a failed call is a stated gap, the first list stays. The
+ * call asks for min(limit, WITHIN_WINDOW_LIMIT) permits; its truncation gap states how many of how many it returned.
  */
 async function withinWindow(
   input: ToolInput<"long_open_permits">,
   referenceDate: string,
   window: ReturnType<typeof contractorWindow>,
-  longOpen: (maxOpenDays: number) => Promise<LongOpenResult>,
+  longOpen: (maxOpenDays: number, limit: number) => Promise<LongOpenResult>,
 ): Promise<
   { window: WindowStated } & (
     | { status: "read"; res: LongOpenResult; maxOpenDays: number }
@@ -1681,7 +1688,10 @@ async function withinWindow(
     return {
       window: stated,
       status: "read",
-      res: await longOpen(maxOpenDays),
+      res: await longOpen(
+        maxOpenDays,
+        Math.min(input.limit, WITHIN_WINDOW_LIMIT),
+      ),
       maxOpenDays,
     };
   } catch (err) {

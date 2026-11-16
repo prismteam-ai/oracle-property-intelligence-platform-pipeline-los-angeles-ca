@@ -12,7 +12,9 @@
  *   is known;
  * - license_status: the answer text never says a contractor license expired or is invalid (nothing in the data
  *   states a license's status);
- * - contractors: every within-window permit the text names has its contractor named as the tool returned it.
+ * - contractors: every within-window permit the text names has its contractor named as the tool returned it;
+ * - stated_counts: every number the text states for the rows it shows from a long-open list equals the rows of that
+ *   list the text names (totals, such as how many match, are not such statements).
  */
 import type { OwnershipBasis } from "@oracle-la/api/contract";
 import {
@@ -21,6 +23,7 @@ import {
   NOT_RUN_PREFIX,
   NO_TOOL_CALL_TEXT,
   OWNERSHIP_BASES,
+  WITHIN_WINDOW_LIMIT,
   idsInText,
   ownershipRuleLine,
   placeKey,
@@ -52,6 +55,7 @@ export const CHECK_NAMES = [
   "ownership",
   "license_status",
   "contractors",
+  "stated_counts",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 
@@ -151,30 +155,38 @@ function parsedInput(c: ToolCallRecord): Record<string, unknown> | null {
   return p.success ? (p.data as Record<string, unknown>) : null;
 }
 
+/** One list of a long_open_permits result, with the max_open_days and limit its direct query uses. */
+interface LongOpenList {
+  name: string;
+  r: Record<string, unknown>;
+  max_open_days?: number;
+  limit: number;
+}
+
 /**
  * The lists of a long_open_permits result: the result itself, or with with_contractor_window its labeled
- * longest_open list (the call's own max_open_days) and, when it was listed, its within_contractor_window list
- * (the max_open_days the tool computed and stated).
+ * longest_open list (the call's own max_open_days and limit) and, when it was listed, its within_contractor_window
+ * list (the max_open_days the tool computed and stated; at most min(limit, WITHIN_WINDOW_LIMIT) permits).
  */
 function longOpenLists(
   r: Record<string, unknown>,
   input: Record<string, unknown>,
-): Array<{ name: string; r: Record<string, unknown>; max_open_days?: number }> {
+): LongOpenList[] {
   const own =
     typeof input.max_open_days === "number" ? input.max_open_days : undefined;
+  const limit = Number(input.limit);
   if (input.with_contractor_window !== true)
-    return [{ name: "", r, max_open_days: own }];
-  const lists: Array<{
-    name: string;
-    r: Record<string, unknown>;
-    max_open_days?: number;
-  }> = [{ name: "longest_open", r: rec(r.longest_open), max_open_days: own }];
+    return [{ name: "", r, max_open_days: own, limit }];
+  const lists: LongOpenList[] = [
+    { name: "longest_open", r: rec(r.longest_open), max_open_days: own, limit },
+  ];
   const w = rec(r.within_contractor_window);
   if (typeof w.max_open_days === "number")
     lists.push({
       name: "within_contractor_window",
       r: w,
       max_open_days: w.max_open_days,
+      limit: Math.min(limit, WITHIN_WINDOW_LIMIT),
     });
   return lists;
 }
@@ -324,7 +336,7 @@ async function compareDirect(
               : {}),
             sort: "open_days",
             offset: 0,
-            limit: n("limit"),
+            limit: list.limit,
           });
           const tag = list.name ? `${list.name} ` : "";
           cmp(`${tag}count`, list.r.count, d.count);
@@ -822,6 +834,185 @@ export function checkContractors(
   );
 }
 
+/** Number words a stated count may use. */
+const COUNT_WORDS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  fifteen: 15,
+  twenty: 20,
+  "twenty-five": 25,
+};
+const COUNT = String.raw`(\d{1,3}(?:,\d{3})*|${Object.keys(COUNT_WORDS).join("|")})`;
+/** Not a count of rows: a duration, distance or share follows the number. */
+const NOT_ROWS = String.raw`(?![\s-]*(?:%|percent\b|days?\b|years?\b|miles?\b|mi\b))`;
+/**
+ * Statements of how many rows the text shows from a list, each with the number in group 1: "the 5 longest", "the
+ * top 10", "showing 10", "lists 5", "Only 10 permits are shown", "the 10 longest-open permits in that window are
+ * below", "here are 5". A total ("2,309 permits match", "2,039 of the 2,309") is none of these.
+ */
+export const STATED_COUNT_PATTERNS: readonly RegExp[] = [
+  new RegExp(
+    String.raw`\b(?:the|these|those)\s+(?:top\s+|first\s+)?${COUNT}(?=[\s-]+(?:longest|oldest)\b)`,
+    "gi",
+  ),
+  new RegExp(String.raw`\b(?:top|first)\s+${COUNT}\b${NOT_ROWS}`, "gi"),
+  new RegExp(
+    String.raw`\b(?:showing|shows?|shown|listing|lists?|listed)\s+(?:here\s+)?(?:only\s+)?(?:the\s+)?(?:top\s+|first\s+)?${COUNT}\b${NOT_ROWS}`,
+    "gi",
+  ),
+  new RegExp(
+    String.raw`\b${COUNT}\b${NOT_ROWS}\s+(?:[\w'’-]+\s+){0,5}?(?:are|is)\s+(?:only\s+)?(?:shown|listed|below|included)\b`,
+    "gi",
+  ),
+  new RegExp(
+    String.raw`\b(?:here|below)\s+are\s+(?:only\s+)?(?:the\s+)?(?:top\s+|first\s+)?${COUNT}\b${NOT_ROWS}`,
+    "gi",
+  ),
+];
+
+/** A statement of how many rows the text shows, with its sentence and where its number is. */
+export interface StatedCount {
+  /** The matched words. */
+  said: string;
+  count: number;
+  /** Index of the number in the text. */
+  at: number;
+  sentence: string;
+}
+
+const countValue = (token: string): number =>
+  COUNT_WORDS[token.toLowerCase()] ?? Number(token.replace(/,/g, ""));
+
+/** Every statement of rows shown in the text, in order, each number once (in its longest matched wording). */
+export function statedCounts(text: string): StatedCount[] {
+  const byAt = new Map<number, StatedCount>();
+  for (const re of STATED_COUNT_PATTERNS)
+    for (const m of text.matchAll(new RegExp(re.source, `${re.flags}d`))) {
+      const token = m[1]!;
+      const at = m.indices![1]![0];
+      // The same number matched again: keep the longest wording.
+      const seen = byAt.get(at);
+      if (seen) {
+        if (m[0].length > seen.said.length) seen.said = m[0];
+        continue;
+      }
+      // The sentence: from the previous sentence end or line break to the next.
+      const before = text.slice(0, at);
+      const start = Math.max(
+        0,
+        before.lastIndexOf("\n") + 1,
+        ...[". ", "! ", "? "].map((e) => {
+          const i = before.lastIndexOf(e);
+          return i < 0 ? 0 : i + 2;
+        }),
+      );
+      const rest = text.slice(at);
+      const end = rest.search(/[.!?](?=\s|$)|\n/);
+      byAt.set(at, {
+        said: m[0],
+        count: countValue(token),
+        at,
+        sentence: text.slice(start, end < 0 ? undefined : at + end + 1).trim(),
+      });
+    }
+  return [...byAt.values()].sort((a, b) => a.at - b.at);
+}
+
+const LIST_LABEL: Record<string, string> = {
+  "": "long-open list",
+  longest_open: "longest-open list",
+  within_contractor_window: "within-window list",
+};
+
+/**
+ * (viii) With expected.stated_counts: every statement of how many rows the text shows from a long-open list (see
+ * STATED_COUNT_PATTERNS; never a total) equals the rows of that list the text names (its permit numbers in the
+ * text). The list a statement is about: "per list", "each list" or "both lists" means every list; "window" the
+ * within-window list; "overall" or "any issue date" the longest-open list; otherwise the list whose first named row
+ * follows the statement most closely (else the one whose last named row precedes it). n/a without the expectation.
+ */
+export function checkStatedCounts(
+  answer: AgentAnswer,
+  calls: readonly ToolCallRecord[],
+  expected: EvalPrompt["expected"],
+): CheckResult {
+  if (!expected.stated_counts)
+    return check(["no stated-count expectation"], null);
+  const text = answer.text;
+  const lists = calls
+    .filter((c) => c.name === "long_open_permits" && !c.is_error)
+    .flatMap((c) => longOpenLists(rec(c.result), parsedInput(c) ?? {}))
+    .map((l) => {
+      const at = ids(l.r.items, "permit_number")
+        .map((p) => text.indexOf(p))
+        .filter((i) => i >= 0);
+      return {
+        name: l.name,
+        label: LIST_LABEL[l.name] ?? l.name,
+        shown: at.length,
+        first: at.length ? Math.min(...at) : -1,
+        last: at.length ? Math.max(...at) : -1,
+      };
+    });
+  const statements = statedCounts(text);
+  if (!lists.length)
+    return check(
+      [
+        "no long-open list in the answer's tool results",
+        ...statements.map((s) => `"${s.said}": no list to compare with`),
+      ],
+      statements.length ? false : null,
+    );
+  const details = lists.map(
+    (l) => `${l.label}: ${l.shown} row(s) named in the text`,
+  );
+  if (!statements.length)
+    return check([...details, "no statement of rows shown"], true);
+  let ok = true;
+  for (const s of statements) {
+    const sentence = s.sentence.toLowerCase();
+    let about: typeof lists;
+    if (/\b(?:per|each|both)\s+lists?\b/.test(sentence)) about = lists;
+    else if (
+      /\bwindow\b/.test(sentence) &&
+      lists.some((l) => l.name === "within_contractor_window")
+    )
+      about = lists.filter((l) => l.name === "within_contractor_window");
+    else if (
+      /\b(?:overall|any issue date|any date)\b/.test(sentence) &&
+      lists.some((l) => l.name === "longest_open")
+    )
+      about = lists.filter((l) => l.name === "longest_open");
+    else {
+      const after = lists
+        .filter((l) => l.first > s.at)
+        .sort((a, b) => a.first - b.first)[0];
+      const before = lists
+        .filter((l) => l.last >= 0 && l.last < s.at)
+        .sort((a, b) => b.last - a.last)[0];
+      about = [after ?? before ?? lists[0]!];
+    }
+    for (const l of about) {
+      const equal = s.count === l.shown;
+      if (!equal) ok = false;
+      details.push(
+        `"${s.said}" (${s.count}) → ${l.label}, ${l.shown} row(s) shown: ${equal ? "equal" : "NOT equal"}`,
+      );
+    }
+  }
+  return check(details, ok);
+}
+
 interface Resolution {
   status?: unknown;
   name?: unknown;
@@ -975,6 +1166,7 @@ export async function checkAnswer(args: {
       ownership: checkOwnership(answer, calls, prompt.expected),
       license_status: checkLicenseStatus(answer, prompt.expected),
       contractors: checkContractors(answer, calls, prompt.expected),
+      stated_counts: checkStatedCounts(answer, calls, prompt.expected),
     },
   };
 }

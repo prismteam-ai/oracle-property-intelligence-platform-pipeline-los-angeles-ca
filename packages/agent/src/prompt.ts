@@ -55,6 +55,7 @@ Records and gaps:
 
 Answer format:
 - A short answer (at most about 250 words), listing at most 10 records by ID with their key facts.
+- When you say how many permits or records you show from a list (either long-open list included), that number must equal the rows you list from it; never restate a tool's returned count for rows you leave out. How many match in all may still be stated.
 - Explain your reasoning in a sentence or two, and name your assumptions and any missing data.
 - You have at most ${maxToolTurns} rounds of tool calls; make independent calls in the same round.`;
 }

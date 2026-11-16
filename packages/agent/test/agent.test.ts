@@ -2170,7 +2170,10 @@ const FIXTURE_WINDOW = {
   last: "2023-05-31",
 };
 /** System-prompt lines added since 8fc8821 (each once, as its own line); nothing else of the text changed. */
-const PROMPT_LINES_ADDED_SINCE_8FC8821: readonly string[] = [];
+const PROMPT_LINES_ADDED_SINCE_8FC8821: readonly string[] = [
+  // Answer format (stated counts equal the rows shown).
+  "- When you say how many permits or records you show from a list (either long-open list included), that number must equal the rows you list from it; never restate a tool's returned count for rows you leave out. How many match in all may still be stated.",
+];
 const without8fc8821Additions = (prompt: string): string => {
   let out = prompt;
   for (const line of PROMPT_LINES_ADDED_SINCE_8FC8821) {

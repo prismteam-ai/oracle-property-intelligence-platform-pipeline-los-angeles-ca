@@ -57,6 +57,8 @@ import {
   checkCounts,
   checkLicenseStatus,
   checkPlace,
+  checkStatedCounts,
+  statedCounts,
   type AnswerChecks,
   type ToolCallRecord,
 } from "../src/eval/checks.ts";
@@ -1751,13 +1753,13 @@ describe("CLI and output folder", () => {
       .trim()
       .split("\n");
     expect(tsv[0]).toBe(
-      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms",
+      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tstated_counts\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms",
     );
     expect(tsv.slice(1)).toEqual([
-      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
-      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
-      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
-      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
+      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
+      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
+      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0",
+      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0",
     ]);
     const md = readFileSync(join(out, "results.md"), "utf8");
     expect(md).toContain("data run run-1");
@@ -2759,6 +2761,165 @@ describe("prompt p and the long-open filter, with the scripted model", () => {
     expect(bad.success).toBe(false);
     expect(JSON.stringify(bad.error?.issues)).toContain(
       "contractors_named needs long_open_permits in tools",
+    );
+  });
+});
+
+describe("check stated_counts: numbers of rows shown equal the rows the text lists", () => {
+  const permit = (i: number) => `13016-20000-${String(i).padStart(5, "0")}`;
+  const items = (from: number, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ permit_number: permit(from + i) }));
+  /** A with_contractor_window call: 10 longest-open permits (0–9), 5 within the window (100–104). */
+  const windowCall: ToolCallRecord = {
+    id: "toolu_1",
+    name: "long_open_permits",
+    input: {
+      lat: 34.20155,
+      lon: -118.45361,
+      radius_miles: 5,
+      with_contractor_window: true,
+    },
+    result: {
+      longest_open: { count: 2309, returned: 10, items: items(0, 10) },
+      within_contractor_window: {
+        count: 2039,
+        returned: 5,
+        max_open_days: 5062,
+        items: items(100, 5),
+      },
+    },
+    is_error: false,
+  };
+  /** A plain call: 10 permits (0–9). */
+  const plainCall: ToolCallRecord = {
+    ...windowCall,
+    input: { lat: 34.20155, lon: -118.45361, radius_miles: 5 },
+    result: { count: 2309, returned: 10, items: items(0, 10) },
+  };
+  const on = { stated_counts: true } as EvalPrompt["expected"];
+  const rows = (from: number, n: number) =>
+    items(from, n)
+      .map((x) => `- ${x.permit_number}`)
+      .join("\n");
+  const run = (text: string, calls: ToolCallRecord[] = [windowCall]) =>
+    checkStatedCounts({ text } as AgentAnswer, calls, on);
+
+  test("counted: statements of rows shown; not counted: totals, durations and distances", () => {
+    const said = (t: string) => statedCounts(t).map((s) => s.count);
+    for (const [t, n] of [
+      ["Here are the 5 longest-open permits.", 5],
+      ["The 5 longest:", 5],
+      ["Showing 10 of 2,309.", 10],
+      ["Only the 10 longest are shown.", 10],
+      ["Only 10 permits are shown per list.", 10],
+      ["here are 5", 5],
+      ["The top ten permits:", 10],
+      ["The 10 longest-open permits in that window are below.", 10],
+      ["I list five of them.", 5],
+    ] as const)
+      expect(said(t)).toEqual([n]);
+    for (const t of [
+      "2,309 permits match.",
+      "There are 2,309 open roofing permits that meet this.",
+      "That covers 2,039 of the 2,309.",
+      "Open at least 1,826 days (5 years) within 5 miles.",
+      "The first 5 years of the permit.",
+      "License 380381 has 2 name variants; 3 names are on file.",
+    ])
+      expect(said(t)).toEqual([]);
+  });
+
+  test("pass: each stated number equals the rows shown from its list; totals are allowed", () => {
+    const text = [
+      "2,309 permits match. The 3 longest-open permits overall:",
+      rows(0, 3),
+      "Here are the 5 longest-open permits in the contractor window:",
+      rows(100, 5),
+    ].join("\n");
+    const c = run(text);
+    expect(c.result).toBe("pass");
+    expect(c.details).toEqual([
+      "longest-open list: 3 row(s) named in the text",
+      "within-window list: 5 row(s) named in the text",
+      '"The 3" (3) → longest-open list, 3 row(s) shown: equal',
+      '"Here are the 5" (5) → within-window list, 5 row(s) shown: equal',
+    ]);
+    // With no statement of rows shown, the check passes.
+    expect(run(`2,309 permits match.\n${rows(0, 4)}`).result).toBe("pass");
+    // A plain list: the number goes to its only list.
+    expect(
+      run(`Showing 10 of 2,309:\n${rows(0, 10)}`, [plainCall]).result,
+    ).toBe("pass");
+  });
+
+  test("fail: the tool's returned count restated for rows left out (the A3 case: 10 stated, 5 shown)", () => {
+    const text = [
+      "2,309 permits match.",
+      rows(0, 5),
+      "Only the 10 longest are shown.",
+    ].join("\n");
+    const c = run(text, [plainCall]);
+    expect(c.result).toBe("fail");
+    expect(c.details).toContain(
+      '"10 longest are shown" (10) → long-open list, 5 row(s) shown: NOT equal',
+    );
+    // "per list" is about every list: the longest-open list shows 3, not 10.
+    const both = run(
+      [rows(0, 3), rows(100, 5), "Only 5 permits are shown per list."].join(
+        "\n",
+      ),
+    );
+    expect(both.result).toBe("fail");
+    expect(both.details.slice(2)).toEqual([
+      '"5 permits are shown" (5) → longest-open list, 3 row(s) shown: NOT equal',
+      '"5 permits are shown" (5) → within-window list, 5 row(s) shown: equal',
+    ]);
+    // "window" names the within-window list wherever the sentence stands.
+    expect(
+      run(`The 10 longest in the contractor window:\n${rows(100, 5)}`).result,
+    ).toBe("fail");
+  });
+
+  test("n/a without the expectation; a statement with no long-open list fails", () => {
+    expect(
+      checkStatedCounts(
+        { text: "Here are 5." } as AgentAnswer,
+        [windowCall],
+        {} as EvalPrompt["expected"],
+      ).result,
+    ).toBe("n/a");
+    expect(run("Here are 5.", []).result).toBe("fail");
+    expect(run("Nothing to list.", []).result).toBe("n/a");
+  });
+
+  test("the prompts file: stated_counts on a2, b and h (every prompt that expects long_open_permits), and it needs that tool", () => {
+    const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
+    const withLongOpen = prompts
+      .filter((p) => p.expected.tools.includes("long_open_permits"))
+      .map((p) => p.id);
+    expect(withLongOpen).toEqual([
+      "a2-readme-110-follow-up",
+      "b-crm-van-nuys",
+      "h-bbb-van-nuys",
+    ]);
+    expect(
+      prompts.filter((p) => p.expected.stated_counts).map((p) => p.id),
+    ).toEqual(withLongOpen);
+    const a2 = prompts.find((p) => p.id === "a2-readme-110-follow-up")!;
+    const bad = promptsFileSchema.safeParse([
+      {
+        ...a2,
+        expected: {
+          ...a2.expected,
+          contractors_named: undefined,
+          tools: ["parcel_permits"],
+          tool_inputs: {},
+        },
+      },
+    ]);
+    expect(bad.success).toBe(false);
+    expect(JSON.stringify(bad.error?.issues)).toContain(
+      "stated_counts needs long_open_permits in tools",
     );
   });
 });

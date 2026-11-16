@@ -181,6 +181,7 @@ export {
   MAX_OPEN_DAYS,
   TOOL_DESCRIPTIONS,
   TOOL_NAMES,
+  WITHIN_WINDOW_LIMIT,
   anthropicTools,
   runTool,
   sourceRef,

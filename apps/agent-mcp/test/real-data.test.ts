@@ -16,6 +16,7 @@ import {
   systemPrompt,
   textReply,
   toolReply,
+  WITHIN_WINDOW_LIMIT,
   type AgentSettings,
   type ContractorWindow,
 } from "@oracle-la/agent";
@@ -299,7 +300,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     });
   });
 
-  test("long_open_permits with with_contractor_window at Van Nuys, 5 mi, limit 10: every within-window item carries its permit's contractor rows, as permits.forParcel serves them", async () => {
+  test("long_open_permits with with_contractor_window at Van Nuys, 5 mi, limit 10: the longest-open list has 10 items, the within-window list 5 (WITHIN_WINDOW_LIMIT), each carrying its permit's contractor rows, as permits.forParcel serves them", async () => {
     const o = await runTool(
       "long_open_permits",
       {
@@ -311,15 +312,23 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
       data.queries,
     );
     expect(o.ok).toBe(true);
-    const w = (
-      o.content as {
-        within_contractor_window: {
-          contractor_source: { source_name: string };
-          items: Array<Record<string, unknown>>;
-        };
-      }
-    ).within_contractor_window;
-    expect(w.items).toHaveLength(10);
+    const content = o.content as {
+      longest_open: { items: unknown[] };
+      within_contractor_window: {
+        count: number;
+        returned: number;
+        contractor_source: { source_name: string };
+        items: Array<Record<string, unknown>>;
+      };
+    };
+    expect(content.longest_open.items).toHaveLength(10);
+    const w = content.within_contractor_window;
+    expect(WITHIN_WINDOW_LIMIT).toBe(5);
+    expect(w.items).toHaveLength(5);
+    expect(w.returned).toBe(5);
+    expect(o.gaps).toContain(
+      `Results truncated: the within-window list returned 5 of ${w.count} long-open permits (longest open first).`,
+    );
     expect(w.contractor_source.source_name).toBe(CONTRACTOR_SOURCE);
     const statuses: Record<string, number> = {};
     for (const it of w.items) {
@@ -515,6 +524,49 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
         ALL_OUTSIDE,
         body.result.long_open_permit.text,
       ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  test("long_open_permits over MCP at Van Nuys, 5 mi, limit 10, with_contractor_window: the shared tool layer lists 10 longest-open permits and 5 within the window", async () => {
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const server = createMcpServer(data.queries);
+    await server.connect(serverSide);
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await client.connect(clientSide);
+    try {
+      const res = await client.callTool({
+        name: "long_open_permits",
+        arguments: {
+          ...VAN_NUYS_CENTER,
+          radius_miles: 5,
+          limit: 10,
+          with_contractor_window: true,
+        },
+      });
+      expect(res.isError).toBeFalsy();
+      const body = JSON.parse(
+        (res.content as Array<{ type: string; text: string }>)[0]!.text,
+      ) as {
+        result: {
+          longest_open: { returned: number; items: unknown[] };
+          within_contractor_window: {
+            count: number;
+            returned: number;
+            items: unknown[];
+          };
+        };
+        gaps: string[];
+      };
+      expect(body.result.longest_open.items).toHaveLength(10);
+      const w = body.result.within_contractor_window;
+      expect(w.items).toHaveLength(WITHIN_WINDOW_LIMIT);
+      expect(w.returned).toBe(WITHIN_WINDOW_LIMIT);
+      expect(body.gaps).toContain(
+        `Results truncated: the within-window list returned 5 of ${w.count} long-open permits (longest open first).`,
+      );
     } finally {
       await client.close();
       await server.close();

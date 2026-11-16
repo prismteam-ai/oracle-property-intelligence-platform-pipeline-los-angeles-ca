@@ -232,6 +232,11 @@ export const promptSchema = z.strictObject({
      * tool returned it (check "contractors").
      */
     contractors_named: z.literal(true).optional(),
+    /**
+     * True: every number the text states for the rows it shows from a long-open list equals the rows of that list
+     * it names; totals (how many match) are not such numbers (check "stated_counts").
+     */
+    stated_counts: z.literal(true).optional(),
     place: placeSchema,
   }),
 });
@@ -280,6 +285,15 @@ export const promptsFileSchema = z
           code: "custom",
           path: [i, "expected", "contractors_named"],
           message: "contractors_named needs long_open_permits in tools",
+        });
+      if (
+        p.expected.stated_counts &&
+        !p.expected.tools.includes("long_open_permits")
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "expected", "stated_counts"],
+          message: "stated_counts needs long_open_permits in tools",
         });
       for (const t of p.expected.forbidden_tools ?? [])
         if (p.expected.tools.includes(t))

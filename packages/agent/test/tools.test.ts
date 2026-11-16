@@ -13,6 +13,7 @@ import {
   CANONICAL_NAME_NOTE,
   CONTRACTOR_READS_MS,
   TOOL_NAMES,
+  WITHIN_WINDOW_LIMIT,
   anthropicTools,
   daysBetween,
   runTool,
@@ -1213,6 +1214,75 @@ describe("long_open_permits: with_contractor_window", () => {
         returned: 2,
       },
     });
+  });
+
+  test("on: the within-window call asks for min(limit, WITHIN_WINDOW_LIMIT) permits; the longest-open call keeps limit (default 10)", async () => {
+    expect(WITHIN_WINDOW_LIMIT).toBe(5);
+    for (const [limit, first, within] of [
+      [undefined, 10, 5],
+      [10, 10, 5],
+      [25, 25, 5],
+      [5, 5, 5],
+      [3, 3, 3],
+    ] as const) {
+      const { queries, calls } = fakeQueries();
+      const o = await runTool(
+        "long_open_permits",
+        {
+          ...at,
+          ...(limit !== undefined ? { limit } : {}),
+          with_contractor_window: true,
+        },
+        queries,
+      );
+      expect(o.ok).toBe(true);
+      const longOpen = calls.filter((c) => c.fn === "permits.longOpen");
+      expect(longOpen).toHaveLength(2);
+      expect(longOpen[0]!.input).toMatchObject({ limit: first });
+      expect(longOpen[0]!.input).not.toHaveProperty("max_open_days");
+      expect(longOpen[1]!.input).toMatchObject({
+        max_open_days: 5062,
+        limit: within,
+      });
+    }
+  });
+
+  test("on: a within-window list cut at 5 states its truncation gap; the longest-open list lists its 10", async () => {
+    const { queries } = fakeQueries();
+    const twelve = Array.from({ length: 12 }, (_, i) => i);
+    const q: DataQueries = {
+      ...queries,
+      permits: {
+        ...queries.permits,
+        async longOpen(input) {
+          const r = await queries.permits.longOpen(input);
+          const base = r.items[0]!;
+          const items = twelve.slice(0, input.limit).map((i) => ({
+            ...base,
+            permit_number: `13016-20000-${String(i).padStart(5, "0")}`,
+          }));
+          return { ...r, count: 12, items };
+        },
+      },
+    };
+    const o = await runTool(
+      "long_open_permits",
+      { ...at, with_contractor_window: true },
+      q,
+    );
+    const c = o.content as Lists;
+    expect(c.longest_open.items).toHaveLength(10);
+    expect(c.within_contractor_window).toMatchObject({
+      count: 12,
+      returned: 5,
+      truncated: true,
+    });
+    expect(o.gaps).toContain(
+      "Results truncated: the longest-open list returned 10 of 12 long-open permits (longest open first).",
+    );
+    expect(o.gaps).toContain(
+      "Results truncated: the within-window list returned 5 of 12 long-open permits (longest open first).",
+    );
   });
 
   test("on, with the call's own smaller max_open_days: the within-window limit is lowered to it, and said so", async () => {
