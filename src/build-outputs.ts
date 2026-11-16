@@ -49,6 +49,7 @@ import {
   loadRunConfig,
   manifestDigestSha256,
   referenceDateOf,
+  rollSourceTerms,
   RUN_ID_PLACEHOLDER,
   runIdOf,
   runTimeFromCaches,
@@ -133,6 +134,8 @@ if (!rawDir || positional.length > 2) throw new Error(USAGE);
 const configPath = positional[1] ?? "config/la-county-permits-run.json";
 const cfg = loadRunConfig(configPath);
 guardOrThrow(configPath, cfg.sources_catalog);
+// The roll's terms page, license and attribution for the manifest's sources[0] (fails closed when missing).
+const rollTerms = rollSourceTerms(cfg.source);
 // Fails closed unless the kit validator passes on the catalog (KIT_DIR names the kit checkout).
 const readiness = runReadiness(cfg.sources_catalog);
 
@@ -688,7 +691,7 @@ const makeManifest = (rel: Awaited<ReturnType<typeof relationTo>>) => ({
       hub_item_id: cfg.source.hub_item_id,
       query_url: cfg.source.query_url,
       count_request_url: fetchSummary?.count_request_url ?? null,
-      terms_of_use: "https://egis-lacounty.hub.arcgis.com/pages/terms-of-use",
+      ...rollTerms,
       access: "anonymous REST, sequential, >= 2 s between requests",
       ...(cache && {
         request_urls:

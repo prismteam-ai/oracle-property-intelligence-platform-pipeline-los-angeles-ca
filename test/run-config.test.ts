@@ -10,6 +10,7 @@ import {
   referenceDateOf,
   RUN_ID_PATTERN,
   RUN_ID_PLACEHOLDER,
+  rollSourceTerms,
   runIdOf,
   runTimeFromCaches,
 } from "../src/run-config.ts";
@@ -183,3 +184,33 @@ test("the permits config names the catalog's City of LA datasets and the contrac
     zips: [],
   });
 });
+
+test("the permits config gives the roll's eGIS Hub terms, license and attribution", () => {
+  const { source } = loadRunConfig("config/la-county-permits-run.json");
+  expect(rollSourceTerms(source)).toEqual({
+    terms_of_use: "https://egis-lacounty.hub.arcgis.com/pages/terms-of-use",
+    license: expect.stringContaining(
+      '"you are granted a license to copy, publish, distribute and/or transmit the Data, to adapt the Data and to exploit the Data for commercial and/or personal use"',
+    ) as unknown,
+    attribution: expect.stringMatching(
+      /^County of Los Angeles; none required/,
+    ) as unknown,
+  });
+  // The build records them in sources[0] from the config, never a literal of its own.
+  const src = readFileSync("src/build-outputs.ts", "utf8");
+  expect(src).toMatch(/const rollTerms = rollSourceTerms\(cfg\.source\)/);
+  expect(src).not.toMatch(/terms_of_use: "https:\/\/egis-lacounty/);
+});
+
+test.each(["terms_of_use", "license", "attribution"] as const)(
+  "a roll source without %s is refused",
+  (k) => {
+    const { source } = loadRunConfig("config/la-county-permits-run.json");
+    expect(() => rollSourceTerms({ ...source, [k]: " " })).toThrow(
+      `the run config's source needs a ${k}`,
+    );
+    const rest: Partial<typeof source> = { ...source };
+    delete rest[k];
+    expect(() => rollSourceTerms(rest as typeof source)).toThrow(k);
+  },
+);

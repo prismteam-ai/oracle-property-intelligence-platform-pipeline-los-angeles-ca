@@ -153,7 +153,10 @@ export interface SourceRow {
   query_url: string | null;
   query_urls: string[] | null;
   terms_of_use: string | null;
-  /** The LADBS sources' license and attribution as recorded in the run manifest; null for the roll. */
+  /**
+   * The source's license and attribution as recorded in the run manifest. Null for the roll in runs built
+   * before the run config carried them (every run up to 12 Nov 2026).
+   */
   license: string | null;
   attribution: string | null;
   access: string | null;

@@ -34,6 +34,10 @@ export interface RunConfig extends RunScope {
     query_url: string;
     page_size: number;
     min_request_interval_ms: number;
+    /** The roll's terms page, license and attribution, as recorded in the run manifest's sources[0]. */
+    terms_of_use: string;
+    license: string;
+    attribution: string;
   };
   /** Permit runs: the LADBS permit datasets and the contractor view. */
   permit_sources?: { permits: PermitSource; contractors: PermitSource };
@@ -42,6 +46,25 @@ export interface RunConfig extends RunScope {
 
 export function loadRunConfig(path: string): RunConfig {
   return JSON.parse(readFileSync(path, "utf8")) as RunConfig;
+}
+
+/**
+ * The roll source's terms_of_use, license and attribution: each must be a non-empty string, so a
+ * build never records a roll source without them. Returns the three values.
+ */
+export function rollSourceTerms(
+  source: RunConfig["source"],
+): Pick<RunConfig["source"], "terms_of_use" | "license" | "attribution"> {
+  for (const k of ["terms_of_use", "license", "attribution"] as const) {
+    const v: unknown = source[k];
+    if (typeof v !== "string" || !v.trim())
+      throw new Error(`the run config's source needs a ${k}`);
+  }
+  return {
+    terms_of_use: source.terms_of_use,
+    license: source.license,
+    attribution: source.attribution,
+  };
 }
 
 /** The jurisdiction value of a county-wide run: every jurisdiction, no ZIP filter. */
