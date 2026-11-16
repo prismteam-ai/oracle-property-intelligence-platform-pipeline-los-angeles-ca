@@ -797,6 +797,18 @@ describe("runTool", () => {
       ],
     });
   });
+  test("run_summary: BBB ratings are not available, and why, in one sentence", async () => {
+    const { queries } = fakeQueries();
+    const o = await runTool("run_summary", {}, queries);
+    expect((o.content as { bbb: unknown }).bbb).toEqual({
+      available: false,
+      reason:
+        "BBB ratings are not available: no source in this data includes them.",
+    });
+    // The only BBB text in the result; no gap added (the standard gap stays the answer's).
+    expect(JSON.stringify(o.content).match(/BBB/g)).toHaveLength(1);
+    expect(o.gaps).toEqual([]);
+  });
   test("run_summary: each source once with its URLs, terms, license, attribution, page count and window", async () => {
     const { queries } = fakeQueries();
     const o = await runTool("run_summary", {}, queries);

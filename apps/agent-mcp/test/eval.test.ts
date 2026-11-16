@@ -2006,6 +2006,29 @@ describe("coverage prompt o, with the scripted model", () => {
     expect(noGap.gaps_text.result).toBe("fail");
   });
 
+  test("run_summary's BBB sentence passes the bbb and bbb_no_source text checks, and an answer that repeats it passes every check", async () => {
+    const { queries } = fakeQueries();
+    const s = await runTool("run_summary", {}, queries);
+    const reason = (
+      s.content as { bbb: { available: boolean; reason: string } }
+    ).bbb.reason;
+    expect(reason).toBe(
+      "BBB ratings are not available: no source in this data includes them.",
+    );
+    expect(GAPS.bbb_no_source.inText.test(reason)).toBe(true);
+    expect(GAPS.bbb.inText.test(reason)).toBe(true);
+    expect(
+      GAPS.bbb_no_source.inText.test("BBB ratings are shown where available."),
+    ).toBe(false);
+    const a = await ask(p.question, viaSummary(`No. ${reason}`));
+    const checks = await checksOf(p, a);
+    expect(checks.gaps_text.details).toEqual([
+      "bbb: mentioned",
+      "bbb_no_source: mentioned",
+    ]);
+    expect(allPassed(checks)).toBe(true);
+  });
+
   test("bbb_no_source: the reason in the sentence that names BBB, or 'none of the ... sources'", () => {
     const re = GAPS.bbb_no_source.inText;
     for (const ok of [

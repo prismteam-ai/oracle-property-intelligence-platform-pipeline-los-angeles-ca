@@ -1376,6 +1376,12 @@ const run = {
             fields("terms_of_use", "license", "attribution", "access"),
           ),
         })),
+        // As parcel_permits states it: the fact and its reason in one sentence.
+        bbb: {
+          available: false,
+          reason:
+            "BBB ratings are not available: no source in this data includes them.",
+        },
       },
       fact: { tool: "run_summary", run_id: str(run.run_id) },
     };
