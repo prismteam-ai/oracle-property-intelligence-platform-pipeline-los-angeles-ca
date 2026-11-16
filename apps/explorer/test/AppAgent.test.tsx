@@ -121,6 +121,19 @@ describe("the agent tab and config.json", () => {
     expect(screen.getByTestId("mcp-connect").textContent).toContain(
       "--api-url https://api.test --token-file <token-file>",
     );
+    // The live example's arguments, centered on the agent's Van Nuys.
+    expect(
+      JSON.parse(screen.getByTestId("mcp-example-args").textContent!),
+    ).toEqual({
+      name: "search_aged_roofs",
+      arguments: {
+        lat: 34.20155,
+        lon: -118.45361,
+        radius_miles: 5,
+        threshold_years: 15,
+        limit: 5,
+      },
+    });
     // The site's token is never shown.
     expect(document.body.textContent).not.toContain(BASE.apiToken);
   });

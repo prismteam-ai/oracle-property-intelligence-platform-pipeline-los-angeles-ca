@@ -70,6 +70,14 @@ describe("the MCP tab and the MCP server", () => {
 
   test("the live example is the radius query, and its result is the server's tools/call result over the same data API", async () => {
     expect(EXAMPLE.tool).toBe("search_aged_roofs");
+    // Centered on the agent's Van Nuys (places.resolve's median center), not the Radius query form's default.
+    expect(EXAMPLE.arguments).toEqual({
+      lat: 34.20155,
+      lon: -118.45361,
+      radius_miles: 5,
+      threshold_years: 15,
+      limit: 5,
+    });
     const api = fakeDataApi(fakeQueries().queries);
     const tab = await runExample({
       apiUrl: FAKE_API_URL,
@@ -81,6 +89,13 @@ describe("the MCP tab and the MCP server", () => {
     for (const r of api.requests)
       expect(r.authorization).toBe(`Bearer ${TOKEN}`);
     expect(api.requests.map((r) => r.route)).toContain("parcels.search");
+    const search = api.requests.find((r) => r.route === "parcels.search");
+    expect(search!.input).toMatchObject({
+      lat: 34.20155,
+      lon: -118.45361,
+      radius_miles: 5,
+      threshold_years: 15,
+    });
 
     const { client, close } = await connect(
       httpDataQueries({

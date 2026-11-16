@@ -47,12 +47,15 @@ export function mcpTools(): McpToolListing[] {
   }));
 }
 
-/** The live example: the radius query (roofs older than 15 years within 5 miles of Van Nuys), five parcels. */
+/**
+ * The live example: the radius query (roofs older than 15 years within 5 miles of Van Nuys), five parcels. The center
+ * is the agent's Van Nuys center, as places.resolve gives it (the median of the postal city's parcels).
+ */
 export const EXAMPLE = {
   tool: "search_aged_roofs" as const,
   arguments: {
-    lat: 34.199,
-    lon: -118.487,
+    lat: 34.20155,
+    lon: -118.45361,
     radius_miles: 5,
     threshold_years: 15,
     limit: 5,
