@@ -280,7 +280,6 @@ describe("prompts file (eval/prompts.json)", () => {
         outcome: "resolved",
         name: "Pasadena",
         jurisdiction: "PASADENA",
-        parcel_count: 39990,
       },
     });
     // d2: long-open permits near the same place; the count is not available there (counts check).
@@ -296,7 +295,6 @@ describe("prompts file (eval/prompts.json)", () => {
         outcome: "resolved",
         name: "Pasadena",
         jurisdiction: "PASADENA",
-        parcel_count: 39990,
       },
     });
     expect(byCase("e")[0]!.expected.place).toEqual({
@@ -355,7 +353,7 @@ describe("prompts file (eval/prompts.json)", () => {
       expect("resolve_required" in p.expected.place).toBe(false);
     }
   });
-  test("the schema rejects an unknown gap, a duplicate id and a follow-up that opens its group", () => {
+  test("the schema rejects an unknown gap, a duplicate id, a follow-up that opens its group and a written parcel count", () => {
     const one = structuredClone(prompts[0]!);
     const bad = (ps: unknown) => promptsFileSchema.safeParse(ps).success;
     expect(
@@ -369,6 +367,19 @@ describe("prompts file (eval/prompts.json)", () => {
           expected: {
             ...one.expected,
             place: { outcome: "reused_previous_area" },
+          },
+        },
+      ]),
+    ).toBe(false);
+    // A resolved place is checked by name and jurisdiction; its parcel count is the data API's own, which the
+    // counts check compares with places.resolve.
+    expect(
+      bad([
+        {
+          ...one,
+          expected: {
+            ...one.expected,
+            place: { outcome: "resolved", name: "Van Nuys", parcel_count: 467 },
           },
         },
       ]),
@@ -622,10 +633,21 @@ describe("checks", () => {
     );
     const vn = prompt({ place: { outcome: "resolved", name: "Van Nuys" } });
     expect((await checksOf(vn, resolved)).place.result).toBe("pass");
-    const wrongCount = prompt({
-      place: { outcome: "resolved", name: "Van Nuys", parcel_count: 1 },
+    // The place is checked by its name and, when written, its jurisdiction (Van Nuys resolves by postal city).
+    const byJurisdiction = prompt({
+      place: {
+        outcome: "resolved",
+        name: "Van Nuys",
+        jurisdiction: "LOS ANGELES",
+      },
     });
-    expect((await checksOf(wrongCount, resolved)).place.result).toBe("fail");
+    expect((await checksOf(byJurisdiction, resolved)).place.result).toBe(
+      "fail",
+    );
+    const otherName = prompt({
+      place: { outcome: "resolved", name: "Pasadena" },
+    });
+    expect((await checksOf(otherName, resolved)).place.result).toBe("fail");
 
     const unknown = await ask("Old roofs near Springfield?", [
       toolReply([{ name: "resolve_place", input: { name: "Springfield" } }]),
@@ -730,7 +752,6 @@ describe("checks: place and counts", () => {
       outcome: "resolved" as const,
       name: "Pasadena",
       jurisdiction: "PASADENA",
-      parcel_count: 39990,
     };
     expect(
       checkPlace(resolved(34.15279, -118.13578), expected, undefined).result,
@@ -745,7 +766,7 @@ describe("checks: place and counts", () => {
     );
     expect(other.result).toBe("fail");
     expect(other.details.at(-1)).toBe(
-      "want resolved, jurisdiction PASADENA, 39990 parcels, reliable, and a search at its center",
+      "want resolved, jurisdiction PASADENA, reliable, and a search at its center",
     );
     expect(
       checkPlace(resolved(34.15279, -118.13568), expected, undefined).result,

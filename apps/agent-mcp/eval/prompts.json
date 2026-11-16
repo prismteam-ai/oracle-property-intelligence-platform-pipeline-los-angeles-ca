@@ -75,7 +75,7 @@
     "id": "d-pasadena-outside-city",
     "case": "d",
     "group": "d-pasadena",
-    "note": "A place outside the City of Los Angeles: Pasadena resolves (jurisdiction PASADENA, 39,990 parcels on the served run) but has no permit data.",
+    "note": "A place outside the City of Los Angeles: Pasadena resolves (jurisdiction PASADENA) but has no permit data.",
     "question": "Which properties within one mile of Pasadena have roofs older than 20 years, and do they have open roofing permits?",
     "expected": {
       "tools": ["resolve_place", "search_aged_roofs"],
@@ -87,8 +87,7 @@
       "place": {
         "outcome": "resolved",
         "name": "Pasadena",
-        "jurisdiction": "PASADENA",
-        "parcel_count": 39990
+        "jurisdiction": "PASADENA"
       }
     }
   },
@@ -109,8 +108,7 @@
       "place": {
         "outcome": "resolved",
         "name": "Pasadena",
-        "jurisdiction": "PASADENA",
-        "parcel_count": 39990
+        "jurisdiction": "PASADENA"
       }
     }
   },

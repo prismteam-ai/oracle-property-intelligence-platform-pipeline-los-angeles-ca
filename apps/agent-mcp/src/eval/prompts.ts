@@ -172,7 +172,7 @@ const placeName = z.string().trim().min(1).max(80);
 
 /**
  * Place outcomes: resolved (a resolve_place result for the name, reliable, and a search at its center; optional
- * jurisdiction and parcel count; with search_required false the search is optional, but one made must be at the
+ * jurisdiction; with search_required false the search is optional, but one made must be at the
  * center; with resolve_required false the resolve_place call is optional: without it the place check is skipped and
  * any search is judged only by the expected and forbidden tools), unknown,
  * "ambiguous/unreliable" (ambiguous, or resolved with no reliable center; either way no search),
@@ -183,7 +183,6 @@ export const placeSchema = z.discriminatedUnion("outcome", [
     outcome: z.literal("resolved"),
     name: placeName,
     jurisdiction: z.string().min(1).optional(),
-    parcel_count: z.number().int().positive().optional(),
     /**
      * Default true: a search at the center is required. False: the answer may resolve the place without searching;
      * a search, if made, must still be at the center.

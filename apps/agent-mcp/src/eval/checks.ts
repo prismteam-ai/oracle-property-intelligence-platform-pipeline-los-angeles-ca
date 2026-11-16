@@ -1316,8 +1316,6 @@ export function checkPlace(
           (expected.jurisdiction === undefined ||
             (r.basis === "jurisdiction" &&
               arr(r.raw_values).includes(expected.jurisdiction))) &&
-          (expected.parcel_count === undefined ||
-            r.parcel_count === expected.parcel_count) &&
           // At its center: equal when both round to the same 5-decimal value. With search_required false, no
           // search passes; a search that was made must still be at the center.
           ((!searchRequired && searches.length === 0) ||
@@ -1331,7 +1329,7 @@ export function checkPlace(
       );
       if (!ok)
         details.push(
-          `want resolved${expected.jurisdiction ? `, jurisdiction ${expected.jurisdiction}` : ""}${expected.parcel_count ? `, ${expected.parcel_count} parcels` : ""}, reliable, and ${searchRequired ? "a search" : "no search or a search"} at its center`,
+          `want resolved${expected.jurisdiction ? `, jurisdiction ${expected.jurisdiction}` : ""}, reliable, and ${searchRequired ? "a search" : "no search or a search"} at its center`,
         );
       return check(details, ok);
     }
