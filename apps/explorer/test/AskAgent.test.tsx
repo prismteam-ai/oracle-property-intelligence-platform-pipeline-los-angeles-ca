@@ -321,11 +321,11 @@ describe("Ask the agent: warm-up and held questions", () => {
 });
 
 describe("Ask the agent: sending and statuses", () => {
-  test("the notice under the box says the question, the center and the data are sent to Anthropic", async () => {
+  test("the notice under the box says the questions in this conversation, the center when you enter one, and the data are sent to Anthropic", async () => {
     await openWarm();
     expect(screen.getByTestId("agent-notice").textContent).toBe(NOTICE);
     expect(NOTICE).toMatch(
-      /question, the center and the data the agent reads are sent to Anthropic/,
+      /questions in this conversation, the center when you enter one, and the data the agent reads are sent to Anthropic to answer them\./,
     );
   });
 

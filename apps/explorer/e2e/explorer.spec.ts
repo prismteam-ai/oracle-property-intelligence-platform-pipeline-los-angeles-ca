@@ -969,7 +969,7 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
     const data = log.filter((x) => x.startsWith("data:"));
     expect(data.slice(0, 2)).toEqual(["data:req", "data:req"]);
     await expect(page.getByTestId("agent-notice")).toHaveText(
-      "Your question, the center and the data the agent reads are sent to Anthropic to answer it.",
+      "Your questions in this conversation, the center when you enter one, and the data the agent reads are sent to Anthropic to answer them.",
     );
     await expect(page.getByTestId("agent-send")).toBeEnabled();
   });

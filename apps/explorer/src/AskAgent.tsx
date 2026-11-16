@@ -14,7 +14,7 @@ import { createWarmup, HOLD_MAX_MS, type Warmup } from "./warmup.ts";
 
 /** The notice under the question box. */
 export const NOTICE =
-  "Your question, the center and the data the agent reads are sent to Anthropic to answer it.";
+  "Your questions in this conversation, the center when you enter one, and the data the agent reads are sent to Anthropic to answer them.";
 
 type Status = "idle" | "waking" | "working";
 
