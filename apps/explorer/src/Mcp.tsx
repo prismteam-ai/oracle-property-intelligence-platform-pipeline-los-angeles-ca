@@ -143,10 +143,10 @@ export function Mcp({
           </pre>
         </li>
         <li>
-          The server reads the data API as the hosted agent does (at most 2
-          calls in flight, one retry, a gap when a route is not read); without
-          options it reads the latest run of a checkout that has the run&apos;s
-          data files instead. See <code>apps/agent-mcp/README.md</code>.
+          The server reads the data API as the hosted agent does (at most 1 call
+          in flight, one retry, a gap when a route is not read); without options
+          it reads the latest run of a checkout that has the run&apos;s data
+          files instead. See <code>apps/agent-mcp/README.md</code>.
         </li>
       </ol>
     </section>

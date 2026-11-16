@@ -73,7 +73,7 @@ export const LONG_OPEN_SCOPE = "roofing work only";
 /**
  * How long long_open_permits waits for the contractor rows of its within-window list: one data call's worst case
  * through the HTTP adapter (two 5 s attempts and a jitter wait of at most 500 ms), whatever the number of listed
- * parcels. The reads go through the adapter's bulkhead (at most 2 in flight); a read not finished by then is stated
+ * parcels. The reads go through the adapter's bulkhead (at most 1 in flight); a read not finished by then is stated
  * as not read, so the reads add at most this long to an answer and leave the rest of its time budget to the model.
  */
 export const CONTRACTOR_READS_MS =
@@ -774,11 +774,12 @@ const run = {
       threshold_years: input.threshold_years,
       ...(ownership ? { ownership_basis: ownership } : {}),
     };
-    // The search, and parcels.points with the same filter, in flight together. The points say which matching
-    // parcels have permit data (the City of Los Angeles), so a place outside it is told from all the matching
-    // parcels, not only the listed ones. With long_open_permit the search is for its count and rule only (one
-    // item) and the points also give the parcels marked long-open, nearest first (the CRM map's highlight and
-    // legend); without it a points read that fails is a stated gap, never a failed search.
+    // The search, and parcels.points with the same filter, issued together; they run one after the other through
+    // the adapter's bulkhead (1 in flight). The points say which matching parcels have permit data (the City of Los
+    // Angeles), so a place outside it is told from all the matching parcels, not only the listed ones. With
+    // long_open_permit the search is for its count and rule only (one item) and the points also give the parcels
+    // marked long-open, nearest first (the CRM map's highlight and legend); without it a points read that fails is a
+    // stated gap, never a failed search.
     const [res, pointsRead] = await Promise.all([
       q.parcels.search({
         ...filter,
@@ -1479,10 +1480,10 @@ const ITEM_CONTRACTOR_FIELDS = fields(
 
 /**
  * The within-window items with their permits' contractor rows: permits.forParcel once per listed parcel, all
- * started at once through the data layer (the HTTP adapter's bulkhead keeps at most 2 in flight), waited for at
- * most CONTRACTOR_READS_MS. Every item states its contractor_status; a read that failed, did not finish in time or
- * did not list the permit is "not read" with why (and a gap), never left out. Contractor rows are cited under the
- * contractor source, once per permit.
+ * started at once through the data layer (the HTTP adapter's bulkhead keeps at most 1 in flight, so they queue and
+ * run one at a time), still waited for at most CONTRACTOR_READS_MS. Every item states its contractor_status; a read
+ * that failed, did not finish in time or did not list the permit is "not read" with why (and a gap), never left out.
+ * Contractor rows are cited under the contractor source, once per permit.
  */
 async function withContractors(
   q: DataQueries,

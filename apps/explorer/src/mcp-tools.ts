@@ -92,7 +92,7 @@ export async function callTool(
 
 /**
  * The example over the hosted data API with the Explorer's token, through the same adapter as the MCP server's
- * hosted mode (at most 2 data API calls in flight, one retry, a gap when a route is not read).
+ * hosted mode (at most 1 data API call in flight, one retry, a gap when a route is not read).
  */
 export function runExample(cfg: {
   apiUrl: string;

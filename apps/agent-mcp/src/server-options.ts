@@ -1,7 +1,7 @@
 /**
  * How the stdio MCP server gets its data:
  * - hosted: `--api-url <data API URL> --token-file <path>`: the tools read the hosted data API through the agent's
- *   HTTP adapter (at most 2 calls in flight, one retry, gaps), with the "mcp" API client's own token. The token
+ *   HTTP adapter (at most 1 call in flight, one retry, gaps), with the "mcp" API client's own token. The token
  *   comes from a key file the caller names (no default path, no environment variable; the token is never an
  *   argument): JSON { "apiToken": "<token>" }, a regular file with mode exactly 0600, checked like the Anthropic
  *   key file (key-file.ts); a refusal names the path, the mode and the reason, never the content.
