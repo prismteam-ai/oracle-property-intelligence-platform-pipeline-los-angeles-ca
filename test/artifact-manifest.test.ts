@@ -53,7 +53,7 @@ function runManifest(files: unknown[] = []) {
       {
         name: config.permit_sources!.permits.name,
         datasets: config.permit_sources!.permits.datasets,
-        terms_of_use: "https://example.invalid/permit-terms",
+        terms_of_use: config.permit_sources!.permits.terms_of_use,
       },
       {
         name: config.permit_sources!.contractors.name,
@@ -144,6 +144,7 @@ describe("coverage.json", () => {
               name: "LADBS building permits (City of Los Angeles, data.lacity.org)",
               download_finished_at: "2026-01-02T03:00:00.000Z",
               pages_sha256: pagesSha256([hex("c")]),
+              terms_of_use: "https://data.lacity.org/terms-of-use",
             },
           ],
         },
@@ -212,7 +213,14 @@ describe("coverage.json", () => {
         (m) =>
           ((m.sources as Record<string, unknown>[])[0].terms_of_use =
             "https://example.invalid/other"),
-        /terms_of_use differs/,
+        /the roll's terms_of_use differs/,
+      ],
+      [
+        "permits terms address differs",
+        (m) =>
+          ((m.sources as Record<string, unknown>[])[1].terms_of_use =
+            "https://example.invalid/other"),
+        /the permits' terms_of_use differs/,
       ],
       ["another county", (m) => (m.county = "Orange"), /is not this run's/],
     ];
@@ -230,14 +238,14 @@ describe("coverage.json", () => {
 });
 
 describe("artifact-manifest.json", () => {
-  test("lists each object once with cid, name, size, codec and sha256 in that order, sorted by name, not itself", async () => {
+  test("lists each object once with cid, name, size, codec (file), ipld_codec and sha256 in that order, sorted by name, not itself", async () => {
     const cov = new TextEncoder().encode('{"run_id":"r"}\n');
     const named: NamedObject = {
       name: "a.parquet",
       size: 7,
       sha256: hex("f"),
       cid: "bafy-a",
-      codec: "dag-pb",
+      ipld_codec: "dag-pb",
     };
     const m = buildArtifactManifest([
       namedObjectEntry(named),
@@ -252,14 +260,16 @@ describe("artifact-manifest.json", () => {
               cid: "bafy-a",
               name: "a.parquet",
               size: 7,
-              codec: "dag-pb",
+              codec: "file",
+              ipld_codec: "dag-pb",
               sha256: hex("f"),
             },
             {
               cid,
               name: "coverage.json",
               size: cov.length,
-              codec,
+              codec: "file",
+              ipld_codec: codec,
               sha256: sha256Hex(cov),
             },
           ],
@@ -333,7 +343,13 @@ describe("buildPublication (the build-ipfs-artifacts tool)", () => {
     for (const name of ["x-county.parquet", "x-sample.parquet"]) {
       const b = new Uint8Array(readFileSync(join(objectsDir, name)));
       const { cid, codec } = await bytesCidCodec(b);
-      named.push({ name, size: b.length, sha256: sha256Hex(b), cid, codec });
+      named.push({
+        name,
+        size: b.length,
+        sha256: sha256Hex(b),
+        cid,
+        ipld_codec: codec,
+      });
     }
   });
   afterAll(() => {

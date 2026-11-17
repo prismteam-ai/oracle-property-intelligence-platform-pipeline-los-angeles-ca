@@ -11,8 +11,10 @@
  *                               row_counts.parquet, coverage.with_coordinates, coverage.with_year_built
  *   permits                     the permits Parquet's row count
  *   sources                     the County Assessor roll, then the City of Los Angeles building permits,
- *                               each { name, download_finished_at, pages_sha256 }; the roll's entry also
- *                               terms_of_use, the address as the run config records it
+ *                               each { name, download_finished_at, pages_sha256, terms_of_use }:
+ *                               terms_of_use is the source's terms-of-use address as the run config
+ *                               records it (roll: source.terms_of_use; permits:
+ *                               permit_sources.permits.terms_of_use)
  *
  * download_finished_at: the generated_at of the download's own summary as the run manifest records it
  * (roll: cache.summary.generated_at; permits: permit_caches.permits.generated_at). Each download tool
@@ -58,7 +60,7 @@ export type CoverageSource = {
   name: string;
   download_finished_at: string;
   pages_sha256: string;
-  terms_of_use?: string;
+  terms_of_use: string;
 };
 
 export type Coverage = {
@@ -119,7 +121,7 @@ function downloadedSource(
   digestKey: string,
   timeKey: string,
   what: string,
-): CoverageSource {
+): Omit<CoverageSource, "terms_of_use"> {
   const finished = iso(finishedAt, `${what} download summary generated_at`);
   if (!Array.isArray(pages) || !pages.length)
     throw new NotRecorded(`${what} pages are not recorded`);
@@ -184,6 +186,18 @@ export function buildCoverage(
       "the permit datasets differ between the run config and the run manifest",
     );
 
+  const permitsTerms = str(
+    permitsConfig.terms_of_use,
+    "run config permit_sources.permits.terms_of_use",
+  );
+  if (
+    permitsRecorded.terms_of_use !== undefined &&
+    permitsRecorded.terms_of_use !== permitsTerms
+  )
+    throw new NotRecorded(
+      "the permits' terms_of_use differs between the run config and the run manifest",
+    );
+
   const roll = downloadedSource(
     rollName,
     m.cache?.summary?.generated_at,
@@ -219,6 +233,9 @@ export function buildCoverage(
       ),
     },
     permits: count(permitParquetRows, "the permits Parquet row count"),
-    sources: [{ ...roll, terms_of_use: termsOfUse }, permits],
+    sources: [
+      { ...roll, terms_of_use: termsOfUse },
+      { ...permits, terms_of_use: permitsTerms },
+    ],
   };
 }

@@ -39,7 +39,14 @@ async function entryFor(
   bytes: Uint8Array,
 ): Promise<PublishedObject> {
   const { cid, codec } = await bytesCidCodec(bytes);
-  return { cid, name, size: bytes.length, codec, sha256: sha256Hex(bytes) };
+  return {
+    cid,
+    name,
+    size: bytes.length,
+    codec: "file",
+    ipld_codec: codec,
+    sha256: sha256Hex(bytes),
+  };
 }
 
 /** Two small named "Parquet" objects, standing in for the real ones in every test but the last. */
@@ -49,12 +56,12 @@ async function namedFixture() {
   const named: NamedObject[] = [
     await entryFor("a.parquet", a),
     await entryFor("b.parquet", b),
-  ].map(({ cid, name, size, codec, sha256 }) => ({
+  ].map(({ cid, name, size, ipld_codec, sha256 }) => ({
     name,
     size,
     sha256,
     cid,
-    codec,
+    ipld_codec,
   }));
   return { named, bytes: { "a.parquet": a, "b.parquet": b } };
 }
@@ -71,7 +78,8 @@ async function fixture(
         cid: n.cid,
         name: n.name,
         size: n.size,
-        codec: n.codec,
+        codec: "file" as const,
+        ipld_codec: n.ipld_codec,
         sha256: n.sha256,
       })),
     ],
@@ -307,7 +315,8 @@ describe("guardManifest", () => {
       cid: "bafkrei-x",
       name,
       size: 1,
-      codec: "raw",
+      codec: "file",
+      ipld_codec: "raw",
       sha256: "0".repeat(64),
     });
     const m: ArtifactManifest = {
@@ -327,12 +336,12 @@ describe("guardManifest", () => {
     ]);
   });
 
-  test("refuses a named object's entry that differs in CID, size, codec or sha256", async () => {
+  test("refuses a named object's entry that differs in CID, size, IPLD codec or sha256", async () => {
     const f = await fixture();
     const changes: Partial<PublishedObject>[] = [
       { cid: f.named[1].cid },
       { size: 11 },
-      { codec: "dag-pb" },
+      { ipld_codec: "dag-pb" },
       { sha256: "0".repeat(64) },
     ];
     for (const change of changes) {
@@ -342,9 +351,21 @@ describe("guardManifest", () => {
         ),
       };
       expect(reasons(guardManifest(m, f.named))).toEqual([
-        "artifact-manifest.json objects[1] (a.parquet): not the named object's exact CID, size, codec and sha256",
+        "artifact-manifest.json objects[1] (a.parquet): not the named object's exact CID, size, IPLD codec and sha256",
       ]);
     }
+  });
+
+  test('refuses an object whose codec is not "file"', async () => {
+    const f = await fixture();
+    const m: ArtifactManifest = {
+      objects: f.manifest.objects.map((o) =>
+        o.name === "coverage.json" ? { ...o, codec: "directory" } : o,
+      ),
+    };
+    expect(reasons(guardManifest(m, f.named))).toEqual([
+      'artifact-manifest.json objects[0] (coverage.json): codec must be "file"',
+    ]);
   });
 
   test("refuses a manifest that leaves out coverage.json or a named object, or an entry with other keys", async () => {
@@ -363,7 +384,7 @@ describe("guardManifest", () => {
       ),
     } as unknown as ArtifactManifest;
     expect(reasons(guardManifest(withRole, f.named))).toEqual([
-      "artifact-manifest.json objects[0] (coverage.json): keys must be exactly cid, name, size, codec, sha256",
+      "artifact-manifest.json objects[0] (coverage.json): keys must be exactly cid, name, size, codec, ipld_codec, sha256",
       "artifact-manifest.json: does not list coverage.json",
     ]);
   });
@@ -460,7 +481,7 @@ describe("guardDirectory and publishDirectory", () => {
     };
     const d = await withManifest(f, manifest);
     expect(reasons(await guardDirectory(d, f.named))).toEqual([
-      "coverage.json: CID or codec differs from the artifact manifest",
+      "coverage.json: CID or IPLD codec differs from the artifact manifest",
     ]);
   });
 
@@ -519,10 +540,10 @@ describe("guardObject and publishObject", () => {
         size: big.length,
         sha256: sha256Hex(big),
         cid: (await bytesCidCodec(big)).cid,
-        codec: (await bytesCidCodec(big)).codec,
+        ipld_codec: (await bytesCidCodec(big)).codec,
       },
     ];
-    expect(bigNamed[0].codec).toBe("dag-pb");
+    expect(bigNamed[0].ipld_codec).toBe("dag-pb");
     const up = new FakeUploader();
     const ob = await object("big.parquet", big);
     expect(await publishObject(ob, up, bigNamed)).toEqual({ root: ob.root });
@@ -576,7 +597,7 @@ describe("guardObject and publishObject", () => {
         sha256:
           "e73fb85e87ddeba3dbb973f04a2f97b85749b686b291db5078066575fdade987",
         cid: "bafybeifky42ojoid4c6tm54jpqw5ctwdsmuemtbrs6ebkmesz73knnd3de",
-        codec: "dag-pb",
+        ipld_codec: "dag-pb",
       },
       {
         name: "los-angeles-roll2026-sample-5mi.parquet",
@@ -584,7 +605,7 @@ describe("guardObject and publishObject", () => {
         sha256:
           "861f7f5e79332e86d5bb6d4960561d648cd9955d2ae890c100317c6918201bbc",
         cid: "bafybeidsmehgjsc5f4pzhgrbn6gtihv22cz2wjou46ajqfgt6tg4dwzx5a",
-        codec: "dag-pb",
+        ipld_codec: "dag-pb",
       },
     ]);
   });

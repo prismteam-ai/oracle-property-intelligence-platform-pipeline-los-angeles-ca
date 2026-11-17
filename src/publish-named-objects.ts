@@ -16,7 +16,8 @@ export type NamedObject = {
   size: number;
   sha256: string;
   cid: string;
-  codec: Codec;
+  /** The CID's IPLD codec (dag-pb for a file of more than one 1 MiB chunk). */
+  ipld_codec: Codec;
 };
 
 export const NAMED_OBJECTS: readonly NamedObject[] = [
@@ -25,13 +26,13 @@ export const NAMED_OBJECTS: readonly NamedObject[] = [
     size: 32_775_616,
     sha256: "e73fb85e87ddeba3dbb973f04a2f97b85749b686b291db5078066575fdade987",
     cid: "bafybeifky42ojoid4c6tm54jpqw5ctwdsmuemtbrs6ebkmesz73knnd3de",
-    codec: "dag-pb",
+    ipld_codec: "dag-pb",
   },
   {
     name: "los-angeles-roll2026-sample-5mi.parquet",
     size: 1_878_244,
     sha256: "861f7f5e79332e86d5bb6d4960561d648cd9955d2ae890c100317c6918201bbc",
     cid: "bafybeidsmehgjsc5f4pzhgrbn6gtihv22cz2wjou46ajqfgt6tg4dwzx5a",
-    codec: "dag-pb",
+    ipld_codec: "dag-pb",
   },
 ];

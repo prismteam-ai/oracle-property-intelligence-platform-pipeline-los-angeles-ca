@@ -15,10 +15,11 @@
  *   escaped text), as an entry of the artifact manifest, or as an object;
  * - any Parquet file in the folder, by name or by its PAR1 magic bytes;
  * - coverage.json when the artifact manifest does not list it with these exact bytes (size, sha256,
- *   CID and codec);
+ *   CID and IPLD codec);
  * - an artifact-manifest.json that is not the folder's own manifest, lists itself, lists an object that
- *   is neither coverage.json nor a named object (with the named object's exact CID, size, codec and
- *   sha256), or leaves out coverage.json or a named object;
+ *   is neither coverage.json nor a named object (with the named object's exact CID, size, IPLD codec
+ *   and sha256), lists an object whose codec is not "file", or leaves out coverage.json or a named
+ *   object;
  * - a CAR that is not the deterministic CAR of exactly the folder's files with the expected root.
  *
  * An object passes only when its name, size and sha256 are a named object's exactly, and its CAR is
@@ -43,12 +44,17 @@ export const PUBLISH_FOLDER_FILES = [
   "coverage.json",
 ] as const;
 
-/** One published object as the artifact manifest lists it, in this key order. */
+/**
+ * One published object as the artifact manifest lists it, in this key order. codec is the IPFS codec
+ * in the assignment's sense, "file" or "directory" (every listed object is a file); ipld_codec is the
+ * CID's codec, "raw" for a file of one 1 MiB chunk or less, "dag-pb" for a larger one.
+ */
 export type PublishedObject = {
   cid: string;
   name: string;
   size: number;
-  codec: Codec;
+  codec: "file" | "directory";
+  ipld_codec: Codec;
   sha256: string;
 };
 export const PUBLISHED_OBJECT_KEYS = [
@@ -56,6 +62,7 @@ export const PUBLISHED_OBJECT_KEYS = [
   "name",
   "size",
   "codec",
+  "ipld_codec",
   "sha256",
 ] as const;
 
@@ -181,6 +188,8 @@ export function guardManifest(
     }
     if (seen.has(o.name))
       out.push({ name: where, reason: "listed more than once" });
+    if (o.codec !== "file")
+      out.push({ name: where, reason: 'codec must be "file"' });
     seen.add(o.name);
     if (isRunManifestName(o.name))
       out.push({ name: where, reason: RUN_MANIFEST_REASON });
@@ -197,12 +206,13 @@ export function guardManifest(
       else if (
         o.cid !== n.cid ||
         o.size !== n.size ||
-        o.codec !== n.codec ||
+        o.ipld_codec !== n.ipld_codec ||
         o.sha256 !== n.sha256
       )
         out.push({
           name: where,
-          reason: "not the named object's exact CID, size, codec and sha256",
+          reason:
+            "not the named object's exact CID, size, IPLD codec and sha256",
         });
     }
   });
@@ -268,10 +278,10 @@ export async function guardDirectory(
   const entry = manifest.objects.find((o) => o?.name === "coverage.json");
   if (coverage && entry) {
     const { cid, codec } = await bytesCidCodec(coverage.bytes);
-    if (entry.cid !== cid || entry.codec !== codec)
+    if (entry.cid !== cid || entry.ipld_codec !== codec)
       out.push({
         name: "coverage.json",
-        reason: "CID or codec differs from the artifact manifest",
+        reason: "CID or IPLD codec differs from the artifact manifest",
       });
   }
   if (d.car.length > MAX_PUBLISH_BYTES)
