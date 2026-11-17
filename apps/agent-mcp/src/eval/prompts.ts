@@ -139,8 +139,9 @@ export const GAPS = {
   },
   place_unknown: {
     inGaps: (g) => g.includes("matches no jurisdiction or postal city"),
+    // Contractions with a straight or curly apostrophe: "wasn't found", "isn’t in the data", "couldn't find".
     inText:
-      /\b(?:unknown|not (?:found|recogni[sz]ed|in the data)|(?:could|can)(?:n't| ?not) (?:find|resolve|locate)|no (?:match|matching|place|jurisdiction|city)|does(?:n't| not) match)\b/i,
+      /\b(?:unknown|(?:not|(?:is|was|are|were)n['’]t) (?:found|recogni[sz]ed|in the data)|(?:could|can)(?:n['’]t| ?not) (?:find|resolve|locate)|no (?:match|matching|place|jurisdiction|city)|does(?:n['’]t| not) match)\b/i,
   },
   place_ambiguous_or_unreliable: {
     inGaps: (g) => g.includes("too spread out") || g.includes("is ambiguous:"),

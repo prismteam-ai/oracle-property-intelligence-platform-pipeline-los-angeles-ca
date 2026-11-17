@@ -76,8 +76,10 @@ export const MAX_OPEN_DAYS: typeof API_MAX_OPEN_DAYS = 36_525;
 export const LONG_OPEN_SCOPE = "roofing work only";
 
 /**
- * Most permits the within-window list of long_open_permits asks for and lists: min(limit, 5). Each of them carries its
- * contractor rows, so the list stays short; the longest-open list keeps `limit` (default 10).
+ * Most permits each list of long_open_permits with with_contractor_window asks for and lists: min(limit, 5), the
+ * longest-open list and the within-window list alike, so the two together stay within an answer's 10 records (the
+ * within-window items also carry their contractor rows). Each list's text says how many it shows of its total.
+ * Without with_contractor_window the one list keeps `limit` (default 10).
  */
 export const WITHIN_WINDOW_LIMIT = 5;
 
@@ -246,7 +248,10 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "with_contractor_window, a second list follows: the longest-open permits issued within the contractor window " +
     "(at most the stated number of days open), each list labeled; each of its items carries its permit's contractor " +
     "rows (business name, license number, license class, canonical name, name variant count, owner-builder) and " +
-    "contractor_status: named, owner-builder, none stated or not read (with why). " +
+    "contractor_status: named, owner-builder, none stated or not read (with why). With with_contractor_window each " +
+    "list has at most min(limit, 5) permits (5 by default) and, when its count is available, its text says how many it " +
+    "shows of its total; " +
+    "without it, the one list has up to `limit`. " +
     LONG_OPEN_COVERAGE_DESCRIPTION,
   parcel_detail:
     "One parcel's property facts (address, year built, effective roof year and basis, use type, coordinates, " +
@@ -793,6 +798,20 @@ const statedCount = (count: number, notAvailable: string | null) =>
   notAvailable === null
     ? { count }
     : { count: null, status: "not_available" as const, text: notAvailable };
+
+/**
+ * A with_contractor_window list's count and text: how many permits it shows of its total ("Shows 5 of 2,047
+ * long-open permits."), or, with no total available, the not-available count and text as statedCount gives them.
+ */
+const shownCount = (
+  count: number,
+  notAvailable: string | null,
+  shown: number,
+  what: string,
+) =>
+  notAvailable === null
+    ? { count, text: `Shows ${num(shown)} of ${num(count)} ${what}.` }
+    : statedCount(count, notAvailable);
 
 /**
  * The circle's permit data as a long_open_permits result states it: the permit_data block (absent when every parcel
@@ -1371,7 +1390,8 @@ const run = {
     // cap and retry (http-data.ts). The default list first; the window from explorer.sources (the answer's read for
     // the prompt's contractor end: onceSources, no new call in the agent); the circle's permit data; then the
     // within-window list.
-    const res = await longOpen(input.max_open_days);
+    const listLimit = Math.min(input.limit, WITHIN_WINDOW_LIMIT);
+    const res = await longOpen(input.max_open_days, listLimit);
     const src = await q.explorer.sources();
     const cov = await readCoverage();
     const ref = sourceRef(src, "permit");
@@ -1404,7 +1424,12 @@ const run = {
       contractorGaps = c.gaps;
       withinContent = {
         label: `Longest-open permits issued within the contractor window (open at least ${days(input.min_open_days)} and at most ${days(within.maxOpenDays)})`,
-        ...statedCount(within.res.count, withinNa),
+        ...shownCount(
+          within.res.count,
+          withinNa,
+          second.items.length,
+          "long-open permits issued within the contractor window",
+        ),
         returned: second.items.length,
         max_open_days: within.maxOpenDays,
         rule: within.res.rule.text,
@@ -1444,7 +1469,7 @@ const run = {
         contractor_window: within.window,
         longest_open: {
           label: `Longest-open permits, any issue date (open at least ${days(input.min_open_days)}${input.max_open_days !== undefined ? ` and at most ${days(input.max_open_days)}` : ""})`,
-          ...statedCount(res.count, na),
+          ...shownCount(res.count, na, first.items.length, "long-open permits"),
           returned: first.items.length,
           rule: res.rule.text,
           items: first.items,

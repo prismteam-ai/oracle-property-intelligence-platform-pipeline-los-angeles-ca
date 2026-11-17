@@ -2417,7 +2417,8 @@ const DESCRIPTION_ADDED_SINCE_8FC8821: Readonly<Record<string, string>> = {
 };
 /**
  * Tool-description words changed since 8fc8821, each [then, now] and found once; nothing else of a description
- * changed. search_aged_roofs: permit_data's partial count no longer reads as a partial search.
+ * changed. search_aged_roofs: permit_data's partial count no longer reads as a partial search; long_open_permits:
+ * the list sizes with with_contractor_window.
  */
 const DESCRIPTION_CHANGED_SINCE_8FC8821: Readonly<
   Record<string, readonly [string, string]>
@@ -2425,6 +2426,11 @@ const DESCRIPTION_CHANGED_SINCE_8FC8821: Readonly<
   search_aged_roofs: [
     "(and, when only the nearest were checked, how many match).",
     "(when there are more than the data API marks, counted only for the nearest, with how many match; roof age still covers every matching parcel).",
+  ],
+  // long_open_permits: with with_contractor_window each list has at most min(limit, 5) permits.
+  long_open_permits: [
+    "none stated or not read (with why). ",
+    "none stated or not read (with why). With with_contractor_window each list has at most min(limit, 5) permits (5 by default) and, when its count is available, its text says how many it shows of its total; without it, the one list has up to `limit`. ",
   ],
 };
 const without8fc8821DescriptionAdditions = (

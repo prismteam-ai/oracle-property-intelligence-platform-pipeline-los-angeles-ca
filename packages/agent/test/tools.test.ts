@@ -1182,11 +1182,14 @@ describe("long_open_permits: with_contractor_window", () => {
     expect(daysBetween("2013-01-02", "12 Nov 2026")).toBeNull();
   });
 
-  test("off (the default): one long-open call, the result shape unchanged", async () => {
+  test("off (the default): one long-open call with limit (default 10), the result shape unchanged", async () => {
     const { queries, calls } = fakeQueries();
     const o = await runTool("long_open_permits", at, queries);
     expect(o.ok).toBe(true);
     expect(calls.filter((c) => c.fn === "permits.longOpen")).toHaveLength(1);
+    expect(calls.find((c) => c.fn === "permits.longOpen")!.input).toMatchObject(
+      { limit: 10 },
+    );
     // permit_data: the fake's points are truncated (only the nearest checked).
     expect(Object.keys(o.content as object)).toEqual([
       "count",
@@ -1278,10 +1281,16 @@ describe("long_open_permits: with_contractor_window", () => {
     expect(c.longest_open.label).toBe(
       "Longest-open permits, any issue date (open at least 1,826 days)",
     );
+    expect(c.longest_open).toMatchObject({
+      count: 57,
+      text: "Shows 2 of 57 long-open permits.",
+      returned: 2,
+    });
     expect(c.within_contractor_window).toMatchObject({
       label:
         "Longest-open permits issued within the contractor window (open at least 1,826 days and at most 5,062 days)",
       count: 57,
+      text: "Shows 2 of 57 long-open permits issued within the contractor window.",
       max_open_days: 5062,
       truncated: true,
     });
@@ -1307,12 +1316,12 @@ describe("long_open_permits: with_contractor_window", () => {
     });
   });
 
-  test("on: the within-window call asks for min(limit, WITHIN_WINDOW_LIMIT) permits; the longest-open call keeps limit (default 10)", async () => {
+  test("on: both calls ask for min(limit, WITHIN_WINDOW_LIMIT) permits (5 by default), so the two lists stay within an answer's 10 records; off keeps limit (default 10)", async () => {
     expect(WITHIN_WINDOW_LIMIT).toBe(5);
     for (const [limit, first, within] of [
-      [undefined, 10, 5],
-      [10, 10, 5],
-      [25, 25, 5],
+      [undefined, 5, 5],
+      [10, 5, 5],
+      [25, 5, 5],
       [5, 5, 5],
       [3, 3, 3],
     ] as const) {
@@ -1338,7 +1347,7 @@ describe("long_open_permits: with_contractor_window", () => {
     }
   });
 
-  test("on: a within-window list cut at 5 states its truncation gap; the longest-open list lists its 10", async () => {
+  test("on: both lists cut at 5 state their truncation gaps and say how many they show of their totals", async () => {
     const { queries } = fakeQueries();
     const twelve = Array.from({ length: 12 }, (_, i) => i);
     const q: DataQueries = {
@@ -1362,14 +1371,21 @@ describe("long_open_permits: with_contractor_window", () => {
       q,
     );
     const c = o.content as Lists;
-    expect(c.longest_open.items).toHaveLength(10);
+    expect(c.longest_open.items).toHaveLength(5);
+    expect(c.longest_open).toMatchObject({
+      count: 12,
+      text: "Shows 5 of 12 long-open permits.",
+      returned: 5,
+      truncated: true,
+    });
     expect(c.within_contractor_window).toMatchObject({
       count: 12,
+      text: "Shows 5 of 12 long-open permits issued within the contractor window.",
       returned: 5,
       truncated: true,
     });
     expect(o.gaps).toContain(
-      "Results truncated: the longest-open list returned 10 of 12 long-open permits (longest open first).",
+      "Results truncated: the longest-open list returned 5 of 12 long-open permits (longest open first).",
     );
     expect(o.gaps).toContain(
       "Results truncated: the within-window list returned 5 of 12 long-open permits (longest open first).",

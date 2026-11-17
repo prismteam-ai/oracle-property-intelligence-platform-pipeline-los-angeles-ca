@@ -199,9 +199,9 @@ interface LongOpenList {
 }
 
 /**
- * The lists of a long_open_permits result: the result itself, or with with_contractor_window its labeled
- * longest_open list (the call's own max_open_days and limit) and, when it was listed, its within_contractor_window
- * list (the max_open_days the tool computed and stated; at most min(limit, WITHIN_WINDOW_LIMIT) permits).
+ * The lists of a long_open_permits result: the result itself (the call's limit), or with with_contractor_window its
+ * labeled longest_open list (the call's own max_open_days) and, when it was listed, its within_contractor_window list
+ * (the max_open_days the tool computed and stated); each of the two at most min(limit, WITHIN_WINDOW_LIMIT) permits.
  */
 function longOpenLists(
   r: Record<string, unknown>,
@@ -213,7 +213,12 @@ function longOpenLists(
   if (input.with_contractor_window !== true)
     return [{ name: "", r, max_open_days: own, limit }];
   const lists: LongOpenList[] = [
-    { name: "longest_open", r: rec(r.longest_open), max_open_days: own, limit },
+    {
+      name: "longest_open",
+      r: rec(r.longest_open),
+      max_open_days: own,
+      limit: Math.min(limit, WITHIN_WINDOW_LIMIT),
+    },
   ];
   const w = rec(r.within_contractor_window);
   if (typeof w.max_open_days === "number")

@@ -469,7 +469,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     });
   });
 
-  test("long_open_permits with with_contractor_window at Van Nuys, 5 mi, limit 10: the longest-open list has 10 items, the within-window list 5 (WITHIN_WINDOW_LIMIT), each carrying its permit's contractor rows, as permits.forParcel serves them", async () => {
+  test("long_open_permits with with_contractor_window at Van Nuys, 5 mi, limit 10: the longest-open list has 5 items and the within-window list 5 (min(limit, WITHIN_WINDOW_LIMIT) each), the within-window items each carrying its permit's contractor rows, as permits.forParcel serves them", async () => {
     const o = await runTool(
       "long_open_permits",
       {
@@ -490,7 +490,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
         items: Array<Record<string, unknown>>;
       };
     };
-    expect(content.longest_open.items).toHaveLength(10);
+    expect(content.longest_open.items).toHaveLength(5);
     const w = content.within_contractor_window;
     expect(WITHIN_WINDOW_LIMIT).toBe(5);
     expect(w.items).toHaveLength(5);
@@ -802,16 +802,21 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
       complete: false,
       text: nearest,
     });
-    expect(c.longest_open).toMatchObject({ count: longest, returned: 10 });
+    expect(c.longest_open).toMatchObject({
+      count: longest,
+      text: `Shows 5 of ${fmt(longest)} long-open permits.`,
+      returned: 5,
+    });
     expect(c.longest_open).not.toHaveProperty("status");
     expect(c.within_contractor_window).toMatchObject({
       count: within,
+      text: `Shows 5 of ${fmt(within)} long-open permits issued within the contractor window.`,
       returned: 5,
     });
     expect(c.within_contractor_window).not.toHaveProperty("status");
     expect(o.gaps).toEqual([
       nearest,
-      `Results truncated: the longest-open list returned 10 of ${fmt(longest)} long-open permits (longest open first).`,
+      `Results truncated: the longest-open list returned 5 of ${fmt(longest)} long-open permits (longest open first).`,
       `Results truncated: the within-window list returned 5 of ${fmt(within)} long-open permits (longest open first).`,
     ]);
   });
@@ -933,7 +938,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     }
   });
 
-  test("long_open_permits over MCP at Van Nuys, 5 mi, limit 10, with_contractor_window: the shared tool layer lists 10 longest-open permits and 5 within the window", async () => {
+  test("long_open_permits over MCP at Van Nuys, 5 mi, limit 10, with_contractor_window: the shared tool layer lists 5 longest-open permits and 5 within the window", async () => {
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     const server = createMcpServer(data.queries);
     await server.connect(serverSide);
@@ -963,7 +968,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
         };
         gaps: string[];
       };
-      expect(body.result.longest_open.items).toHaveLength(10);
+      expect(body.result.longest_open.items).toHaveLength(5);
       const w = body.result.within_contractor_window;
       expect(w.items).toHaveLength(WITHIN_WINDOW_LIMIT);
       expect(w.returned).toBe(WITHIN_WINDOW_LIMIT);

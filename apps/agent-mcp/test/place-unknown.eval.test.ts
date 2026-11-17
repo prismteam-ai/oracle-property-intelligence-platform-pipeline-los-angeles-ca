@@ -154,6 +154,53 @@ describe("check place_unknown", () => {
     ]);
   });
 
+  test('the first sentence with a contraction ("wasn\'t", "isn\'t", "couldn\'t", curly or straight): no warning (round 6dfda8d-r1, run 3, e)', () => {
+    const e = prompts.find((p) => p.id.startsWith("e-"))!;
+    const springfield = resolveCall({
+      status: "unknown",
+      name: "Springfield",
+      note: note("Springfield"),
+    });
+    const gaps = [note("Springfield"), PLACE_UNKNOWN_HOW_TO_ASK];
+    for (const first of [
+      "Springfield wasn't found.",
+      "Springfield wasn’t found.",
+      "Springfield isn't in the data.",
+      "I couldn't find Springfield.",
+      "Springfield isn’t recognized.",
+      "Springfield was not found.",
+    ]) {
+      const c = checkPlaceUnknown(
+        answer(`${first} Ask again with its latitude and longitude.`, gaps),
+        [springfield],
+        e.expected.place,
+      );
+      expect([first, c.result, c.warnings]).toEqual([first, "pass", undefined]);
+    }
+  });
+
+  test('a contraction that does not say the place was not found still warns: "Springfield isn\'t far from here."', () => {
+    const e = prompts.find((p) => p.id.startsWith("e-"))!;
+    const c = checkPlaceUnknown(
+      answer("Springfield isn't far from here. Ask again with a point.", [
+        note("Springfield"),
+        PLACE_UNKNOWN_HOW_TO_ASK,
+      ]),
+      [
+        resolveCall({
+          status: "unknown",
+          name: "Springfield",
+          note: note("Springfield"),
+        }),
+      ],
+      e.expected.place,
+    );
+    expect(c.result).toBe("pass");
+    expect(c.warnings).toEqual([
+      'the first sentence does not say Springfield was not found: "Springfield isn\'t far from here."',
+    ]);
+  });
+
   test("n/a for any other place outcome", () => {
     expect(
       checkPlaceUnknown(answer(TEXT, GAPS_FIRST), [unknown], {
