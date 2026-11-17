@@ -4,17 +4,21 @@
  *   applied, mapped the way the tool maps it) gives the same count and the same returned IDs in the same order;
  * - cited: unverified_ids is empty and every parcel ID or permit number in the answer text is cited: among its
  *   records, or a parcel ID a cited permit record links to (linkedParcels);
- * - gaps / gaps_text: each expected gap ID is in the answer's gaps list / mentioned in the answer text;
+ * - gaps / gaps_text: each expected gap ID is in the answer's gaps list; gaps_text also fails on that list, and the
+ *   answer text not mentioning a listed gap is a warning;
  * - elapsed: elapsed_ms < 30,000 (the API Gateway HTTP API's maximum integration timeout);
  * - tools, refusal, place: the prompt's expected tools (and input values), refusal (and which: the people guard
  *   or the no-tool-call rule) and place outcome;
- * - ownership: an answer through the ownership filter states its basis and weakness and never implies the owner
- *   is known;
+ * - ownership: an answer through the ownership filter has the basis's rule line in its reasoning and never names an
+ *   owner or states only the other basis; the text not stating the basis or its weakness is a warning;
  * - license_status: the answer text never says a contractor license expired or is invalid (nothing in the data
- *   states a license's status);
- * - contractors: every within-window permit the text names has its contractor named as the tool returned it;
+ *   states a license's status); a status word after a "not known" disclaimer in the same clause is a warning;
+ * - contractors: every within-window permit the text names has its contractor named as the tool returned it, never
+ *   another listed permit's contractor alone on its line; a named contractor named only away from its row (no other
+ *   license number on its line) is a warning;
  * - stated_counts: every number the text states for the rows it shows from a long-open list equals the rows of that
- *   list the text names (totals, such as how many match, are not such statements);
+ *   list the text names (totals, such as how many match, are not such statements); when only the number's place in
+ *   the text says which list it is about, equal for another of the answer's lists is a warning;
  * - screen: with the request's screen values, the search's radius and roof age threshold are the expected ones (the
  *   screen's, or the question's from the prompt's tool_inputs) and the agent's assumptions name where each came from;
  *   the text stating each value with its source is a warning, not a failure.
@@ -603,8 +607,9 @@ const placeNameOf = (
 ): string | undefined => ("name" in place ? place.name : undefined);
 
 /**
- * (iii) The expected gaps in the answer's gaps list, and mentioned in its text (a gap's text pattern may depend on
- * the prompt's expected place name).
+ * (iii) The expected gaps in the answer's gaps list (gaps). gaps_text fails on the same list (an expected gap not in
+ * it); the text not mentioning an expected gap (a gap's text pattern may depend on the prompt's expected place name)
+ * is a warning.
  */
 export function checkGaps(
   answer: AgentAnswer,
@@ -632,9 +637,13 @@ export function checkGaps(
     ),
     gaps_text: check(
       said.map(
-        (x) => `${x.id}: ${x.ok ? "mentioned" : "NOT mentioned in the text"}`,
+        (x, i) =>
+          `${x.id}: ${listed[i]!.ok ? "" : "NOT in the gaps; "}${x.ok ? "mentioned" : "NOT mentioned in the text"}`,
       ),
-      said.every((x) => x.ok),
+      listed.every((x) => x.ok),
+      said
+        .filter((x) => !x.ok)
+        .map((x) => `${x.id}: the text does not mention the gap`),
     ),
   };
 }
@@ -745,8 +754,10 @@ export const OWNER_NAMED =
 
 /**
  * (v) With expected.ownership: a search_aged_roofs call with the ownership filter that returned its basis; the
- * reasoning states that basis's rule line (deterministic); the text states the basis and its weakness; and no text
- * names an owner. n/a without the expectation.
+ * reasoning states that basis's rule line (deterministic: the basis, its weakness and the proxy note); and no text
+ * names an owner (the tools return no owner); with the basis "recording" or "base_year", a text that states only the
+ * other basis fails (the tool result contradicts it). The text not stating the basis or its weakness, in the model's
+ * own words, is a warning. n/a without the expectation.
  */
 export function checkOwnership(
   answer: AgentAnswer,
@@ -780,7 +791,19 @@ export function checkOwnership(
       `weakness ${weaknessSaid ? "stated" : "NOT stated"} in the text`,
       named ? `the text names an owner: "${named}"` : "no owner named",
     ],
-    ruleLine && basisSaid && weaknessSaid && !named,
+    ruleLine &&
+      !named &&
+      !(
+        basis !== "both" &&
+        !basisSaid &&
+        OWNERSHIP_TEXT_CHECKS[
+          basis === "recording" ? "base_year" : "recording"
+        ].basis.every((re) => re.test(answer.text))
+      ),
+    [
+      ...(basisSaid ? [] : [`the text does not state the basis (${basis})`]),
+      ...(weaknessSaid ? [] : ["the text does not state the basis's weakness"]),
+    ],
   );
 }
 
@@ -792,21 +815,71 @@ export function checkOwnership(
 export const LICENSE_STATUS_CLAIM =
   /\blicen[cs]es?\b[^.!?\n]*?\b(?:expir\w*|invalid|lapsed|inactive|revoked|suspended)\b|\b(?:expir\w*|invalid|lapsed|inactive|revoked|suspended)\b[^.!?\n]*?\blicen[cs]es?\b/i;
 
-/** (vi) With expected.no_license_status: the text makes no license status claim. n/a without the expectation. */
+/**
+ * A disclaimer that a license's status is not known: "whether", "not known/stated/shown/checked ...", "does not
+ * say/show/tell ...", "no status/expiration date/information". It counts only before the status word, in the same
+ * clause (clauseBefore).
+ */
+export const LICENSE_STATUS_UNKNOWN =
+  /\bwhether\b|\b(?:not|never)\s+(?:known|stated|shown|checked|verified|available|included|in the data)\b|\b(?:does|do|did|can|could)(?:n['’]t| not)\s+(?:say|state|show|tell|know|include|check|verify|confirm)\b|\bno\s+(?:license\s+)?(?:status|expir\w*(?:\s+dates?)?|information)\b/i;
+
+/** The sentence around index `at` of a text: from the previous . ! ? (followed by a space) or line break to the next. */
+function sentenceAt(text: string, at: number): string {
+  const before = text.slice(0, at);
+  const start = Math.max(
+    before.lastIndexOf("\n") + 1,
+    ...[". ", "! ", "? "].map((e) => {
+      const i = before.lastIndexOf(e);
+      return i < 0 ? 0 : i + 2;
+    }),
+  );
+  const rest = text.slice(at);
+  const end = rest.search(/[.!?](?=\s|$)|\n/);
+  return text.slice(start, end < 0 ? undefined : at + end + 1).trim();
+}
+
+/** The text before index `end` back to the last clause break (; ( — – ", and|but|so") or sentence start. */
+function clauseBefore(text: string, end: number): string {
+  const s = sentenceAt(text, end - 1);
+  const head = text.slice(text.lastIndexOf(s, end), end);
+  const cuts = [
+    ...head.matchAll(/[;(\u2014\u2013]|,\s+(?:and|but|so|while)\b/g),
+  ];
+  return cuts.length
+    ? head.slice(cuts.at(-1)!.index! + cuts.at(-1)![0].length)
+    : head;
+}
+
+/**
+ * (vi) With expected.no_license_status: the text makes no license status claim (the tool results carry no license
+ * status). A status word that a disclaimer (LICENSE_STATUS_UNKNOWN) precedes in the same clause is a warning.
+ * n/a without the expectation.
+ */
 export function checkLicenseStatus(
   answer: AgentAnswer,
   expected: EvalPrompt["expected"],
 ): CheckResult {
   if (!expected.no_license_status)
     return check(["no license status expectation"], null);
-  const claim = LICENSE_STATUS_CLAIM.exec(answer.text)?.[0];
+  const text = answer.text;
+  const found = [
+    ...text.matchAll(new RegExp(LICENSE_STATUS_CLAIM.source, "gi")),
+  ].map((m) => ({
+    said: m[0],
+    unknown: LICENSE_STATUS_UNKNOWN.test(
+      clauseBefore(text, m.index + m[0].length),
+    ),
+  }));
+  const claim = found.find((f) => !f.unknown);
+  if (claim)
+    return check([`the text states a license status: "${claim.said}"`], false);
   return check(
-    [
-      claim
-        ? `the text states a license status: "${claim}"`
-        : "no license status stated",
-    ],
-    claim === undefined,
+    ["no license status stated"],
+    true,
+    found.map(
+      (f) =>
+        `"${f.said}": a status word in a sentence saying the status is not known`,
+    ),
   );
 }
 
@@ -825,11 +898,14 @@ export const CONTRACTOR_STATUS_TEXT: Record<string, RegExp> = {
 };
 
 /**
- * (vii) With expected.contractors_named: a long_open_permits call with
- * with_contractor_window listed the within-window permits; the text names at least one of them; and for each one it
- * names, the text from that permit number to the next listed permit number names its contractor: for a named one a
- * business or canonical name (letters and digits compared) or a license number of its rows; otherwise its status in
- * words (owner-builder, no contractor stated, not read). n/a without the expectation.
+ * (vii) With expected.contractors_named: a long_open_permits call with with_contractor_window listed the
+ * within-window permits; the text names at least one of them; and for each one it names, the text names its
+ * contractor: for a named one a business or canonical name (letters and digits compared) or a license number of its
+ * rows; otherwise its status in words (owner-builder, no contractor stated, not read). Placement only: a named
+ * contractor named only outside its permit's part of the text (from its line to the next listed permit's line) is a
+ * warning, not a failure, when its own line states no license number other than its own, and unless its own line (from the line's start, or the permit number when the previous listed permit is
+ * on the same line, to the line's end or the next listed permit number on it) names another listed permit's
+ * contractor and none of its own: an attribution the tool result contradicts, a failure. n/a without the expectation.
  */
 export function checkContractors(
   answer: AgentAnswer,
@@ -865,11 +941,41 @@ export function checkContractors(
       ],
       false,
     );
+  /**
+   * The squashed business and canonical names (and, with licenses, license numbers) of a permit's contractor rows;
+   * none unless its status is "named".
+   */
+  const namesOf = (it: Record<string, unknown>, licenses = true): string[] =>
+    String(it.contractor_status) === "named"
+      ? arr(it.contractors)
+          .map(rec)
+          .flatMap((c) => [
+            c.contractors_business_name,
+            c.canonical_business_name,
+            ...(licenses ? [c.license_identifier] : []),
+          ])
+          .filter((v): v is string => typeof v === "string")
+          .map(squash)
+          .filter((v) => v.length > 0)
+      : [];
+  /** The part of the text names its own contractor: a name or license number, or its status in words. */
+  const ownIn = (it: Record<string, unknown>, part: string): boolean => {
+    const status = String(it.contractor_status);
+    return status === "named"
+      ? namesOf(it).some((v) => squash(part).includes(v))
+      : (CONTRACTOR_STATUS_TEXT[status]?.test(part) ?? false);
+  };
   const details: string[] = [];
+  const warnings: string[] = [];
   let ok = true;
   // A permit's part of the text: from the start of its line (or the permit number, when the previous listed permit is
-  // on the same line) to the start of the next listed permit's line (or that permit number, on the same line).
+  // on the same line) to the start of the next listed permit's line (or that permit number, on the same line). Its
+  // own line: the same start, to the end of that line (or the next listed permit number on it).
   const lineStart = (i: number) => text.lastIndexOf("\n", i - 1) + 1;
+  const lineEnd = (i: number) => {
+    const e = text.indexOf("\n", i);
+    return e < 0 ? text.length : e;
+  };
   at.forEach(({ it, i }, k) => {
     const prev = at[k - 1];
     const next = at[k + 1];
@@ -879,28 +985,44 @@ export function checkContractors(
       : lineStart(next.i) > i
         ? lineStart(next.i)
         : next.i;
-    const segment = text.slice(start, end);
+    const lineStop = next && next.i < lineEnd(i) ? next.i : lineEnd(i);
+    const line = text.slice(start, lineStop);
+    const permit = String(it.permit_number);
     const status = String(it.contractor_status);
-    const rows = arr(it.contractors).map(rec);
-    const named =
-      status === "named"
-        ? rows.some((c) =>
-            [
-              c.contractors_business_name,
-              c.canonical_business_name,
-              c.license_identifier,
-            ].some(
-              (v) =>
-                typeof v === "string" &&
-                squash(v).length > 0 &&
-                squash(segment).includes(squash(v)),
-            ),
-          )
-        : (CONTRACTOR_STATUS_TEXT[status]?.test(segment) ?? false);
-    if (!named) ok = false;
+    const own = namesOf(it);
+    // Another listed permit's contractor name (not also one of this permit's) on this permit's own line; license
+    // numbers are left out here, as digits can sit inside a permit number or parcel ID.
+    const other = items
+      .filter((o) => o !== it)
+      .flatMap((o) => namesOf(o, false))
+      .find((v) => !own.includes(v) && squash(line).includes(v));
+    if (other !== undefined && !ownIn(it, line)) {
+      ok = false;
+      details.push(
+        `${permit} (${status}): its line names another listed permit's contractor and not its own`,
+      );
+      return;
+    }
+    const inPart = ownIn(it, text.slice(start, end));
+    // The warning path only for a named contractor (status words are generic) whose own line states no license
+    // number other than its own (a license number on its line that the tool result gives to no row of it contradicts it).
+    const ownLicenses = arr(it.contractors)
+      .map(rec)
+      .map((c) => String(c.license_identifier ?? ""))
+      .filter(Boolean);
+    const foreignLicense = [
+      ...line.matchAll(/licen[cs]e\D{0,15}?(\d{4,})/gi),
+    ].some((m) => !ownLicenses.includes(m[1]!));
+    const elsewhere =
+      !inPart && status === "named" && !foreignLicense && ownIn(it, text);
+    if (!inPart && !elsewhere) ok = false;
     details.push(
-      `${String(it.permit_number)} (${status}): ${named ? "contractor named" : "contractor NOT named"}`,
+      `${permit} (${status}): contractor ${inPart ? "named" : elsewhere ? "named only outside its part of the text" : "NOT named"}`,
     );
+    if (elsewhere)
+      warnings.push(
+        `${permit}: its contractor is named only outside its part of the text`,
+      );
   });
   return check(
     [
@@ -908,6 +1030,7 @@ export function checkContractors(
       ...details,
     ],
     ok,
+    warnings,
   );
 }
 
@@ -1017,7 +1140,10 @@ const LIST_LABEL: Record<string, string> = {
  * text). When the text names no row of that list, the statement passes if it equals the tool's returned count or
  * its total (count) for that list. The list a statement is about: "per list", "each list" or "both lists" means every list; "window" the
  * within-window list; "overall" or "any issue date" the longest-open list; otherwise the list whose first named row
- * follows the statement most closely (else the one whose last named row precedes it). n/a without the expectation.
+ * follows the statement most closely (else the one whose last named row precedes it). When only that placement
+ * decides the list (no "per list", "window" or "overall" in the sentence), a statement not equal for that list but
+ * equal, the same way, for another long-open list of the answer is a warning (which list a count belongs to is
+ * placement); equal for none of them fails. n/a without the expectation.
  */
 export function checkStatedCounts(
   answer: AgentAnswer,
@@ -1058,10 +1184,38 @@ export function checkStatedCounts(
   );
   if (!statements.length)
     return check([...details, "no statement of rows shown"], true);
+  const warnings: string[] = [];
   let ok = true;
+  /** How the stated count equals a list: its rows shown in the text, else its returned count or total; or null. */
+  const equalTo = (n: number, l: (typeof lists)[number]): string | null =>
+    l.shown > 0
+      ? n === l.shown
+        ? `its ${l.shown} row(s) shown`
+        : null
+      : n === l.returned
+        ? `the tool's returned count (${l.returned})`
+        : n === l.count
+          ? `the tool's total (${l.count})`
+          : null;
+  /** Not equal for its list: with the list chosen by placement only, equal for another list is a warning; else a failure. */
+  const elsewhere = (
+    s: StatedCount,
+    l: (typeof lists)[number],
+    byPlace: boolean,
+  ): void => {
+    const m = byPlace
+      ? lists.find((x) => x !== l && equalTo(s.count, x) !== null)
+      : undefined;
+    if (m === undefined) ok = false;
+    else
+      warnings.push(
+        `"${s.said}" (${s.count}): its sentence points to the ${l.label}, but it equals ${equalTo(s.count, m)} of the ${m.label}`,
+      );
+  };
   for (const s of statements) {
     const sentence = s.sentence.toLowerCase();
     let about: typeof lists;
+    let byPlace = false;
     if (/\b(?:per|each|both)\s+lists?\b/.test(sentence)) about = lists;
     else if (
       /\bwindow\b/.test(sentence) &&
@@ -1081,11 +1235,12 @@ export function checkStatedCounts(
         .filter((l) => l.last >= 0 && l.last < s.at)
         .sort((a, b) => b.last - a.last)[0];
       about = [after ?? before ?? lists[0]!];
+      byPlace = lists.length > 1;
     }
     for (const l of about) {
       if (l.shown > 0) {
         const equal = s.count === l.shown;
-        if (!equal) ok = false;
+        if (!equal) elsewhere(s, l, byPlace);
         details.push(
           `"${s.said}" (${s.count}) → ${l.label}, ${l.shown} row(s) shown: ${equal ? "equal" : "NOT equal"}`,
         );
@@ -1098,13 +1253,13 @@ export function checkStatedCounts(
           : s.count === l.count
             ? `the tool's total (${l.count})`
             : null;
-      if (as === null) ok = false;
+      if (as === null) elsewhere(s, l, byPlace);
       details.push(
         `"${s.said}" (${s.count}) → ${l.label}, no row shown: ${as !== null ? `equal to ${as}` : `NOT equal to the tool's returned count (${l.returned ?? "none"}) or total (${l.count ?? "none"})`}`,
       );
     }
   }
-  return check(details, ok);
+  return check(details, ok, warnings);
 }
 
 /** Words in the sentence of a stated value that name its source. */

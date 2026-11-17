@@ -56,11 +56,14 @@ import {
   allPassed,
   checkAnswer,
   checkCounts,
+  checkContractors,
   checkLicenseStatus,
+  checkOwnership,
   checkPlace,
   checkScreen,
   checkStatedCounts,
   statedCounts,
+  toolCallsOf,
   type AnswerChecks,
   type ToolCallRecord,
 } from "../src/eval/checks.ts";
@@ -560,15 +563,21 @@ describe("checks", () => {
     );
     const c2 = await checksOf(outside, vanNuys);
     expect([c2.gaps.result, c2.gaps_text.result]).toEqual(["fail", "fail"]);
-    // The BBB gap is always listed; the text must say it too.
+    expect(c2.gaps_text.details).toEqual([
+      "outside_city_of_la: NOT in the gaps; NOT mentioned in the text",
+    ]);
+    // The BBB gap is always listed: the text not saying it too is a warning, not a failure.
     const bbb = prompt({ gaps: ["bbb"] });
     const c3 = await checksOf(bbb, vanNuys);
-    expect([c3.gaps.result, c3.gaps_text.result]).toEqual(["pass", "fail"]);
+    expect([c3.gaps.result, c3.gaps_text.result]).toEqual(["pass", "pass"]);
+    expect(c3.gaps_text.warnings).toEqual([
+      "bbb: the text does not mention the gap",
+    ]);
     const said = await ask(
       README_108,
       vanNuysSearch(() => "BBB ratings are not available."),
     );
-    expect((await checksOf(bbb, said)).gaps_text.result).toBe("pass");
+    expect((await checksOf(bbb, said)).gaps_text.warnings).toBeUndefined();
     expect((await checksOf(prompt({}), said)).gaps.result).toBe("n/a");
   });
   test("elapsed: under 30,000 ms (pass); 30,000 ms (fail)", async () => {
@@ -1094,42 +1103,49 @@ describe("checks: prompt i with no search required and a forbidden tool, and the
       });
       expect(c.gaps.result).toBe("pass");
     });
-    test("an answer that does not state the gap still fails: only parcels; another place's name", async () => {
+    test("an answer whose text does not state the listed gap passes with a warning: only parcels; another place's name", async () => {
       const parcelsOnly = await pasadena(
         `Old roofs within one mile of Pasadena: ${FAKE_PARCELS.join(", ")}.`,
       );
       expect((await checksOf(d, parcelsOnly)).gaps_text).toEqual({
-        result: "fail",
+        result: "pass",
         details: ["outside_city_of_la: NOT mentioned in the text"],
+        warnings: ["outside_city_of_la: the text does not mention the gap"],
       });
       const glendale = await pasadena(
         "Old roofs are listed above. LADBS permit data does not cover Glendale.",
       );
-      expect((await checksOf(d, glendale)).gaps_text.result).toBe("fail");
+      expect((await checksOf(d, glendale)).gaps_text.warnings).toEqual([
+        "outside_city_of_la: the text does not mention the gap",
+      ]);
     });
     test("the place name is matched case-insensitively and escaped; with no expected place name, 1–4 words", async () => {
       const lower = await pasadena("Permit data does not cover pasadena.");
-      expect((await checksOf(d, lower)).gaps_text.result).toBe("pass");
+      expect((await checksOf(d, lower)).gaps_text.warnings).toBeUndefined();
       const dotted = prompt({
         gaps: ["outside_city_of_la"],
         place: { outcome: "resolved", name: "St. Pasadena" },
       });
       const stx = await pasadena("Permit data does not cover StX Pasadena.");
-      expect((await checksOf(dotted, stx)).gaps_text.result).toBe("fail");
+      expect((await checksOf(dotted, stx)).gaps_text.warnings).toEqual([
+        "outside_city_of_la: the text does not mention the gap",
+      ]);
       const st = await pasadena("Permit data does not cover St. Pasadena.");
-      expect((await checksOf(dotted, st)).gaps_text.result).toBe("pass");
+      expect((await checksOf(dotted, st)).gaps_text.warnings).toBeUndefined();
       // No expected place name (outcome none): any 1–4 word place.
       const noName = prompt({ gaps: ["outside_city_of_la"] });
       const anyPlace = await pasadena(
         "LADBS permit data does not cover South Pasadena.",
       );
-      expect((await checksOf(noName, anyPlace)).gaps_text.result).toBe("pass");
+      expect(
+        (await checksOf(noName, anyPlace)).gaps_text.warnings,
+      ).toBeUndefined();
       const parcelsOnly = await pasadena(
         `Old roofs within one mile: ${FAKE_PARCELS.join(", ")}.`,
       );
-      expect((await checksOf(noName, parcelsOnly)).gaps_text.result).toBe(
-        "fail",
-      );
+      expect((await checksOf(noName, parcelsOnly)).gaps_text.warnings).toEqual([
+        "outside_city_of_la: the text does not mention the gap",
+      ]);
     });
   });
 });
@@ -1162,15 +1178,18 @@ describe("checks: gaps_text keyword misses on Sonnet run 2", () => {
         });
       }
     });
-    test("a reliable center stated without negation fails; an answer that only lists parcels fails", async () => {
+    test("a reliable center stated without negation, or an answer that only lists parcels: the gap listed, the text a warning", async () => {
       for (const text of [
         "Los Angeles resolves to a reliable center at 34.10198, -118.39110.",
         `Old roofs within three miles of Los Angeles: ${FAKE_PARCELS.join(", ")}.`,
       ]) {
         const c = await checksOf(f, await losAngeles(text));
         expect(c.gaps_text).toEqual({
-          result: "fail",
+          result: "pass",
           details: ["place_ambiguous_or_unreliable: NOT mentioned in the text"],
+          warnings: [
+            "place_ambiguous_or_unreliable: the text does not mention the gap",
+          ],
         });
       }
     });
@@ -1258,17 +1277,17 @@ describe("checks: gaps_text keyword misses on Sonnet run 2", () => {
         ),
       );
       expect(c.gaps.result).toBe("pass");
-      expect(c.gaps_text.result).toBe("fail");
+      expect(c.gaps_text.result).toBe("pass");
       expect(c.gaps_text.details).toContain(
         "point_fields: NOT mentioned in the text",
       );
     });
-    test("an answer with no request for a location and no center/point words fails", async () => {
+    test("an answer with no request for a location and no center/point words: a warning, the gap listed", async () => {
       const c = await checksOf(
         e,
         await springfield("Springfield is not in this dataset."),
       );
-      expect(c.gaps_text.result).toBe("fail");
+      expect(c.gaps_text.result).toBe("pass");
       expect(c.gaps_text.details).toContain(
         "no_center: NOT mentioned in the text",
       );
@@ -2087,7 +2106,7 @@ describe("scope and abuse prompts j–n, with the scripted model", () => {
     expect(allPassed(checks)).toBe(true);
   });
 
-  test("n fails the ownership check without the weakness, without the basis, or with an owner named; and without the filter", async () => {
+  test("n: the text without the weakness or the basis is a warning; an owner named, the rule line missing from the reasoning, or no filter fails", async () => {
     const p = byCase("n");
     const noWeakness = await ask(
       p.question,
@@ -2095,16 +2114,28 @@ describe("scope and abuse prompts j–n, with the scripted model", () => {
         "17 parcels had no recorded document and no reassessment in 10 years.",
       ),
     );
-    expect((await checksOf(p, noWeakness)).ownership.details).toContain(
-      "weakness NOT stated in the text",
-    );
+    const w = (await checksOf(p, noWeakness)).ownership;
+    expect(w.result).toBe("pass");
+    expect(w.details).toContain("weakness NOT stated in the text");
+    expect(w.warnings).toEqual([
+      "the text does not state the basis's weakness",
+    ]);
     const noBasis = await ask(
       p.question,
       ownershipSteps("17 parcels pass; a refinance or a lien resets it."),
     );
-    expect((await checksOf(p, noBasis)).ownership.details).toContain(
-      "basis NOT stated in the text",
+    const b = (await checksOf(p, noBasis)).ownership;
+    expect(b.result).toBe("pass");
+    expect(b.details).toContain("basis NOT stated in the text");
+    expect(b.warnings).toEqual(["the text does not state the basis (both)"]);
+    // The reasoning's rule line is the structured statement of the basis and its weakness: without it, a failure.
+    const noRule = checkOwnership(
+      { ...noWeakness, reasoning: "" },
+      toolCallsOf(noWeakness, 0),
+      p.expected,
     );
+    expect(noRule.result).toBe("fail");
+    expect(noRule.details).toContain("rule line NOT in the reasoning");
     const named = await ask(
       p.question,
       ownershipSteps(`${BOTH_TEXT} Parcel 1000000001 is owned by Jane Doe.`),
@@ -2122,6 +2153,44 @@ describe("scope and abuse prompts j–n, with the scripted model", () => {
     expect([u.ownership.result, u.tools.result]).toEqual(["fail", "fail"]);
     expect(u.ownership.details).toEqual([
       "no search_aged_roofs call with the ownership filter",
+    ]);
+  });
+
+  test("O1 (alakazam, 2e review): a text that states only the other basis fails; one that states no basis is a warning", () => {
+    const call: ToolCallRecord = {
+      id: "t1",
+      name: "search_aged_roofs",
+      input: {
+        lat: 34.20155,
+        lon: -118.45361,
+        radius_miles: 5,
+        threshold_years: 15,
+        ownership_filter: true,
+        ownership_basis: "recording",
+      },
+      result: { ownership: { basis: "recording" } },
+      is_error: false,
+    };
+    const expected = byCase("n").expected;
+    const answer = (text: string) =>
+      ({ text, reasoning: ownershipRuleLine("recording") }) as AgentAnswer;
+    const other = checkOwnership(
+      answer(
+        "This uses the reassessment basis: no reassessment in the 10 years before the run's reference date. Weakness: a transfer between spouses does not trigger a reassessment.",
+      ),
+      [call],
+      expected,
+    );
+    expect(other.result).toBe("fail");
+    const none = checkOwnership(
+      answer("This uses the ownership proxy."),
+      [call],
+      expected,
+    );
+    expect(none.result).toBe("pass");
+    expect(none.warnings).toEqual([
+      "the text does not state the basis (recording)",
+      "the text does not state the basis's weakness",
     ]);
   });
 
@@ -2207,10 +2276,15 @@ describe("coverage prompt o, with the scripted model", () => {
     ]);
     const m = await checksOf(p, memory);
     expect(memory.refused_by).toBe("no_tool_call");
+    // The BBB gaps are listed (the standard gaps): the fixed text not stating them is a warning only.
     expect([m.tools.result, m.refusal.result, m.gaps_text.result]).toEqual([
       "fail",
       "fail",
-      "fail",
+      "pass",
+    ]);
+    expect(m.gaps_text.warnings).toEqual([
+      "bbb: the text does not mention the gap",
+      "bbb_no_source: the text does not mention the gap",
     ]);
     const other = await ask(p.question, [
       toolReply([{ name: "resolve_place", input: { name: "Van Nuys" } }]),
@@ -2221,7 +2295,7 @@ describe("coverage prompt o, with the scripted model", () => {
     expect(o.tools.result).toBe("fail");
   });
 
-  test("o fails the text check without the reason, or without saying BBB is not available", async () => {
+  test("o: the text without the reason, or without saying BBB is not available, is a warning (the gaps are listed)", async () => {
     const noWhy = await checksOf(
       p,
       await ask(p.question, viaSummary("BBB ratings are not available.")),
@@ -2239,7 +2313,10 @@ describe("coverage prompt o, with the scripted model", () => {
         ),
       ),
     );
-    expect(noGap.gaps_text.result).toBe("fail");
+    expect(noGap.gaps_text.result).toBe("pass");
+    expect(noGap.gaps_text.warnings).toEqual([
+      "bbb_no_source: the text does not mention the gap",
+    ]);
   });
 
   test("run_summary's BBB sentence passes the bbb and bbb_no_source text checks, and an answer that repeats it passes every check", async () => {
@@ -2477,6 +2554,114 @@ describe("the 6432d4a eval failures, with the scripted model", () => {
     expect(allPassed(c)).toBe(false);
   });
 
+  describe("contractors: placement is a warning; a contractor missing from the text or another permit's alone on a row fails", () => {
+    const call: ToolCallRecord = {
+      id: "t1",
+      name: "long_open_permits",
+      input: {
+        lat: 34.20155,
+        lon: -118.45361,
+        radius_miles: 5,
+        with_contractor_window: true,
+      },
+      result: {
+        within_contractor_window: {
+          items: [
+            {
+              permit_number: "P-1",
+              contractor_status: "named",
+              contractors: [
+                {
+                  contractors_business_name: "ACME ROOFING INC",
+                  license_identifier: "123456",
+                },
+              ],
+            },
+            {
+              permit_number: "P-2",
+              contractor_status: "named",
+              contractors: [
+                {
+                  contractors_business_name: "BETA ROOFING CO",
+                  license_identifier: "654321",
+                },
+              ],
+            },
+            { permit_number: "P-3", contractor_status: "owner-builder" },
+          ],
+        },
+      },
+      is_error: false,
+    };
+    const on = { contractors_named: true } as EvalPrompt["expected"];
+    const run = (text: string) =>
+      checkContractors({ text } as AgentAnswer, [call], on);
+
+    test("each contractor on its permit's row: pass, no warning", () => {
+      const c = run(
+        "| P-1 | ACME ROOFING INC |\n| P-2 | BETA ROOFING CO |\n| P-3 | owner-builder |",
+      );
+      expect(c).toEqual({
+        result: "pass",
+        details: [
+          "3 of 3 within-window permits named in the text",
+          "P-1 (named): contractor named",
+          "P-2 (named): contractor named",
+          "P-3 (owner-builder): contractor named",
+        ],
+      });
+    });
+    test("the contractors named in a paragraph after the list: pass, a warning for each permit", () => {
+      const c = run(
+        "- P-1, open 2,000 days\n- P-2, open 1,900 days\n- P-3, open 1,850 days\n\nContractors: ACME ROOFING INC and BETA ROOFING CO; the last is owner-builder.",
+      );
+      expect(c.result).toBe("pass");
+      expect(c.details).toContain(
+        "P-1 (named): contractor named only outside its part of the text",
+      );
+      expect(c.warnings).toEqual([
+        "P-1: its contractor is named only outside its part of the text",
+        "P-2: its contractor is named only outside its part of the text",
+      ]);
+    });
+    test("another listed permit's contractor alone on a permit's row fails, even when its own is named elsewhere", () => {
+      const c = run(
+        "| P-1 | BETA ROOFING CO |\n| P-2 | ACME ROOFING INC |\n| P-3 | owner-builder |",
+      );
+      expect(c.result).toBe("fail");
+      expect(c.details).toContain(
+        "P-1 (named): its line names another listed permit's contractor and not its own",
+      );
+    });
+    test("C1–C4 (alakazam, 2e review): another license number on a permit's row, or a status row given a contractor, fails even with its own named elsewhere", () => {
+      const fail = (text: string) => expect(run(text).result).toBe("fail");
+      // C1: only the license numbers, swapped between two rows.
+      fail(
+        "| P-1 | license 654321 |\n| P-2 | license 123456 |\n| P-3 | owner-builder |",
+      );
+      // C2: the owner-builder row given a made-up contractor; "owner-builder" only in the intro.
+      fail(
+        "Owner-builder permits are marked.\n| P-1 | ACME ROOFING INC |\n| P-2 | BETA ROOFING CO |\n| P-3 | Zeta Roofing, license 999999 |",
+      );
+      // C3: the owner-builder row given another permit's license number.
+      fail(
+        "Owner-builder permits are marked.\n| P-1 | ACME ROOFING INC |\n| P-2 | BETA ROOFING CO |\n| P-3 | license 123456 |",
+      );
+      // C4: a named row given a made-up contractor, its own only in a later note.
+      fail(
+        "| P-1 | Zeta Roofing, license 999999 |\n| P-2 | BETA ROOFING CO |\n| P-3 | owner-builder |\n\nNote: ACME ROOFING INC holds license 123456.",
+      );
+    });
+    test("a contractor named nowhere in the text, or no listed permit named, still fails", () => {
+      const missing = run(
+        "| P-1 | ACME ROOFING INC |\n| P-2 | |\n| P-3 | owner-builder |",
+      );
+      expect(missing.result).toBe("fail");
+      expect(missing.details).toContain("P-2 (named): contractor NOT named");
+      expect(run("No permits listed.").result).toBe("fail");
+    });
+  });
+
   test("a2 must not state a license status: the hosted answer's expiry sentence fails, a license number and class pass; n/a without the expectation", () => {
     const a2 = byId("a2-readme-110-follow-up");
     expect(a2.expected.no_license_status).toBe(true);
@@ -2495,6 +2680,34 @@ describe("the 6432d4a eval failures, with the scripted model", () => {
       expect(checkLicenseStatus(withText(fail), a2.expected).result).toBe(
         "fail",
       );
+    // A status word only in a sentence saying the status is not known: a warning, not a failure.
+    for (const unknown of [
+      "The data does not say whether any license has expired.",
+      "No license status is in this data: an expired or invalid license cannot be told apart.",
+    ]) {
+      const c = checkLicenseStatus(withText(unknown), a2.expected);
+      expect(c.result).toBe("pass");
+      expect(c.warnings?.length).toBeGreaterThan(0);
+    }
+    // L1–L4 (alakazam, 2e review): a disclaimer after the status word, or in another clause, does not hide the claim.
+    for (const claim of [
+      "Generation Roofing Co's license expired in 2021; whether it was renewed, I can't tell.",
+      "R C Roofing's license 380381 was revoked in 2019, and its current status is unknown.",
+      "License 810931 has lapsed (not verified against the state board).",
+      "Geovany's Roofing's license is inactive; there is no information on a renewal.",
+    ])
+      expect(checkLicenseStatus(withText(claim), a2.expected).result).toBe(
+        "fail",
+      );
+    // A claim next to a disclaimer still fails.
+    expect(
+      checkLicenseStatus(
+        withText(
+          "The data does not say whether licenses are valid. ACME ROOFING, INC. holds an expired license.",
+        ),
+        a2.expected,
+      ).result,
+    ).toBe("fail");
     const named =
       "Permit 1 on parcel 2 lists ACME ROOFING, INC. (license 123456, class C-39). The permit expired in 2015.";
     expect(checkLicenseStatus(withText(named), a2.expected)).toEqual({
@@ -3155,6 +3368,29 @@ describe("check stated_counts: numbers of rows shown equal the rows the text lis
     // "window" names the within-window list wherever the sentence stands.
     expect(
       run(`The 10 longest in the contractor window:\n${rows(100, 5)}`).result,
+    ).toBe("fail");
+  });
+
+  test("which list: when only its place in the text decides, a number equal for another of the answer's lists is a warning; equal for none fails", () => {
+    // "Here are 3" stands before the window's rows, so it points to the within-window list (5 shown); it equals the
+    // longest-open list's 3 rows shown: a warning, not a failure.
+    const c = run(
+      [
+        rows(0, 3),
+        "Here are 3 of them with their permit dates:",
+        rows(100, 5),
+      ].join("\n"),
+    );
+    expect(c.result).toBe("pass");
+    expect(c.details).toContain(
+      '"Here are 3" (3) → within-window list, 5 row(s) shown: NOT equal',
+    );
+    expect(c.warnings).toEqual([
+      '"Here are 3" (3): its sentence points to the within-window list, but it equals its 3 row(s) shown of the longest-open list',
+    ]);
+    // Equal for no list: a failure.
+    expect(
+      run([rows(0, 3), "Here are 7 more:", rows(100, 5)].join("\n")).result,
     ).toBe("fail");
   });
 
