@@ -291,21 +291,53 @@ test.describe("with credentials", () => {
         `Run kind: ${summary.run.run_kind}`,
       );
     else await expect(page.getByTestId("run-kind")).toHaveCount(0);
-    // Every history row's kind cell: the API's run_kind, empty where the row has none.
+    // Every history row's kind cell: the API's run_kind, empty where the row has none; its Permits and
+    // Permit-to-parcel links cells: the row's permit Parquet row counts (en-US), empty where the row has none.
     const historyRows = page.getByTestId("run-history").locator("tbody tr");
     await expect(historyRows).toHaveCount(summary.history.length);
+    const headers = await page
+      .getByTestId("run-history")
+      .locator("thead th")
+      .allTextContents();
+    const permitsCol = headers.indexOf("Permits");
+    const linksCol = headers.indexOf("Permit-to-parcel links");
+    expect(permitsCol).toBeGreaterThan(-1);
+    expect(linksCol).toBeGreaterThan(-1);
+    expect(headers.at(-1)).toBe("Published");
     expect(
-      await historyRows.evaluateAll((trs) =>
-        trs.map((tr) => [
-          tr.querySelectorAll("td")[0]!.textContent,
-          tr.querySelectorAll("td")[1]!.textContent,
-        ]),
+      await historyRows.evaluateAll(
+        (trs, [p, l]) =>
+          trs.map((tr) => {
+            const td = tr.querySelectorAll("td");
+            return [
+              td[0]!.textContent,
+              td[1]!.textContent,
+              td[p!]!.textContent,
+              td[l!]!.textContent,
+            ];
+          }),
+        [permitsCol, linksCol],
       ),
     ).toEqual(
-      summary.history.map((h: { run_id: string; run_kind?: string | null }) => [
-        h.run_id,
-        h.run_kind ?? "",
-      ]),
+      (
+        summary.history as Array<{
+          run_id: string;
+          run_kind?: string | null;
+          row_counts?: {
+            permits?: {
+              parquet?: { permits?: number; permit_parcels?: number };
+            };
+          };
+        }>
+      ).map((h) => {
+        const c = h.row_counts?.permits?.parquet;
+        return [
+          h.run_id,
+          h.run_kind ?? "",
+          typeof c?.permits === "number" ? fmt(c.permits) : "",
+          typeof c?.permit_parcels === "number" ? fmt(c.permit_parcels) : "",
+        ];
+      }),
     );
     // The delta vs the previous run: parcels added/removed, and the permit and permit-to-parcel link counts' net
     // change from the previous run's history row (delta.previous_run_id), where both runs recorded them.

@@ -4,6 +4,8 @@ import { useQuery } from "./useQuery.ts";
 
 const fmt = (n: unknown) =>
   typeof n === "number" ? n.toLocaleString("en-US") : String(n ?? "—");
+/** A count as en-US, or an empty cell where the row recorded none (never a dash, never a guess). */
+const countCell = (n: unknown) => (typeof n === "number" ? fmt(n) : "");
 
 /**
  * A run's relation to the previous run as recorded: "rebuild of <run ID>, no source changes", "new data", or
@@ -228,6 +230,8 @@ export function RunSummary({
             <th>Parquet rows</th>
             <th>Added</th>
             <th>Removed</th>
+            <th>Permits</th>
+            <th>Permit-to-parcel links</th>
             <th>Parquet sha256</th>
             <th>Published</th>
           </tr>
@@ -241,6 +245,12 @@ export function RunSummary({
               <td>{fmt(h.row_counts?.parquet)}</td>
               <td>{fmt(h.delta?.added)}</td>
               <td>{fmt(h.delta?.removed)}</td>
+              <td data-testid="history-permits">
+                {countCell(h.row_counts?.permits?.parquet?.permits)}
+              </td>
+              <td data-testid="history-permit-parcels">
+                {countCell(h.row_counts?.permits?.parquet?.permit_parcels)}
+              </td>
               <td className="mono">{h.parquet_sha256}</td>
               <td>{String(h.published)}</td>
             </tr>

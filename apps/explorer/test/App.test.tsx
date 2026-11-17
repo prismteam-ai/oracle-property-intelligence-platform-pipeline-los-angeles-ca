@@ -1403,6 +1403,48 @@ describe("Explorer sources, records and long-open permits", () => {
       cleanup();
     }
   });
+
+  test("the run history shows each row's permits and permit-to-parcel links (en-US, empty where the row has none); Published unchanged", async () => {
+    const base = permitRun({
+      parquet: 4,
+      permits: { parquet: { permits: 296909, permit_parcels: 607702 } },
+    });
+    // Published as recorded: false on the first run, missing on the second, true on the third.
+    const published = [false, undefined, true];
+    h.runSummary.mockReset().mockResolvedValue({
+      ...base,
+      history: base.history.map((row, i) =>
+        published[i] === undefined ? row : { ...row, published: published[i] },
+      ),
+    });
+    render(<App />);
+    await screen.findByTestId("run-history");
+    const table = screen.getByTestId("run-history");
+    expect(
+      [...table.querySelectorAll("thead th")].map((th) => th.textContent),
+    ).toEqual([
+      "Run",
+      "Kind",
+      "Finished",
+      "Parquet rows",
+      "Added",
+      "Removed",
+      "Permits",
+      "Permit-to-parcel links",
+      "Parquet sha256",
+      "Published",
+    ]);
+    expect(tbodyText("run-history").map((r) => [r[0], r[6], r[7]])).toEqual([
+      ["r0", "", ""],
+      ["r1", "296,909", "607,702"],
+      ["r2", "297,169", "608,168"],
+    ]);
+    expect(tbodyText("run-history").map((r) => r[9])).toEqual([
+      "false",
+      "undefined",
+      "true",
+    ]);
+  });
 });
 
 describe("Explorer ownership filter, run kind and contractor window", () => {
