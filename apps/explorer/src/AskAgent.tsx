@@ -43,7 +43,7 @@ export function centerFrom(
 /**
  * The "Ask the agent" tab. Kept mounted while other tabs show, so the
  * conversation (history, session, signature) lives in component state only, never in storage; "New
- * conversation" drops it. Send is disabled from the click until the answer, a stop or an error (a question asked
+ * conversation" drops it and clears the center fields. Send is disabled from the click until the answer, a stop or an error (a question asked
  * during the warm-up is held with a "waking up" status, Send disabled the same way), and enabled whenever no
  * question is pending; "New conversation" is disabled while a question is pending.
  */
@@ -54,8 +54,8 @@ export function AskAgent({
 }: {
   agent: AgentApi;
   /**
-   * One data API request (explorer.sources, about 0.8 s, so the warm-up's two overlap and reach two instances),
-   * not batched.
+   * One data API request (explorer.sources, about 0.8 s), not batched. The warm-up's two overlap only when the data
+   * API is cold; one data API instance is kept warm.
    */
   warmData: () => Promise<unknown>;
   /** True while the tab shows: opening it starts the warm-up. */
@@ -92,7 +92,7 @@ export function AskAgent({
     setPending(true);
     setMessage(undefined);
     try {
-      // Re-warm: the data API instances may be cold again.
+      // Re-warm: the data API instance may be cold again.
       if (!warmup.running() && warmup.stale()) void warmup.start();
       if (warmup.running()) {
         setStatus("waking");
@@ -140,6 +140,8 @@ export function AskAgent({
     if (pendingNow.current) return;
     conversation.current = undefined;
     setTurns([]);
+    setLat("");
+    setLon("");
     setMessage(undefined);
   };
 

@@ -54,7 +54,7 @@ interface RunView extends Partial<RunRelation> {
   };
   /** Permit runs: the date open durations count to. */
   derived_field_reference_date?: string;
-  delta?: { added?: number; removed?: number };
+  delta?: { previous_run_id?: string | null; added?: number; removed?: number };
   scope?: { where?: string; permits_harvested?: boolean };
   /** County runs record the validator's `overall` result; the pilot run recorded `preflight`. */
   readiness?: { overall?: string; preflight?: string; scope_guard?: string };
@@ -64,10 +64,43 @@ interface RunView extends Partial<RunRelation> {
 interface HistoryView extends Partial<RunRelation> {
   run_id: string;
   finished_at?: string;
-  row_counts?: { parquet?: number };
+  row_counts?: {
+    parquet?: number;
+    permits?: { parquet?: { permits?: number; permit_parcels?: number } };
+  };
   delta?: { added?: number; removed?: number };
   parquet_sha256?: string;
   published?: boolean;
+}
+
+/** "net +260 (296,909 → 297,169)": a count's change from the previous run to this one. */
+function netText(previous: number, current: number): string {
+  const d = current - previous;
+  const sign = d > 0 ? "+" : d < 0 ? "−" : "";
+  return `net ${sign}${fmt(Math.abs(d))} (${fmt(previous)} → ${fmt(current)})`;
+}
+
+/**
+ * The permit and permit-to-parcel link counts' change from the previous run (the run's delta.previous_run_id, found
+ * in the history): only where both runs recorded the count, never a guess. Parcels are compared by identifier at
+ * build (added/removed); these are the permit Parquet files' row counts, so the change is net.
+ */
+export function permitDeltas(
+  run: RunView,
+  history: HistoryView[],
+): { permits?: string; permit_parcels?: string } {
+  const prevId = run.delta?.previous_run_id;
+  const prev = prevId
+    ? history.find((h) => h.run_id === prevId)?.row_counts?.permits?.parquet
+    : undefined;
+  const cur = run.row_counts?.permits?.parquet;
+  const out: { permits?: string; permit_parcels?: string } = {};
+  for (const k of ["permits", "permit_parcels"] as const) {
+    const a = prev?.[k];
+    const b = cur?.[k];
+    if (typeof a === "number" && typeof b === "number") out[k] = netText(a, b);
+  }
+  return out;
 }
 
 export function RunSummary({
@@ -84,6 +117,8 @@ export function RunSummary({
   if (error) return <p className="error">{error}</p>;
   if (!data) return <p>Loading run summary…</p>;
   const r = data.run as RunView;
+  const history = data.history as unknown as HistoryView[];
+  const permitDelta = permitDeltas(r, history);
   return (
     <section data-testid="run-summary">
       <h2>Run {r.run_id}</h2>
@@ -121,9 +156,19 @@ export function RunSummary({
         </div>
         <div className="card">
           <span>Delta vs previous run</span>
-          <b>
-            +{fmt(r.delta?.added)} / −{fmt(r.delta?.removed)}
+          <b data-testid="delta-parcels">
+            +{fmt(r.delta?.added)} / −{fmt(r.delta?.removed)} parcels
           </b>
+          {permitDelta.permits && (
+            <small data-testid="delta-permits">
+              permits: {permitDelta.permits}
+            </small>
+          )}
+          {permitDelta.permit_parcels && (
+            <small data-testid="delta-permit-parcels">
+              permit-to-parcel links: {permitDelta.permit_parcels}
+            </small>
+          )}
         </div>
       </div>
       {r.row_counts?.permits && (
@@ -188,7 +233,7 @@ export function RunSummary({
           </tr>
         </thead>
         <tbody>
-          {(data.history as unknown as HistoryView[]).map((h) => (
+          {history.map((h) => (
             <tr key={h.run_id}>
               <td>{h.run_id}</td>
               <td data-testid="history-kind">{h.run_kind ?? ""}</td>

@@ -307,6 +307,34 @@ test.describe("with credentials", () => {
         h.run_kind ?? "",
       ]),
     );
+    // The delta vs the previous run: parcels added/removed, and the permit and permit-to-parcel link counts' net
+    // change from the previous run's history row (delta.previous_run_id), where both runs recorded them.
+    await expect(page.getByTestId("delta-parcels")).toHaveText(
+      `+${fmt(summary.run.delta.added)} / −${fmt(summary.run.delta.removed)} parcels`,
+    );
+    type PermitCounts = { permits?: number; permit_parcels?: number };
+    const prevCounts = (
+      summary.history as Array<{
+        run_id: string;
+        row_counts?: { permits?: { parquet?: PermitCounts } };
+      }>
+    ).find((h) => h.run_id === summary.run.delta.previous_run_id)?.row_counts
+      ?.permits?.parquet;
+    const curCounts = summary.run.row_counts.permits?.parquet as
+      PermitCounts | undefined;
+    for (const [key, testId, label] of [
+      ["permits", "delta-permits", "permits"],
+      ["permit_parcels", "delta-permit-parcels", "permit-to-parcel links"],
+    ] as const) {
+      const a = prevCounts?.[key];
+      const b = curCounts?.[key];
+      if (typeof a === "number" && typeof b === "number") {
+        const d = b - a;
+        await expect(page.getByTestId(testId)).toHaveText(
+          `${label}: net ${d > 0 ? "+" : d < 0 ? "−" : ""}${fmt(Math.abs(d))} (${fmt(a)} → ${fmt(b)})`,
+        );
+      } else await expect(page.getByTestId(testId)).toHaveCount(0);
+    }
     // The Contractor rows card states the contractor source's window from explorer.sources.
     const contractorWindow = byKind.get("contractor")!.coverage;
     if (summary.run.row_counts.permits && contractorWindow)
@@ -1109,7 +1137,7 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
     );
   });
 
-  test("13. a follow-up sends the history, session and signature; New conversation clears them", async ({
+  test("13. a follow-up sends the history, session and signature; New conversation clears them and the center fields", async ({
     page,
   }) => {
     const bodies = await mockAnswers(page, [ANSWERED, FOLLOW_UP, ANSWERED]);
@@ -1129,8 +1157,15 @@ test.describe("Ask the agent (answers mocked) and MCP", () => {
     expect(
       await page.evaluate(() => [localStorage.length, sessionStorage.length]),
     ).toEqual([0, 0]);
+    // New conversation also clears the center fields (filled here, never sent).
+    const lat = page.getByRole("textbox", { name: "Latitude" });
+    const lon = page.getByRole("textbox", { name: "Longitude" });
+    await lat.fill("34.2");
+    await lon.fill("-118.45");
     await page.getByTestId("agent-new").click();
     await expect(page.getByTestId("agent-turn")).toHaveCount(0);
+    await expect(lat).toHaveValue("");
+    await expect(lon).toHaveValue("");
     await ask(page, QUESTION_1);
     await expect(page.getByTestId("agent-turn")).toHaveCount(1);
     expect(bodies[2]).toEqual({ question: QUESTION_1 });

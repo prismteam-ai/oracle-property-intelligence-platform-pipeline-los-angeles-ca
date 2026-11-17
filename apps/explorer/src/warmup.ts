@@ -1,7 +1,8 @@
 /**
  * The panel's warm-up:
- * GET /agent/warm and DATA_WARM_REQUESTS (2) data API requests, all sent at once, so the agent's function and two
- * data API instances are initialized before the first question. A question asked while a warm-up runs is held
+ * GET /agent/warm and DATA_WARM_REQUESTS (2) data API requests, all sent at once, so the agent's function and a
+ * data API instance are initialized before the first question. One data API instance is kept warm: the two data
+ * requests overlap only when the data API is cold (the second then starts a second instance). A question asked while a warm-up runs is held
  * until every warm-up request has answered (any response, or a network failure) or HOLD_MAX_MS after it was
  * asked, whichever comes first. When the panel's last data API response is older than REWARM_AFTER_MS (or there
  * was none), the warm-up runs again before the question and the question is held the same way.
@@ -9,17 +10,17 @@
 
 /** Longest a question is held for the warm-up (ms). */
 export const HOLD_MAX_MS = 20_000;
-/** A data API response older than this (ms) means its instances may be cold again: warm up before sending. */
+/** A data API response older than this (ms) means its instance may be cold again: warm up before sending. */
 export const REWARM_AFTER_MS = 4 * 60_000;
-/** Data API requests per warm-up, sent together (one per instance to warm). */
+/** Data API requests per warm-up, sent together. */
 export const DATA_WARM_REQUESTS = 2;
 
 export interface WarmupDeps {
   /** GET /agent/warm. */
   warmAgent: () => Promise<unknown>;
   /**
-   * One data API request, never batched with the other: explorer.sources, which takes about 0.8 s, so the two
-   * requests overlap on the data API and each warms an instance of its own.
+   * One data API request, never batched with the other: explorer.sources, which takes about 0.8 s. The two requests
+   * overlap only when the data API is cold; one data API instance is kept warm.
    */
   warmData: () => Promise<unknown>;
   now?: () => number;

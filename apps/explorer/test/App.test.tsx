@@ -1326,6 +1326,83 @@ describe("Explorer sources, records and long-open permits", () => {
     expect(cards.textContent).toContain("805,901");
     expect(cards.textContent).toContain("2026-11-12");
   });
+
+  /** A permit run's summary whose history holds the previous run under delta.previous_run_id. */
+  const permitRun = (
+    previous: Record<string, unknown> | undefined,
+    current = { permits: 297169, permit_parcels: 608168 },
+  ) => ({
+    run: {
+      run_id: "r2",
+      row_counts: {
+        parquet: 4,
+        permits: { parquet: { ...current, permit_contractors: 113642 } },
+      },
+      coverage: {},
+      delta: { previous_run_id: "r1", added: 0, removed: 0 },
+      scope: {},
+      readiness: {},
+      limitations: [],
+    },
+    history: [
+      { run_id: "r0", row_counts: { parquet: 4 } },
+      ...(previous ? [{ run_id: "r1", row_counts: previous }] : []),
+      {
+        run_id: "r2",
+        row_counts: { parquet: 4, permits: { parquet: current } },
+        delta: { previous_run_id: "r1", added: 0, removed: 0 },
+      },
+    ],
+  });
+
+  test("the delta vs the previous run shows parcels, permits and permit-to-parcel links, from the previous run's history row", async () => {
+    h.runSummary.mockReset().mockResolvedValue(
+      permitRun({
+        parquet: 4,
+        permits: { parquet: { permits: 296909, permit_parcels: 607702 } },
+      }),
+    );
+    render(<App />);
+    expect((await screen.findByTestId("delta-parcels")).textContent).toBe(
+      "+0 / −0 parcels",
+    );
+    expect(screen.getByTestId("delta-permits").textContent).toBe(
+      "permits: net +260 (296,909 → 297,169)",
+    );
+    expect(screen.getByTestId("delta-permit-parcels").textContent).toBe(
+      "permit-to-parcel links: net +466 (607,702 → 608,168)",
+    );
+  });
+
+  test("a net decrease reads −; a previous run without permit counts (or not in the history) gives no permit delta", async () => {
+    h.runSummary.mockReset().mockResolvedValue(
+      permitRun(
+        {
+          parquet: 4,
+          permits: { parquet: { permits: 10, permit_parcels: 20 } },
+        },
+        { permits: 7, permit_parcels: 20 },
+      ),
+    );
+    render(<App />);
+    expect((await screen.findByTestId("delta-permits")).textContent).toBe(
+      "permits: net −3 (10 → 7)",
+    );
+    expect(screen.getByTestId("delta-permit-parcels").textContent).toBe(
+      "permit-to-parcel links: net 0 (20 → 20)",
+    );
+    cleanup();
+    for (const previous of [{ parquet: 4 }, undefined]) {
+      h.runSummary.mockReset().mockResolvedValue(permitRun(previous));
+      render(<App />);
+      expect((await screen.findByTestId("delta-parcels")).textContent).toBe(
+        "+0 / −0 parcels",
+      );
+      expect(screen.queryByTestId("delta-permits")).toBeNull();
+      expect(screen.queryByTestId("delta-permit-parcels")).toBeNull();
+      cleanup();
+    }
+  });
 });
 
 describe("Explorer ownership filter, run kind and contractor window", () => {

@@ -84,6 +84,9 @@ td.mono,
   display: block;
   font-size: 20px;
 }
+.card small {
+  display: block;
+}
 .note {
   background: #fff7e6;
   border: 1px solid #ffd78a;

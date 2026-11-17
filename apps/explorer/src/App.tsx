@@ -67,7 +67,7 @@ export function App() {
       .then((c) => {
         const api = createApiClient(c);
         // The warm-up's data requests are sent one HTTP request each (never batched into one), to explorer.sources:
-        // about 0.8 s each, so the two overlap and reach two data API instances.
+        // about 0.8 s each. They overlap only when the data API is cold; one data API instance is kept warm.
         const unbatched = createApiClient({ ...c, batch: false });
         setConn({
           api,

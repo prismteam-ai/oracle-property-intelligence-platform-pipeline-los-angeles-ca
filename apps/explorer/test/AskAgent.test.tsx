@@ -609,6 +609,25 @@ describe("Ask the agent: conversation", () => {
     expect(agent.answerRequests()[1]!.body).toEqual({ question: QUESTION_2 });
   });
 
+  test("New conversation also clears the center fields: the next question goes without a center", async () => {
+    agent.answerWith(ANSWERED);
+    agent.answerWith(FOLLOW_UP);
+    await openWarm();
+    const lat = screen.getByRole("textbox", { name: "Latitude" });
+    const lon = screen.getByRole("textbox", { name: "Longitude" });
+    fireEvent.change(lat, { target: { value: "34.2" } });
+    fireEvent.change(lon, { target: { value: "-118.45" } });
+    await ask(QUESTION_1);
+    expect(agent.answerRequests()[0]!.body).toMatchObject({
+      center: { lat: 34.2, lon: -118.45 },
+    });
+    fireEvent.click(screen.getByTestId("agent-new"));
+    expect((lat as HTMLInputElement).value).toBe("");
+    expect((lon as HTMLInputElement).value).toBe("");
+    await ask(QUESTION_2);
+    expect(agent.answerRequests()[1]!.body).toEqual({ question: QUESTION_2 });
+  });
+
   test("New conversation is disabled while a question is pending: the answer arrives and is kept", async () => {
     const a = deferred<{ status: number; body: unknown }>();
     agent.answers.push(a.promise);
