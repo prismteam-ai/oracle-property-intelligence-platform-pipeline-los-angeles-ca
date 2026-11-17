@@ -1619,7 +1619,7 @@ const run = {
             : [],
         },
         history: s.history.map((h) => ({
-          ...project(h, fields("run_id", "finished_at", "published")),
+          ...project(h, fields("run_id", "finished_at")),
           row_counts: numbers(h.row_counts),
         })),
         // Each source once, with what records no longer repeat (its URLs); no page-level rows.

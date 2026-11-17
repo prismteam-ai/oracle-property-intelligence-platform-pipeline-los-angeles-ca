@@ -831,6 +831,48 @@ describe("runTool", () => {
       ],
     });
   });
+  test("run_summary: the history rows keep run_id, finished_at and row_counts only, never the data API's published flag (recorded at build, stale once a run is published)", async () => {
+    const { queries } = fakeQueries();
+    const withPublished: DataQueries = {
+      ...queries,
+      explorer: {
+        ...queries.explorer,
+        async runSummary() {
+          const s = await queries.explorer.runSummary();
+          return {
+            ...s,
+            history: [
+              { ...s.history[0]!, published: true },
+              {
+                ...s.history[0]!,
+                run_id: "run-0",
+                finished_at: "2026-11-11T02:00:00Z",
+                published: false,
+              },
+            ],
+          } as typeof s;
+        },
+      },
+    };
+    const o = await runTool("run_summary", {}, withPublished);
+    expect(o.ok).toBe(true);
+    const history = (o.content as { history: Array<Record<string, unknown>> })
+      .history;
+    expect(history).toEqual([
+      {
+        run_id: "run-1",
+        finished_at: "2026-11-12T02:00:00Z",
+        row_counts: { parquet: 3 },
+      },
+      {
+        run_id: "run-0",
+        finished_at: "2026-11-11T02:00:00Z",
+        row_counts: { parquet: 3 },
+      },
+    ]);
+    for (const h of history) expect(h).not.toHaveProperty("published");
+    expect(JSON.stringify(o.content)).not.toContain("published");
+  });
   test("run_summary: BBB ratings are not available, and why, in one sentence", async () => {
     const { queries } = fakeQueries();
     const o = await runTool("run_summary", {}, queries);
