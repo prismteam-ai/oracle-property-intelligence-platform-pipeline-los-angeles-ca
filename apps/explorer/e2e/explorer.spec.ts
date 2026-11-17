@@ -558,6 +558,28 @@ test.describe("with credentials", () => {
           : next.items[0].record_key,
       );
     }
+    // Search: the roll's second parcel number, typed in the box, starts the page at it (explorer.records with
+    // the parcel number just below it as `after`), and the page says it was found.
+    const roll = byKind.get("parcel")!;
+    await page.getByTestId("records-source").selectOption(roll.source_name);
+    const rollFirst = await apiGet("explorer.records", {
+      source_name: roll.source_name,
+      limit: 50,
+    });
+    const target: string = rollFirst.items[1].record_key;
+    await page
+      .getByRole("textbox", { name: "Go to parcel number" })
+      .fill(target);
+    await page.getByRole("button", { name: "Go" }).click();
+    await expect(page.getByTestId("records-search-result")).toHaveText(
+      `Parcel number ${target} found, from the first row below.`,
+    );
+    await expect(
+      page.getByTestId("records").locator("tbody tr td").first(),
+    ).toHaveText(target);
+    await expect(page.getByTestId("records-total")).toHaveText(
+      `${fmt(rollFirst.total)} records · page 1 from ${target}`,
+    );
   });
 
   test("7. radius form: count equals the API at 15 and 80 years, rule stated, every result inside the radius", async ({
