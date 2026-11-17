@@ -469,6 +469,12 @@ export function valueSourceContext(
   };
 }
 
+/** A resolve_place call that found no place (its gaps: the note for the name, then how to ask with a point). */
+const isUnknownPlace = (o: ToolOutcome): boolean =>
+  o.name === "resolve_place" &&
+  o.fact?.tool === "resolve_place" &&
+  o.fact.resolution.status === "unknown";
+
 /** The centers of the places resolve_place resolved in these outcomes, in order. */
 const resolvedCenters = (
   outcomes: readonly ToolOutcome[],
@@ -1000,6 +1006,8 @@ export async function runAgent(
   const ex = explain(req, prevArea, outcomes);
   const dropped = outcomes.reduce((n, o) => n + o.dropped, 0);
   const gaps = uniq([
+    // An unknown place first: resolve_place's note for the name, then how to ask with a point.
+    ...outcomes.filter(isUnknownPlace).flatMap((o) => o.gaps),
     ...answerStandardGaps(windowRead),
     ...outcomes.flatMap((o) => o.gaps),
     ...ex.gaps,

@@ -24,7 +24,9 @@
  *   the text stating each value with its source is a warning, not a failure;
  * - value_sources: every search_aged_roofs / long_open_permits result states the expected source of its radius (and
  *   roof age threshold) in value_sources, and the answer's assumptions carry that result's sentence; a sentence of the
- *   text calling the value "the default" when its source is not, or the text not naming the source, is a warning.
+ *   text calling the value "the default" when its source is not, or the text not naming the source, is a warning;
+ * - place_unknown: for an unknown place, the answer's gaps start with resolve_place's unknown note for the name, then
+ *   how to ask with a point; the text's first sentence not saying the place was not found is a warning.
  *
  * A check fails only on what the tool calls, the tool results or the answer's structured fields (assumptions, gaps,
  * records, status ...) verify. What only tests how the text words or places something is a warning: listed in the
@@ -38,6 +40,7 @@ import {
   NOT_RUN_PREFIX,
   NO_TOOL_CALL_TEXT,
   OWNERSHIP_BASES,
+  PLACE_UNKNOWN_HOW_TO_ASK,
   WITHIN_WINDOW_LIMIT,
   idsInText,
   valueSourceAssumption,
@@ -80,6 +83,7 @@ export const CHECK_NAMES = [
   "stated_counts",
   "screen",
   "value_sources",
+  "place_unknown",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 
@@ -1706,6 +1710,52 @@ export function checkPlace(
   }
 }
 
+/**
+ * (xi) With place outcome unknown: a resolve_place result for the name (by placeKey) with status unknown, and the
+ * answer's gaps[0] is that result's note and gaps[1] PLACE_UNKNOWN_HOW_TO_ASK; fails otherwise. Warning only: the
+ * text's first sentence does not say the place was not found (GAPS.place_unknown's words). n/a for any other outcome.
+ */
+export function checkPlaceUnknown(
+  answer: AgentAnswer,
+  calls: readonly ToolCallRecord[],
+  expected: EvalPrompt["expected"]["place"],
+): CheckResult {
+  if (expected.outcome !== "unknown")
+    return check(["the place is not expected unknown"], null);
+  const key = placeKey(expected.name);
+  const note = calls
+    .filter((c) => c.name === "resolve_place" && !c.is_error)
+    .map((c) => rec(c.result))
+    .find(
+      (r) =>
+        r.status === "unknown" &&
+        typeof r.name === "string" &&
+        placeKey(r.name) === key &&
+        typeof r.note === "string",
+    )?.note as string | undefined;
+  if (note === undefined)
+    return check(
+      [`no unknown resolve_place result for ${expected.name}`],
+      false,
+    );
+  const first = answer.gaps[0] === note;
+  const second = answer.gaps[1] === PLACE_UNKNOWN_HOW_TO_ASK;
+  const firstSentence = sentencesOf(answer.text)[0] ?? "";
+  const said = (GAPS.place_unknown.inText as RegExp).test(firstSentence);
+  return check(
+    [
+      `gaps[0] ${first ? "is" : "is NOT"} the unknown note for ${expected.name}`,
+      `gaps[1] ${second ? "is" : "is NOT"} how to ask with a point`,
+    ],
+    first && second,
+    said
+      ? []
+      : [
+          `the first sentence does not say ${expected.name} was not found: "${firstSentence.trim()}"`,
+        ],
+  );
+}
+
 /** All checks of one answer. */
 export async function checkAnswer(args: {
   prompt: EvalPrompt;
@@ -1745,6 +1795,7 @@ export async function checkAnswer(args: {
       stated_counts: checkStatedCounts(answer, calls, prompt.expected),
       screen: checkScreen(answer, calls, prompt.expected, prompt.request),
       value_sources: checkValueSources(answer, calls, prompt.expected),
+      place_unknown: checkPlaceUnknown(answer, calls, prompt.expected.place),
     },
   };
 }

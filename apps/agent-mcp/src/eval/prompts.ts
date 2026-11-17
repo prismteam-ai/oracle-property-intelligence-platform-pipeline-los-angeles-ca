@@ -32,7 +32,9 @@ export const DEFAULT_PROMPTS_FILE = fileURLToPath(
  * age threshold (each value from the question or the screen, and stated); then r, owners mixed with BBB ratings
  * (refused by the people guard, the text naming the missing owner data and BBB); then s, the CRM's request again
  * with a radius the question names over the screen's (s1) and a screen radius that is not the default (s2), each
- * source stated in the search result's value_sources.
+ * source stated in the search result's value_sources; then t and u, places that resolve_place does not know (a
+ * district, "downtown Los Angeles", and a made-up name): no search, the unknown note and how to ask with a point first
+ * in the gaps.
  */
 export const PROMPT_CASES = [
   "a",
@@ -54,6 +56,8 @@ export const PROMPT_CASES = [
   "q",
   "r",
   "s",
+  "t",
+  "u",
 ] as const;
 
 /**

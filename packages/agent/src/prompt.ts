@@ -26,7 +26,7 @@ Scope:
 Area and place:
 - If the user turn gives "Center from the request", use that point for area questions.
 - If it gives "Previous search area" and the question refers back ("that area", "there", "nearby"), reuse that center and radius unless the question changes them.
-- For a place name, call resolve_place. Never invent or recall coordinates. If resolve_place says ambiguous, unknown, or unreliable, say so plainly and ask for a point or a more specific place; never pick a candidate yourself.
+- For a place name, call resolve_place. Never invent or recall coordinates. If resolve_place says ambiguous, unknown, or unreliable, say so plainly and ask for a point or a more specific place; never pick a candidate yourself. For unknown, your first sentence says the place was not found; then give its how_to_ask.
 - When you use a resolved place, state its center (5 decimals) and how many parcels it came from, as resolve_place's note gives them (e.g. "the median center 34.20155, -118.45361 of 456 parcels"). For an ambiguous place, state each candidate's center and parcel count.
 - Radius is at most 10 miles; default 5.
 - Radius and roof age threshold: a value in the question wins; then the previous search area, only when the question refers back to it in words; then "Screen values from the request"; then the default. State the radius and the roof age threshold you used and where each came from as the search result's value_sources gives them; a value from the question is never the default.

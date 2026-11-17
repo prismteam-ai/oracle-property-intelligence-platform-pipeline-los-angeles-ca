@@ -25,8 +25,12 @@ import { beforeAll, describe, expect, test as vitestTest } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createMcpServer } from "../src/create-server.ts";
-import { checkCounts } from "../src/eval/checks.ts";
-import { GAPS } from "../src/eval/prompts.ts";
+import {
+  checkCounts,
+  checkPlaceUnknown,
+  toolCallsOf,
+} from "../src/eval/checks.ts";
+import { GAPS, loadPrompts } from "../src/eval/prompts.ts";
 import {
   DEFAULT_REPO_ROOT,
   missingRunFiles,
@@ -252,6 +256,41 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
       center: direct.status === "resolved" ? direct.center : null,
       parcel_count: direct.status === "resolved" ? direct.parcel_count : null,
     });
+  });
+
+  test("prompts t and u on the run: downtown Los Angeles and Brightwater Springs are unknown; the answer's gaps start with the note, then how to ask (check place_unknown)", async () => {
+    for (const [id, name] of [
+      ["t-downtown-los-angeles-unknown", "downtown Los Angeles"],
+      ["u-brightwater-springs-unknown", "Brightwater Springs"],
+    ] as const) {
+      expect(await data.caller.places.resolve({ name })).toMatchObject({
+        status: "unknown",
+      });
+      const prompt = loadPrompts().find((p) => p.id === id)!;
+      const model = new ScriptedModel([
+        toolReply([{ name: "resolve_place", input: { name } }]),
+        textReply(
+          `I could not find ${name} in the data. Ask again with its latitude and longitude.`,
+        ),
+      ]);
+      const answer = await runAgent(
+        { question: prompt.question },
+        { model, queries: data.queries, settings: SETTINGS },
+      );
+      expect(
+        checkPlaceUnknown(
+          answer,
+          toolCallsOf(answer, 0),
+          prompt.expected.place,
+        ),
+      ).toEqual({
+        result: "pass",
+        details: [
+          `gaps[0] is the unknown note for ${name}`,
+          "gaps[1] is how to ask with a point",
+        ],
+      });
+    }
   });
 
   test("search_aged_roofs at Van Nuys, 5 mi, 15 years: off gives parcels.search's count (113,632 measured); each basis equals parcels.search with it, both = at most either", async () => {

@@ -82,11 +82,11 @@ export const LONG_OPEN_SCOPE = "roofing work only";
 export const WITHIN_WINDOW_LIMIT = 5;
 
 /**
- * How to ask when resolve_place finds no place: with a point. Added to an unknown result (next to the data API's
- * note, unchanged) and to its gaps.
+ * How to ask when resolve_place finds no place: what place names resolve to, then with a point. Added to an unknown
+ * result (next to the data API's note, unchanged) and to its gaps.
  */
 export const PLACE_UNKNOWN_HOW_TO_ASK =
-  "Ask again with a point: its latitude and longitude (the Explorer's Latitude and Longitude fields above the question, or the CRM's map pin).";
+  "Place names resolve only to an exact jurisdiction or postal-city name on the County roll (e.g. Van Nuys, Pasadena); a district or neighborhood that is not a postal city, such as downtown, is not found. Ask again with a point: its latitude and longitude (the Explorer's Latitude and Longitude fields above the question, or the CRM's map pin).";
 
 /**
  * How long long_open_permits waits for the contractor rows of its within-window list: one data call's worst case

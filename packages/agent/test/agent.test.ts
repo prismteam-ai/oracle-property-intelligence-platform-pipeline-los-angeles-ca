@@ -2381,8 +2381,24 @@ const PROMPT_LINES_ADDED_SINCE_8FC8821: readonly string[] = [
   // Answer format (stated counts equal the rows shown).
   "- When you say how many permits or records you show from a list (either long-open list included), that number must equal the rows you list from it; never restate a tool's returned count for rows you leave out. How many match in all may still be stated.",
 ];
+/**
+ * System-prompt words appended to a line of 8fc8821 since then, each [line then, words added] and found once
+ * (the place line: an unknown place is said first, then its how_to_ask).
+ */
+const PROMPT_WORDS_APPENDED_SINCE_8FC8821: ReadonlyArray<
+  readonly [string, string]
+> = [
+  [
+    "- For a place name, call resolve_place. Never invent or recall coordinates. If resolve_place says ambiguous, unknown, or unreliable, say so plainly and ask for a point or a more specific place; never pick a candidate yourself.",
+    " For unknown, your first sentence says the place was not found; then give its how_to_ask.",
+  ],
+];
 const without8fc8821Additions = (prompt: string): string => {
   let out = prompt;
+  for (const [line, added] of PROMPT_WORDS_APPENDED_SINCE_8FC8821) {
+    expect(out.split(`\n${line}${added}\n`)).toHaveLength(2);
+    out = out.replace(`\n${line}${added}\n`, `\n${line}\n`);
+  }
   for (const line of PROMPT_LINES_ADDED_SINCE_8FC8821) {
     expect(out.split(`\n${line}\n`)).toHaveLength(2);
     out = out.replace(`\n${line}\n`, "\n");

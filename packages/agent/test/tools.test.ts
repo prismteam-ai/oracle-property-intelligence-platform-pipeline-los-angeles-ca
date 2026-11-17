@@ -709,7 +709,7 @@ describe("runTool", () => {
     const o = await runTool("resolve_place", { name: "Springfield" }, queries);
     expect(o.ok).toBe(true);
     expect(PLACE_UNKNOWN_HOW_TO_ASK).toBe(
-      "Ask again with a point: its latitude and longitude (the Explorer's Latitude and Longitude fields above the question, or the CRM's map pin).",
+      "Place names resolve only to an exact jurisdiction or postal-city name on the County roll (e.g. Van Nuys, Pasadena); a district or neighborhood that is not a postal city, such as downtown, is not found. Ask again with a point: its latitude and longitude (the Explorer's Latitude and Longitude fields above the question, or the CRM's map pin).",
     );
     expect(o.content).toEqual({
       ...direct,

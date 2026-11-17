@@ -429,5 +429,31 @@
       "value_sources": { "radius": "screen", "threshold": "screen" },
       "place": { "outcome": "request_center" }
     }
+  },
+  {
+    "id": "t-downtown-los-angeles-unknown",
+    "case": "t",
+    "group": "t-downtown-los-angeles",
+    "note": "A district name: place names resolve only to the cities (jurisdictions) and postal cities of the County roll, and \"downtown Los Angeles\" is neither (absent from the run's 795 postal cities and 89 jurisdictions), so resolve_place says unknown: no center, no search. The answer says first that the place was not found; its gaps start with the unknown note, then how to ask with a point (check place_unknown), and the text names the coordinate fields (gap point_fields).",
+    "question": "Which properties within five miles of downtown Los Angeles have roofs older than 30 years?",
+    "expected": {
+      "tools": ["resolve_place"],
+      "gaps": ["place_unknown", "no_center", "point_fields"],
+      "refused": false,
+      "place": { "outcome": "unknown", "name": "downtown Los Angeles" }
+    }
+  },
+  {
+    "id": "u-brightwater-springs-unknown",
+    "case": "u",
+    "group": "u-brightwater-springs",
+    "note": "A made-up place name (absent from the run's 795 postal cities and 89 jurisdictions): resolve_place says unknown; no center, no search. The answer says first that the place was not found; its gaps start with the unknown note, then how to ask with a point (check place_unknown), and the text names the coordinate fields (gap point_fields).",
+    "question": "Which properties within two miles of Brightwater Springs have roofs older than 20 years?",
+    "expected": {
+      "tools": ["resolve_place"],
+      "gaps": ["place_unknown", "no_center", "point_fields"],
+      "refused": false,
+      "place": { "outcome": "unknown", "name": "Brightwater Springs" }
+    }
   }
 ]

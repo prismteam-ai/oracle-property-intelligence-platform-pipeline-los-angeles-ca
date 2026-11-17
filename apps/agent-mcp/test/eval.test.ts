@@ -250,8 +250,8 @@ describe("prompts file (eval/prompts.json)", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byCase = (c: string) => prompts.filter((p) => p.case === c);
 
-  test("twenty-three entries, valid: cases a–i (d twice: aged roofs, then long-open permits), then the scope and abuse cases j–n, the coverage case o, p, the CRM screen case q, owners with BBB r and the value sources case s", () => {
-    expect(prompts.length).toBe(23);
+  test("twenty-five entries, valid: cases a–i (d twice: aged roofs, then long-open permits), then the scope and abuse cases j–n, the coverage case o, p, the CRM screen case q, owners with BBB r, the value sources case s and the unknown places t and u", () => {
+    expect(prompts.length).toBe(25);
     expect(new Set(prompts.map((p) => p.case))).toEqual(new Set(PROMPT_CASES));
     expect(new Set(prompts.map((p) => p.id)).size).toBe(prompts.length);
   });
@@ -1952,13 +1952,13 @@ describe("CLI and output folder", () => {
       .trim()
       .split("\n");
     expect(tsv[0]).toBe(
-      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tstated_counts\tscreen\tvalue_sources\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms\twarnings",
+      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tstated_counts\tscreen\tvalue_sources\tplace_unknown\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms\twarnings",
     );
     expect(tsv.slice(1)).toEqual([
-      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0\tnone",
-      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0\tnone",
-      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0\tnone",
-      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0\tnone",
+      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0\tnone",
+      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0\tnone",
+      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0\tnone",
+      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0\tnone",
     ]);
     const md = readFileSync(join(out, "results.md"), "utf8");
     expect(md).toContain("data run run-1");
