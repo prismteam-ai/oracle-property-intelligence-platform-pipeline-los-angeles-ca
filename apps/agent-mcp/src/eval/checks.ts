@@ -21,7 +21,10 @@
  *   answer's lists' rows shown is a warning, except for a "per list" statement;
  * - screen: with the request's screen values, the search's radius and roof age threshold are the expected ones (the
  *   screen's, or the question's from the prompt's tool_inputs) and the agent's assumptions name where each came from;
- *   the text stating each value with its source is a warning, not a failure.
+ *   the text stating each value with its source is a warning, not a failure;
+ * - value_sources: every search_aged_roofs / long_open_permits result states the expected source of its radius (and
+ *   roof age threshold) in value_sources, and the answer's assumptions carry that result's sentence; a sentence of the
+ *   text calling the value "the default" when its source is not, or the text not naming the source, is a warning.
  *
  * A check fails only on what the tool calls, the tool results or the answer's structured fields (assumptions, gaps,
  * records, status ...) verify. What only tests how the text words or places something is a warning: listed in the
@@ -46,6 +49,7 @@ import {
   type DataQueries,
   type SessionArea,
   type ToolName,
+  type ValueSource,
 } from "@oracle-la/agent";
 import {
   GAPS,
@@ -75,6 +79,7 @@ export const CHECK_NAMES = [
   "contractors",
   "stated_counts",
   "screen",
+  "value_sources",
 ] as const;
 export type CheckName = (typeof CHECK_NAMES)[number];
 
@@ -1402,6 +1407,166 @@ export function checkScreen(
   return check(details, ok, warnings);
 }
 
+/** Words in a sentence that name a value's source (check value_sources' warnings); "other" names none. */
+export const VALUE_SOURCE_WORDS: Record<ValueSource, RegExp | null> = {
+  question: SOURCE_WORDS.question,
+  previous_area:
+    /\b(?:previous|earlier|same area|that area|same radius|reused?)\b/i,
+  screen: SOURCE_WORDS.screen,
+  default: /\bdefault\b/i,
+  other: null,
+};
+
+/** Any distance or number of years ("5 miles", "five-mile", "15 years", "twenty-five yrs"). */
+const QUANTITY = new RegExp(
+  String.raw`(?<![\w.])(?:\d+(?:\.\d+)?|${Object.values(NUMBER_NAMES).join("|")})[\s-]*(?:miles?|mi|years?|yrs?)\b`,
+  "gi",
+);
+
+/**
+ * True when the sentence calls the value matched by `value` "the default": "default" in the words around one of its
+ * mentions, from the last clause break (, ; : ( ) or the previous quantity before it to the next ; or quantity after
+ * it ("5 miles, the default", "the default radius of 5 miles", "5 miles (the default)").
+ */
+export function callsDefault(sentence: string, value: RegExp): boolean {
+  const all = [...sentence.matchAll(QUANTITY)].map((m) => ({
+    start: m.index,
+    end: m.index + m[0].length,
+  }));
+  const own = new RegExp(value.source, `${value.flags.replace("g", "")}g`);
+  return [...sentence.matchAll(own)].some((m) => {
+    const start = m.index;
+    const end = start + m[0].length;
+    const before = all.filter((q) => q.end <= start).at(-1)?.end ?? 0;
+    const after = all.find((q) => q.start >= end)?.start ?? sentence.length;
+    const back =
+      sentence
+        .slice(before, start)
+        .split(/[,;:()]/)
+        .at(-1) ?? "";
+    const forward = sentence.slice(end, after).split(";")[0] ?? "";
+    return /\bdefault\b/i.test(back) || /\bdefault\b/i.test(forward);
+  });
+}
+
+/**
+ * (x) With expected.value_sources: every search_aged_roofs / long_open_permits result (that ran) states
+ * value_sources; its radius's source (and, for search_aged_roofs with an expected threshold, the threshold's) is the
+ * expected one; the answer's assumptions carry the result's text for it (a radius from the previous area: the
+ * answer's own reuse line, "Radius and center reused from the previous question (...)", instead). Fails on any of
+ * these; fails with no search at all; n/a when every search failed (no result to read). Warnings only: a sentence of
+ * the text calling the value "the default" when its source is not the default; the text not stating the value, or
+ * stating it without naming its source (VALUE_SOURCE_WORDS; none for "other"). A result without value_sources fails,
+ * and its text is judged against the call's values with the expected sources. n/a without the expectation.
+ */
+export function checkValueSources(
+  answer: AgentAnswer,
+  calls: readonly ToolCallRecord[],
+  expected: EvalPrompt["expected"],
+): CheckResult {
+  const want = expected.value_sources;
+  if (!want) return check(["no value_sources expectation"], null);
+  const searches = calls.filter((c) => SEARCH_TOOLS.has(c.name));
+  if (!searches.length) return check(["no search"], false);
+  const ran = searches.filter((c) => !c.is_error && c.result !== null);
+  if (!ran.length)
+    return check(
+      [`${searches.length} search(es), none with a result to read`],
+      null,
+    );
+  const sentences = sentencesOf(answer.text);
+  const details: string[] = [];
+  const warnings = new Set<string>();
+  let ok = true;
+  const one = (
+    tool: string,
+    what: "radius" | "threshold",
+    source: ValueSource,
+    stated: Record<string, unknown>,
+  ) => {
+    const value = stated.value;
+    const got = stated.source;
+    const text = stated.text;
+    if (typeof value !== "number" || typeof got !== "string") {
+      ok = false;
+      details.push(`${tool}: value_sources has no ${what}`);
+      return;
+    }
+    const unit = what === "radius" ? `${value} mi` : `${value} years`;
+    const reuseLine =
+      what === "radius" && got === "previous_area"
+        ? answer.assumptions.find((a) =>
+            a.startsWith(
+              "Radius and center reused from the previous question (",
+            ),
+          )
+        : undefined;
+    const assumed =
+      typeof text === "string" &&
+      (answer.assumptions.includes(text) || reuseLine !== undefined);
+    if (got !== source || !assumed) ok = false;
+    details.push(
+      `${tool} ${what} ${unit}: source ${got}${got === source ? "" : ` (NOT the expected ${source})`}; assumption ${assumed ? (reuseLine && !answer.assumptions.includes(String(text)) ? "stated as the reuse line" : "stated") : `NOT stated ("${String(text)}")`}`,
+    );
+    wording(what, value, got as ValueSource);
+  };
+  /** Wording in the text: warnings only. */
+  const wording = (
+    what: "radius" | "threshold",
+    value: number,
+    got: ValueSource,
+  ) => {
+    const unit = what === "radius" ? `${value} mi` : `${value} years`;
+    const re = what === "radius" ? milesText(value) : yearsText(value);
+    const stating = sentences.filter((x) => re.test(x));
+    if (got !== "default")
+      for (const x of stating)
+        if (callsDefault(x, re))
+          warnings.add(
+            `${what} ${unit}: the text calls it the default, but its source is the ${got}: "${x.trim()}"`,
+          );
+    const words = VALUE_SOURCE_WORDS[got] ?? null;
+    if (!stating.length)
+      warnings.add(
+        `${what} ${unit}: the text does not state the value or its source`,
+      );
+    else if (words && !stating.some((x) => words.test(x)))
+      warnings.add(
+        `${what} ${unit}: the text states the value but does not name its source (the ${got})`,
+      );
+  };
+  for (const c of ran) {
+    const vs = rec(c.result).value_sources;
+    if (!vs || typeof vs !== "object") {
+      // A result without value_sources (e.g. a transcript recorded before them): fail; the text's wording is still
+      // judged against the call's values (schema defaults applied) and the expected sources.
+      ok = false;
+      details.push(`${c.name}: the result has no value_sources`);
+      const input = parsedInput(c);
+      if (typeof input?.radius_miles === "number")
+        wording("radius", input.radius_miles, want.radius);
+      if (
+        want.threshold !== undefined &&
+        c.name === "search_aged_roofs" &&
+        typeof input?.threshold_years === "number"
+      )
+        wording("threshold", input.threshold_years, want.threshold);
+      continue;
+    }
+    one(c.name, "radius", want.radius, rec(rec(vs).radius));
+    if (want.threshold !== undefined && c.name === "search_aged_roofs")
+      one(c.name, "threshold", want.threshold, rec(rec(vs).threshold));
+  }
+  if (
+    want.threshold !== undefined &&
+    !ran.some((c) => c.name === "search_aged_roofs")
+  ) {
+    ok = false;
+    details.push("threshold: no search_aged_roofs result");
+  }
+  return check(details, ok, [...warnings]);
+}
+
 interface Resolution {
   status?: unknown;
   name?: unknown;
@@ -1579,6 +1744,7 @@ export async function checkAnswer(args: {
       contractors: checkContractors(answer, calls, prompt.expected),
       stated_counts: checkStatedCounts(answer, calls, prompt.expected),
       screen: checkScreen(answer, calls, prompt.expected, prompt.request),
+      value_sources: checkValueSources(answer, calls, prompt.expected),
     },
   };
 }

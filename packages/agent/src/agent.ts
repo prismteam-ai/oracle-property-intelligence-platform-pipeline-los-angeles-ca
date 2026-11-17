@@ -20,7 +20,6 @@ import {
   candidatesPhrase,
   centerPhrase,
   resolvedPhrase,
-  sameCoord,
   type PlaceBasis,
 } from "../../views/src/place-index.ts";
 import {
@@ -38,6 +37,13 @@ import {
   type Citation,
 } from "./policy.ts";
 import { systemPrompt } from "./prompt.ts";
+import {
+  NUMBER_WORDS,
+  atCenter,
+  searchValuesOf,
+  valueSources,
+  type ValueSourceContext,
+} from "./value-source.ts";
 import {
   DEFAULT_MIN_OPEN_DAYS,
   LONG_OPEN_SCOPE,
@@ -194,12 +200,6 @@ const STOP_TEXT: Record<StoppedBy, string> = {
 const SEARCH_TOOLS = new Set(["search_aged_roofs", "long_open_permits"]);
 const fmt = (n: number) => n.toLocaleString("en-US");
 const same = (a: number, b: number) => Math.abs(a - b) < 1e-6;
-/**
- * A search is attributed to a center when both coordinates agree at 5 decimals (the precision resolve_place serves
- * and the agent states), both sides through the same formatter (place-index.ts coordText).
- */
-const atCenter = (c: { lat: number; lon: number }, lat: number, lon: number) =>
-  sameCoord(c.lat, lat) && sameCoord(c.lon, lon);
 
 /** A tool round needs room for its estimated input plus at least this many output tokens. */
 export const MIN_ANSWER_TOKENS = 1_024;
@@ -413,20 +413,6 @@ function closeDanglingToolUse(
   return pending;
 }
 
-const NUMBER_WORDS: Record<string, number> = {
-  one: 1,
-  two: 2,
-  three: 3,
-  four: 4,
-  five: 5,
-  six: 6,
-  seven: 7,
-  eight: 8,
-  nine: 9,
-  ten: 10,
-  fifteen: 15,
-  twenty: 20,
-};
 const YEARS = String.raw`\b(many|several|a few|\d+(?:\.\d+)?|${Object.keys(NUMBER_WORDS).join("|")})\s+years?\b`;
 
 /** How the question's duration became min_open_days (deterministic). */
@@ -465,82 +451,35 @@ export function longOpenRuleLine(
 export const outsideCityGap = (place: string): string =>
   `${place} is outside the City of Los Angeles: no permit data there.`;
 
-/** Where a search's radius or roof age threshold came from (precedence: question, previous area, screen, default). */
-export type ValueSource =
-  "question" | "previous_area" | "screen" | "default" | "other";
-
-/** The tool defaults: radius 5 mi, roof age threshold 15 years. */
-const DEFAULT_RADIUS_MILES = 5;
-const DEFAULT_THRESHOLD_YEARS = 15;
-
-const NUMBER_WORD = Object.keys(NUMBER_WORDS).join("|");
-/** Distances in the question, in miles: "five miles", "1 mile", "1-mile", "a mile", "half a mile", "2.5 mi". */
-function questionMiles(question: string): number[] {
-  const re = new RegExp(
-    String.raw`\b(half an?|an?|\d+(?:\.\d+)?|${NUMBER_WORD})[\s-]+(?:miles?|mi)\b`,
-    "gi",
-  );
-  return [...question.matchAll(re)].map((m) => {
-    const w = m[1]!.toLowerCase();
-    if (w.startsWith("half")) return 0.5;
-    if (w === "a" || w === "an") return 1;
-    return NUMBER_WORDS[w] ?? Number(w);
-  });
-}
-/** Numbers of years in the question: "older than 25 years", "25-year-old roofs", "fifteen years". */
-function questionYears(question: string): number[] {
-  const re = new RegExp(
-    String.raw`\b(\d+(?:\.\d+)?|${NUMBER_WORD})[\s-]+years?\b`,
-    "gi",
-  );
-  return [...question.matchAll(re)].map((m) => {
-    const w = m[1]!.toLowerCase();
-    return NUMBER_WORDS[w] ?? Number(w);
-  });
-}
-
 /**
- * The assumption naming where a search's radius or roof age threshold came from (deterministic; the eval's screen
- * check rebuilds it). `screen` is the screen's value for the same setting, when the request had a screen.
+ * The context the sources of a search's radius and roof age threshold are stated in: the request, the previous search
+ * area and the centers of the places resolved before the search in this answer (the tool runner's and explain()'s).
  */
-export function valueSourceAssumption(
-  what: "radius" | "threshold",
-  value: number,
-  source: ValueSource,
-  screen: number | undefined,
-): string {
-  const label = what === "radius" ? "Radius" : "Roof age threshold";
-  const unit = (n: number) => (what === "radius" ? `${n} mi` : `${n} years`);
-  const shows =
-    screen !== undefined ? ` (the screen shows ${unit(screen)})` : "";
-  switch (source) {
-    case "question":
-      return `${label} ${unit(value)} from the question${shows}.`;
-    case "previous_area":
-      return `${label} ${unit(value)} from the previous search area${shows}.`;
-    case "screen":
-      return `${label} ${unit(value)} from the screen (the question gives ${what === "radius" ? "no distance" : "no roof age"}).`;
-    case "default":
-      return `${label} ${unit(value)}: the tool's default${screen !== undefined ? `, not the screen's ${unit(screen)}` : ""}.`;
-    case "other":
-      return `${label} ${unit(value)}: from neither the question${screen !== undefined ? ", the screen" : ""} nor the previous search area.`;
-  }
+export function valueSourceContext(
+  req: AgentRequest,
+  prev: SessionArea | undefined,
+  places: ReadonlyArray<{ lat: number; lon: number }>,
+): ValueSourceContext {
+  return {
+    question: req.question,
+    ...(req.screen ? { screen: req.screen } : {}),
+    ...(req.center ? { center: req.center } : {}),
+    ...(prev ? { previous: prev } : {}),
+    places,
+  };
 }
 
-/** The source of a search's value: the question, the previous area (radius only), the screen, the default, or none. */
-function valueSource(
-  value: number,
-  inQuestion: readonly number[],
-  previous: number | undefined,
-  screen: number | undefined,
-  fallback: number,
-): ValueSource {
-  if (inQuestion.some((n) => same(n, value))) return "question";
-  if (previous !== undefined && same(previous, value)) return "previous_area";
-  if (screen !== undefined && same(screen, value)) return "screen";
-  if (same(fallback, value)) return "default";
-  return "other";
-}
+/** The centers of the places resolve_place resolved in these outcomes, in order. */
+const resolvedCenters = (
+  outcomes: readonly ToolOutcome[],
+): Array<{ lat: number; lon: number }> =>
+  outcomes.flatMap((o) =>
+    o.name === "resolve_place" &&
+    o.fact?.tool === "resolve_place" &&
+    o.fact.resolution.status === "resolved"
+      ? [o.fact.resolution.center]
+      : [],
+  );
 
 interface Explained {
   reasoning: string[];
@@ -614,7 +553,6 @@ function explain(
       const radius = Number(input.radius_miles);
       const place = [...places].reverse().find((p) => atCenter(p, lat, lon));
       let basis: AreaBasis;
-      let reused = false;
       if (place) {
         label = place.label;
         basis = place.basis;
@@ -627,7 +565,6 @@ function explain(
       } else if (prev && atCenter(prev, lat, lon)) {
         label = prev.label;
         basis = prev.basis;
-        reused = true;
         assumptions.push(
           same(prev.radius_miles, radius)
             ? `Radius and center reused from the previous question (${prev.label}, ${prev.radius_miles} mi).`
@@ -641,42 +578,16 @@ function explain(
         );
       }
       area = { label, lat, lon, radius_miles: radius, basis };
-      // Where the radius and (search_aged_roofs) the roof age threshold came from. A radius reused with the
-      // previous area's center is already stated above.
-      const radiusFrom = valueSource(
-        radius,
-        questionMiles(req.question),
-        reused ? prev!.radius_miles : undefined,
-        req.screen?.radius_miles,
-        DEFAULT_RADIUS_MILES,
+      // Where the radius and (search_aged_roofs) the roof age threshold came from: the sentences the tool result's
+      // value_sources gave the model (the same context: the places resolved so far in this answer). A radius reused
+      // with the previous area's center is already stated above.
+      const stated = valueSources(
+        valueSourceContext(req, prev, places),
+        searchValuesOf(o.name, { ...input, radius_miles: radius }, lat, lon)!,
       );
-      if (radiusFrom !== "previous_area")
-        assumptions.push(
-          valueSourceAssumption(
-            "radius",
-            radius,
-            radiusFrom,
-            req.screen?.radius_miles,
-          ),
-        );
-      if (
-        o.name === "search_aged_roofs" &&
-        typeof input.threshold_years === "number"
-      )
-        assumptions.push(
-          valueSourceAssumption(
-            "threshold",
-            input.threshold_years,
-            valueSource(
-              input.threshold_years,
-              questionYears(req.question),
-              undefined,
-              req.screen?.threshold_years,
-              DEFAULT_THRESHOLD_YEARS,
-            ),
-            req.screen?.threshold_years,
-          ),
-        );
+      if (stated.radius.source !== "previous_area")
+        assumptions.push(stated.radius.text);
+      if (stated.threshold) assumptions.push(stated.threshold.text);
     }
 
     const f = o.fact;
@@ -1016,7 +927,12 @@ export async function runAgent(
           break;
         }
         usage.tool_calls++;
-        const o = await runTool(call.name, call.input, queries);
+        const o = await runTool(
+          call.name,
+          call.input,
+          queries,
+          valueSourceContext(req, prevArea, resolvedCenters(outcomes)),
+        );
         outcomes.push(o);
         results.push({
           type: "tool_result",

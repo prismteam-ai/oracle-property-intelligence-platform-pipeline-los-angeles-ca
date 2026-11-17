@@ -30,6 +30,7 @@ export const EXPLORER_SOURCE_PATHS = [
   "packages/agent/src/permit-api.ts",
   "packages/agent/src/policy.ts",
   "packages/agent/src/tools.ts",
+  "packages/agent/src/value-source.ts",
   "packages/api-client/src",
   "packages/views/src/place-index.ts",
   "packages/views/src/sql.ts",

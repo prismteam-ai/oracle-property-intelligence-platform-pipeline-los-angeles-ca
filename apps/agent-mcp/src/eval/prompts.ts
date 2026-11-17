@@ -11,6 +11,7 @@ import {
   PLACE_UNKNOWN_HOW_TO_ASK,
   STANDARD_GAPS,
   TOOL_NAMES,
+  VALUE_SOURCE_NAMES,
   agentRequestSchema,
   type ToolName,
 } from "@oracle-la/agent";
@@ -29,7 +30,9 @@ export const DEFAULT_PROMPTS_FILE = fileURLToPath(
  * then p, how many aged-roof parcels have a long-open roofing permit (search_aged_roofs with
  * long_open_permit, a count of parcels); then q, the CRM's request with a center and the screen's radius and roof
  * age threshold (each value from the question or the screen, and stated); then r, owners mixed with BBB ratings
- * (refused by the people guard, the text naming the missing owner data and BBB).
+ * (refused by the people guard, the text naming the missing owner data and BBB); then s, the CRM's request again
+ * with a radius the question names over the screen's (s1) and a screen radius that is not the default (s2), each
+ * source stated in the search result's value_sources.
  */
 export const PROMPT_CASES = [
   "a",
@@ -50,6 +53,7 @@ export const PROMPT_CASES = [
   "p",
   "q",
   "r",
+  "s",
 ] as const;
 
 /**
@@ -274,6 +278,18 @@ export const promptSchema = z.strictObject({
         threshold: z.enum(VALUE_SOURCES).optional(),
       })
       .optional(),
+    /**
+     * The sources every search_aged_roofs or long_open_permits result states in value_sources (the radius, and for
+     * search_aged_roofs the roof age threshold), and the answer's assumptions carry each result's text (check
+     * "value_sources"); the text calling a value "the default" when its source is not, or not naming a source, is a
+     * warning only. With or without request.screen.
+     */
+    value_sources: z
+      .strictObject({
+        radius: z.enum(VALUE_SOURCE_NAMES),
+        threshold: z.enum(VALUE_SOURCE_NAMES).optional(),
+      })
+      .optional(),
     place: placeSchema,
   }),
 });
@@ -344,6 +360,28 @@ export const promptsFileSchema = z
           code: "custom",
           path: [i, "expected", "screen"],
           message: "screen needs request.screen",
+        });
+      const vs = p.expected.value_sources;
+      if (
+        vs &&
+        !p.expected.tools.some(
+          (t) => t === "search_aged_roofs" || t === "long_open_permits",
+        )
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "expected", "value_sources"],
+          message:
+            "value_sources needs search_aged_roofs or long_open_permits in tools",
+        });
+      if (
+        vs?.threshold !== undefined &&
+        !p.expected.tools.includes("search_aged_roofs")
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "expected", "value_sources", "threshold"],
+          message: "value_sources.threshold needs search_aged_roofs in tools",
         });
       if (p.expected.place.outcome === "request_center" && !p.request?.center)
         ctx.addIssue({

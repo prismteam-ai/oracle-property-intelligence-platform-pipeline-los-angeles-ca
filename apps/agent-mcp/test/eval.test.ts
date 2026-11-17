@@ -250,8 +250,8 @@ describe("prompts file (eval/prompts.json)", () => {
   const prompts = loadPrompts(DEFAULT_PROMPTS_FILE);
   const byCase = (c: string) => prompts.filter((p) => p.case === c);
 
-  test("twenty-one entries, valid: cases a–i (d twice: aged roofs, then long-open permits), then the scope and abuse cases j–n, the coverage case o, p, the CRM screen case q and owners with BBB r", () => {
-    expect(prompts.length).toBe(21);
+  test("twenty-three entries, valid: cases a–i (d twice: aged roofs, then long-open permits), then the scope and abuse cases j–n, the coverage case o, p, the CRM screen case q, owners with BBB r and the value sources case s", () => {
+    expect(prompts.length).toBe(23);
     expect(new Set(prompts.map((p) => p.case))).toEqual(new Set(PROMPT_CASES));
     expect(new Set(prompts.map((p) => p.id)).size).toBe(prompts.length);
   });
@@ -294,6 +294,7 @@ describe("prompts file (eval/prompts.json)", () => {
       gaps: ["outside_city_of_la"],
       refused: false,
       stated_counts: true,
+      value_sources: { radius: "question" },
       place: {
         outcome: "resolved",
         name: "Pasadena",
@@ -346,11 +347,11 @@ describe("prompts file (eval/prompts.json)", () => {
       "the May 2023 line of the system prompt says to call it and state the contractor window from it",
     );
     expect(i.note).toContain("resolve_place is allowed, not required");
-    // Every other prompt is unchanged: no forbidden tool (but q's resolve_place: the request gives the center), and a
-    // resolved place still requires the call and the search.
+    // Every other prompt is unchanged: no forbidden tool (but q's and s's resolve_place: the request gives the
+    // center), and a resolved place still requires the call and the search.
     for (const p of prompts.filter((x) => x.case !== "i")) {
       expect(p.expected.forbidden_tools).toEqual(
-        p.case === "q" ? ["resolve_place"] : undefined,
+        p.case === "q" || p.case === "s" ? ["resolve_place"] : undefined,
       );
       expect("search_required" in p.expected.place).toBe(false);
       expect("resolve_required" in p.expected.place).toBe(false);
@@ -1951,13 +1952,13 @@ describe("CLI and output folder", () => {
       .trim()
       .split("\n");
     expect(tsv[0]).toBe(
-      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tstated_counts\tscreen\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms\twarnings",
+      "run\tprompt\tstatus\tcounts\tcited\tgaps\tgaps_text\telapsed\ttools\trefusal\tplace\townership\tlicense_status\tcontractors\tstated_counts\tscreen\tvalue_sources\tinput_tokens\tcache_write_tokens\tcache_read_tokens\toutput_tokens\tusd\tms\twarnings",
     );
     expect(tsv.slice(1)).toEqual([
-      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0\tnone",
-      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0\tnone",
-      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0\tnone",
-      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0\tnone",
+      "1\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0\tnone",
+      "1\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0\tnone",
+      "2\tg-owner\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t0\t0\t0\t0\t0.000000\t0\tnone",
+      "2\trun-summary\tpass\tpass\tpass\tn/a\tn/a\tpass\tpass\tpass\tpass\tn/a\tn/a\tn/a\tn/a\tn/a\tn/a\t200\t0\t0\t100\t0.001400\t0\tnone",
     ]);
     const md = readFileSync(join(out, "results.md"), "utf8");
     expect(md).toContain("data run run-1");
@@ -3569,10 +3570,17 @@ describe("the CRM screen: prompts q1 and q2, place request_center and check scre
       radius: "screen",
       threshold: "screen",
     });
-    // No other prompt sends a request or expects a screen.
-    expect(
-      prompts.filter((p) => p.request || p.expected.screen).map((p) => p.id),
-    ).toEqual([q1.id, q2.id]);
+    // No other prompt expects a screen; only s1 and s2 (check value_sources) also send a request.
+    expect(prompts.filter((p) => p.expected.screen).map((p) => p.id)).toEqual([
+      q1.id,
+      q2.id,
+    ]);
+    expect(prompts.filter((p) => p.request).map((p) => p.id)).toEqual([
+      q1.id,
+      q2.id,
+      "s1-crm-radius-from-question",
+      "s2-crm-radius-from-screen",
+    ]);
   });
 
   test("the prompts file: screen needs request.screen; request_center needs request.center; the request is validated as the agent validates it", () => {

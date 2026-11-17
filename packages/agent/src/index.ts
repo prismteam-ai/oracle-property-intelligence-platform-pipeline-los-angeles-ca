@@ -13,7 +13,7 @@ export {
   outsideCityGap,
   promptCacheParts,
   runAgent,
-  valueSourceAssumption,
+  valueSourceContext,
   type AgentAnswer,
   type AgentCenter,
   type AgentDeps,
@@ -26,8 +26,21 @@ export {
   type SessionArea,
   type SessionState,
   type StoppedBy,
-  type ValueSource,
 } from "./agent.ts";
+export {
+  DEFAULT_RADIUS_MILES,
+  DEFAULT_THRESHOLD_YEARS,
+  VALUE_SOURCE_NAMES,
+  questionMiles,
+  questionYears,
+  valueSource,
+  valueSourceAssumption,
+  valueSources,
+  type StatedValue,
+  type ValueSource,
+  type ValueSourceContext,
+  type ValueSources,
+} from "./value-source.ts";
 export {
   GAP_CONTRACTOR_NO_WINDOW,
   GAP_CONTRACTOR_WINDOW_UNREAD,

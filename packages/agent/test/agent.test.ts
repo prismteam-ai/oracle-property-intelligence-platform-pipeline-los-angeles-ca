@@ -2377,7 +2377,7 @@ const FIXTURE_WINDOW = {
 /** System-prompt lines added since 8fc8821 (each once, as its own line); nothing else of the text changed. */
 const PROMPT_LINES_ADDED_SINCE_8FC8821: readonly string[] = [
   // Area and place (radius and roof age threshold: precedence and sources).
-  '- Radius and roof age threshold: a value in the question wins; then the previous search area, only when the question refers back to it in words; then "Screen values from the request"; then the default. State the radius and the roof age threshold you used and where each came from (the question, the previous area, the screen or the default).',
+  '- Radius and roof age threshold: a value in the question wins; then the previous search area, only when the question refers back to it in words; then "Screen values from the request"; then the default. State the radius and the roof age threshold you used and where each came from as the search result\'s value_sources gives them; a value from the question is never the default.',
   // Answer format (stated counts equal the rows shown).
   "- When you say how many permits or records you show from a list (either long-open list included), that number must equal the rows you list from it; never restate a tool's returned count for rows you leave out. How many match in all may still be stated.",
 ];

@@ -39,6 +39,11 @@ import {
   unavailableIn,
 } from "./http-data.ts";
 import { contractorWindow } from "./contractor-coverage.ts";
+import {
+  searchValuesOf,
+  valueSources,
+  type ValueSourceContext,
+} from "./value-source.ts";
 import { basisWord, type DataQueries, type SourceList } from "./permit-api.ts";
 import {
   haversineMiles,
@@ -1989,11 +1994,16 @@ const shortMessage = (err: unknown): string => {
   return line.length > 200 ? `${line.slice(0, 197)}...` : line;
 };
 
-/** Run one tool by name on raw (model or MCP) input. Never throws. */
+/**
+ * Run one tool by name on raw (model or MCP) input. Never throws. With the request's context (the agent's calls; an
+ * MCP call has none), a search_aged_roofs or long_open_permits result also states where its radius and roof age
+ * threshold came from (`value_sources`, value-source.ts).
+ */
 export async function runTool(
   name: string,
   rawInput: unknown,
   queries: DataQueries,
+  context?: ValueSourceContext,
 ): Promise<ToolOutcome> {
   const fail = (error: string, gaps: string[] = []): ToolOutcome => ({
     name,
@@ -2023,7 +2033,19 @@ export async function runTool(
     const p: Produced = await (
       run[tool] as (q: DataQueries, input: unknown) => Promise<Produced>
     )(queries, parsed.data);
-    const guarded = dropDescriptions(p.content);
+    const input = parsed.data as Record<string, unknown>;
+    const values =
+      context && typeof input.lat === "number" && typeof input.lon === "number"
+        ? searchValuesOf(tool, input, input.lat, input.lon)
+        : null;
+    const guarded = dropDescriptions(
+      values
+        ? {
+            ...(p.content as Record<string, unknown>),
+            value_sources: valueSources(context!, values),
+          }
+        : p.content,
+    );
     return {
       name,
       ok: true,

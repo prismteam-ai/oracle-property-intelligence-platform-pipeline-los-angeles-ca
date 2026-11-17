@@ -12,6 +12,7 @@
       },
       "gaps": [],
       "refused": false,
+      "value_sources": { "radius": "question", "threshold": "question" },
       "place": { "outcome": "resolved", "name": "Van Nuys" }
     }
   },
@@ -52,6 +53,7 @@
       "gaps": [],
       "refused": false,
       "stated_counts": true,
+      "value_sources": { "radius": "question" },
       "place": { "outcome": "resolved", "name": "Van Nuys" }
     }
   },
@@ -68,6 +70,7 @@
       },
       "gaps": [],
       "refused": false,
+      "value_sources": { "radius": "question", "threshold": "question" },
       "place": { "outcome": "resolved", "name": "Van Nuys" }
     }
   },
@@ -84,6 +87,7 @@
       },
       "gaps": ["outside_city_of_la"],
       "refused": false,
+      "value_sources": { "radius": "question", "threshold": "question" },
       "place": {
         "outcome": "resolved",
         "name": "Pasadena",
@@ -105,6 +109,7 @@
       "gaps": ["outside_city_of_la"],
       "refused": false,
       "stated_counts": true,
+      "value_sources": { "radius": "question" },
       "place": {
         "outcome": "resolved",
         "name": "Pasadena",
@@ -162,6 +167,7 @@
       "gaps": ["bbb"],
       "refused": false,
       "stated_counts": true,
+      "value_sources": { "radius": "question" },
       "place": { "outcome": "resolved", "name": "Van Nuys" }
     }
   },
@@ -254,6 +260,7 @@
       "gaps": [],
       "refused": false,
       "ownership": true,
+      "value_sources": { "radius": "question" },
       "place": { "outcome": "resolved", "name": "Van Nuys" }
     }
   },
@@ -287,6 +294,7 @@
       },
       "gaps": [],
       "refused": false,
+      "value_sources": { "radius": "question", "threshold": "question" },
       "place": { "outcome": "resolved", "name": "Van Nuys" }
     }
   },
@@ -376,6 +384,50 @@
       "refused": true,
       "refusal": "people_guard",
       "place": { "outcome": "none" }
+    }
+  },
+  {
+    "id": "s1-crm-radius-from-question",
+    "case": "s",
+    "group": "s1-crm-radius-from-question",
+    "note": "The CRM's request (the q1 map pin) with the screen's radius 1 mi and roof age threshold 15 years, and a question that names both (three miles, 20 years): the question's values win over the screen's, and the search result's value_sources says question for each (check value_sources). No resolve_place.",
+    "question": "Which properties within three miles of here have roofs older than 20 years?",
+    "request": {
+      "center": { "lat": 34.20008, "lon": -118.48111, "label": "map pin" },
+      "screen": { "radius_miles": 1, "threshold_years": 15 }
+    },
+    "expected": {
+      "tools": ["search_aged_roofs"],
+      "forbidden_tools": ["resolve_place"],
+      "tool_inputs": {
+        "search_aged_roofs": { "radius_miles": 3, "threshold_years": 20 }
+      },
+      "gaps": [],
+      "refused": false,
+      "value_sources": { "radius": "question", "threshold": "question" },
+      "place": { "outcome": "request_center" }
+    }
+  },
+  {
+    "id": "s2-crm-radius-from-screen",
+    "case": "s",
+    "group": "s2-crm-radius-from-screen",
+    "note": "The CRM's request (the q1 map pin) with the screen's radius 2 mi (not the default 5) and roof age threshold 20 years, and a question that gives neither: both from the screen, as the search result's value_sources says (check value_sources). No resolve_place.",
+    "question": "Which properties around this pin have old roofs?",
+    "request": {
+      "center": { "lat": 34.20008, "lon": -118.48111, "label": "map pin" },
+      "screen": { "radius_miles": 2, "threshold_years": 20 }
+    },
+    "expected": {
+      "tools": ["search_aged_roofs"],
+      "forbidden_tools": ["resolve_place"],
+      "tool_inputs": {
+        "search_aged_roofs": { "radius_miles": 2, "threshold_years": 20 }
+      },
+      "gaps": [],
+      "refused": false,
+      "value_sources": { "radius": "screen", "threshold": "screen" },
+      "place": { "outcome": "request_center" }
     }
   }
 ]
