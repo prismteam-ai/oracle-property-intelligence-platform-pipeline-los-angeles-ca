@@ -17,7 +17,7 @@
     "page_size": 1000,
     "min_request_interval_ms": 2000,
     "terms_of_use": "https://egis-lacounty.hub.arcgis.com/pages/terms-of-use",
-    "license": "LA County eGIS Hub terms of use, License section: \"you are granted a license to copy, publish, distribute and/or transmit the Data, to adapt the Data and to exploit the Data for commercial and/or personal use\"; it gives no right to use the data \"in any way that suggests County's endorsement of your use\". Not an open licence: the item page shows \"Custom License\"",
+    "license": "LA County eGIS Hub terms of use, License section: \"you are granted a license to copy, publish, distribute and/or transmit the Data, to adapt the Data and to exploit the Data for commercial and/or personal use\"; it gives no right to use the data \"in any way that suggests County's endorsement of your use\". Not an open license: the item page shows \"Custom License\"",
     "attribution": "County of Los Angeles; none required: the eGIS Hub terms recommend a citation, and the item page reads \"Acknowledgments: No source acknowledged.\""
   },
   "permit_sources": {

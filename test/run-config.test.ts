@@ -10,6 +10,7 @@ import {
   referenceDateOf,
   RUN_ID_PATTERN,
   RUN_ID_PLACEHOLDER,
+  rollPublicationLimitation,
   rollSourceTerms,
   runIdOf,
   runTimeFromCaches,
@@ -200,6 +201,25 @@ test("the permits config gives the roll's eGIS Hub terms, license and attributio
   const src = readFileSync("src/build-outputs.ts", "utf8");
   expect(src).toMatch(/const rollTerms = rollSourceTerms\(cfg\.source\)/);
   expect(src).not.toMatch(/terms_of_use: "https:\/\/egis-lacounty/);
+});
+
+test("the publication limitation carries the config's terms address", () => {
+  const { source } = loadRunConfig("config/la-county-permits-run.json");
+  const sentence = rollPublicationLimitation(rollSourceTerms(source));
+  expect(sentence).toBe(
+    `Publication: County roll data in this run may be republished under the LA County eGIS Hub terms of use (${source.terms_of_use}), quoted in this manifest's roll license, which grant a license to copy, publish and distribute the data. A roll-only extract of parcel rows is eligible for publication to IPFS, together with summaries of the run that hold no records.`,
+  );
+  expect(sentence).toContain(
+    "(https://egis-lacounty.hub.arcgis.com/pages/terms-of-use)",
+  );
+  // Another address in the config is the address in the sentence.
+  expect(
+    rollPublicationLimitation({ terms_of_use: "https://example.test/terms" }),
+  ).toContain("terms of use (https://example.test/terms), quoted");
+  // The build writes it from the validated roll terms, with no sentence of its own.
+  const src = readFileSync("src/build-outputs.ts", "utf8");
+  expect(src).toMatch(/rollPublicationLimitation\(rollTerms\)/);
+  expect(src).not.toMatch(/"Publication: /);
 });
 
 test.each(["terms_of_use", "license", "attribution"] as const)(

@@ -67,6 +67,16 @@ export function rollSourceTerms(
   };
 }
 
+/**
+ * The run manifest's publication limitation. The terms address is the roll source's terms_of_use
+ * as the run config records it (validated by rollSourceTerms), never a literal of the build.
+ */
+export function rollPublicationLimitation(
+  terms: Pick<RunConfig["source"], "terms_of_use">,
+): string {
+  return `Publication: County roll data in this run may be republished under the LA County eGIS Hub terms of use (${terms.terms_of_use}), quoted in this manifest's roll license, which grant a license to copy, publish and distribute the data. A roll-only extract of parcel rows is eligible for publication to IPFS, together with summaries of the run that hold no records.`;
+}
+
 /** The jurisdiction value of a county-wide run: every jurisdiction, no ZIP filter. */
 export const ALL_JURISDICTIONS = "all";
 
