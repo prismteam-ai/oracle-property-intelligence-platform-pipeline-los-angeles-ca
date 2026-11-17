@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   expect,
   request,
@@ -14,6 +15,7 @@ import type {
   Sources,
 } from "@oracle-la/api-client";
 import { TOOL_NAMES } from "../../../packages/agent/src/tools.ts";
+import { gatewayUrl, parsePublications } from "../../../src/publications.ts";
 import type { AnswerResponse } from "../src/agent-api.ts";
 import { dateOnly } from "../src/dates.ts";
 import { EXAMPLE } from "../src/mcp-tools.ts";
@@ -303,7 +305,37 @@ test.describe("with credentials", () => {
     const linksCol = headers.indexOf("Permit-to-parcel links");
     expect(permitsCol).toBeGreaterThan(-1);
     expect(linksCol).toBeGreaterThan(-1);
-    expect(headers.at(-1)).toBe("Published");
+    expect(headers.at(-1)).toBe("Published (identifier)");
+    // The last column: the run's line in runs/publications.jsonl (bundled at build from this checkout's file):
+    // folder CID, date and its ipfs.io link; "not published" without one. The API's published flag is not shown.
+    const publications = parsePublications(
+      readFileSync(
+        new URL("../../../runs/publications.jsonl", import.meta.url),
+        "utf8",
+      ),
+    );
+    expect(
+      await historyRows.evaluateAll((trs) =>
+        trs.map((tr) => {
+          const td = tr.querySelectorAll("td");
+          const cell = td[td.length - 1]!;
+          return [
+            cell.textContent,
+            [...cell.querySelectorAll("a")].map((a) => a.getAttribute("href")),
+          ];
+        }),
+      ),
+    ).toEqual(
+      (summary.history as Array<{ run_id: string }>).map((h) => {
+        const p = publications.find((x) => x.run_id === h.run_id);
+        return p
+          ? [
+              `${p.folder_cid} · ${p.published_at.slice(0, 10)} · ipfs.io`,
+              [gatewayUrl(p.folder_cid)],
+            ]
+          : ["not published", []];
+      }),
+    );
     expect(
       await historyRows.evaluateAll(
         (trs, [p, l]) =>

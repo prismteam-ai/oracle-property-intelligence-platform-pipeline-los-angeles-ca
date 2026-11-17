@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
+import { parsePublications } from "../../src/publications.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -33,6 +34,8 @@ export const EXPLORER_SOURCE_PATHS = [
   "packages/views/src/place-index.ts",
   "packages/views/src/sql.ts",
   "pnpm-lock.yaml",
+  "runs/publications.jsonl",
+  "src/publications.ts",
 ] as const;
 
 /**
@@ -93,8 +96,25 @@ function sourcePathsCover(): Plugin {
   };
 }
 
+/** Fails the build when runs/publications.jsonl (bundled into the run history) has a malformed line. */
+function publicationsWellFormed(repoRoot: string = REPO_ROOT): Plugin {
+  return {
+    name: "explorer-publications-well-formed",
+    apply: "build",
+    buildStart() {
+      try {
+        parsePublications(
+          readFileSync(`${repoRoot}runs/publications.jsonl`, "utf8"),
+        );
+      } catch (err) {
+        this.error((err as Error).message);
+      }
+    },
+  };
+}
+
 export default defineConfig(({ command }) => ({
-  plugins: [react(), sourcePathsCover()],
+  plugins: [react(), sourcePathsCover(), publicationsWellFormed()],
   build: { target: "es2022" },
   define: {
     // The Explorer's own commit, shown on the page (src/commit.ts EXPLORER_COMMIT); computed at build only.

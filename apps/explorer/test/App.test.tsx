@@ -28,6 +28,13 @@ const h = vi.hoisted(() => ({
   longOpen: vi.fn(),
   forParcel: vi.fn(),
   detail: vi.fn(),
+  /** runs/publications.jsonl as bundled (empty, as tracked, unless a test records a line). */
+  publications: [] as Publication[],
+}));
+vi.mock("../src/publications.ts", () => ({
+  get PUBLICATIONS() {
+    return h.publications;
+  },
 }));
 vi.mock("../src/config.ts", () => ({
   loadConfig: vi.fn(async () => ({
@@ -56,6 +63,7 @@ vi.mock("@oracle-la/api-client", () => ({
     }),
 }));
 
+import type { Publication } from "../../../src/publications.ts";
 import { App } from "../src/App.tsx";
 import { seekFor, seekText } from "../src/Records.tsx";
 
@@ -1576,12 +1584,13 @@ describe("Explorer sources, records and long-open permits", () => {
     }
   });
 
-  test("the run history shows each row's permits and permit-to-parcel links (en-US, empty where the row has none); Published unchanged", async () => {
+  test("the run history shows each row's permits and permit-to-parcel links (en-US, empty where the row has none); with runs/publications.jsonl empty, every run reads not published, whatever the API's published flag", async () => {
+    h.publications = [];
     const base = permitRun({
       parquet: 4,
       permits: { parquet: { permits: 296909, permit_parcels: 607702 } },
     });
-    // Published as recorded: false on the first run, missing on the second, true on the third.
+    // The data API's published flag (false, missing, true) is not shown.
     const published = [false, undefined, true];
     h.runSummary.mockReset().mockResolvedValue({
       ...base,
@@ -1604,7 +1613,7 @@ describe("Explorer sources, records and long-open permits", () => {
       "Permits",
       "Permit-to-parcel links",
       "Parquet sha256",
-      "Published",
+      "Published (identifier)",
     ]);
     expect(tbodyText("run-history").map((r) => [r[0], r[6], r[7]])).toEqual([
       ["r0", "", ""],
@@ -1612,10 +1621,50 @@ describe("Explorer sources, records and long-open permits", () => {
       ["r2", "297,169", "608,168"],
     ]);
     expect(tbodyText("run-history").map((r) => r[9])).toEqual([
-      "false",
-      "undefined",
-      "true",
+      "not published",
+      "not published",
+      "not published",
     ]);
+    expect(table.querySelectorAll("tbody a")).toHaveLength(0);
+  });
+
+  test("a run with a line in runs/publications.jsonl shows its folder CID, the date and a link to the folder on ipfs.io", async () => {
+    const FOLDER =
+      "bafybeicphj6b27ssldxbw3idwtgikzocr2xn64xlotukmmhmfjji4rrlpu";
+    const CAR = "bafkreigqi7vtxtejkcf7y4vgba3lckqusywxy36nogl5o5sktnt52tlyfm";
+    h.publications = [
+      {
+        run_id: "r1",
+        folder_cid: FOLDER,
+        car_cid: CAR,
+        published_at: "2026-11-18T09:30:00.000Z",
+      },
+    ];
+    try {
+      h.runSummary.mockReset().mockResolvedValue(
+        permitRun({
+          parquet: 4,
+          permits: { parquet: { permits: 1, permit_parcels: 2 } },
+        }),
+      );
+      render(<App />);
+      await screen.findByTestId("run-history");
+      expect(tbodyText("run-history").map((r) => [r[0], r[9]])).toEqual([
+        ["r0", "not published"],
+        ["r1", `${FOLDER} · 2026-11-18 · ipfs.io`],
+        ["r2", "not published"],
+      ]);
+      const links = [
+        ...screen.getByTestId("run-history").querySelectorAll("tbody a"),
+      ];
+      expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual(
+        [["ipfs.io", `https://ipfs.io/ipfs/${FOLDER}/`]],
+      );
+      // The CAR's CID is recorded, not shown.
+      expect(document.body.textContent).not.toContain(CAR);
+    } finally {
+      h.publications = [];
+    }
   });
 });
 

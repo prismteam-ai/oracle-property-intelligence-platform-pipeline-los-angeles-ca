@@ -1,4 +1,6 @@
 import type { ApiClient, RunRelation } from "@oracle-la/api-client";
+import { gatewayUrl } from "../../../src/publications.ts";
+import { PUBLICATIONS } from "./publications.ts";
 import { coverageText, type LoadSources } from "./sources.ts";
 import { useQuery } from "./useQuery.ts";
 
@@ -72,7 +74,6 @@ interface HistoryView extends Partial<RunRelation> {
   };
   delta?: { added?: number; removed?: number };
   parquet_sha256?: string;
-  published?: boolean;
 }
 
 /** "net +260 (296,909 → 297,169)": a count's change from the previous run to this one. */
@@ -233,7 +234,7 @@ export function RunSummary({
             <th>Permits</th>
             <th>Permit-to-parcel links</th>
             <th>Parquet sha256</th>
-            <th>Published</th>
+            <th>Published (identifier)</th>
           </tr>
         </thead>
         <tbody>
@@ -252,12 +253,30 @@ export function RunSummary({
                 {countCell(h.row_counts?.permits?.parquet?.permit_parcels)}
               </td>
               <td className="mono">{h.parquet_sha256}</td>
-              <td>{String(h.published)}</td>
+              <td data-testid="history-published">
+                <PublishedCell runId={h.run_id} />
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
     </section>
+  );
+}
+
+/**
+ * A run's publication as runs/publications.jsonl records it (bundled at build): the publish folder's CID, the
+ * date and a link to the folder on one public gateway; "not published" for a run with no line.
+ */
+function PublishedCell({ runId }: { runId: string }) {
+  const p = PUBLICATIONS.find((x) => x.run_id === runId);
+  if (!p) return <>not published</>;
+  return (
+    <>
+      <span className="mono">{p.folder_cid}</span> ·{" "}
+      {p.published_at.slice(0, 10)} ·{" "}
+      <a href={gatewayUrl(p.folder_cid)}>ipfs.io</a>
+    </>
   );
 }
 
