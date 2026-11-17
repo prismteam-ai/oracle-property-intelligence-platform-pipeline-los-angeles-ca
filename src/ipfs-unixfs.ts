@@ -34,7 +34,7 @@ export const UNIXFS_PARAMS = {
     "dag-pb UnixFS directory, entries sorted by name, not sharded (ipfs-car shards above 1000 entries)",
   profile:
     "files: IPIP-0499 unixfs-v1-2025 (https://specs.ipfs.tech/ipips/ipip-0499/)",
-  car: "CARv1, header roots = [directory CID], blocks in encoder order (leaves first, root last)",
+  car: "CARv1, header roots = [the directory CID, or the file CID for a single file], blocks in encoder order (leaves first, root last)",
 } as const;
 
 export type Digest = { size: number; sha256: string };
@@ -45,6 +45,15 @@ export type DirectoryCar = {
   car: Uint8Array;
   car_sha256: string;
 };
+export type FileCar = DirectoryCar;
+/** The CID's codec: raw (0x55) for a file of one chunk, dag-pb (0x70) for a chunked file or a directory. */
+export type Codec = "raw" | "dag-pb";
+
+function codecName(code: number): Codec {
+  if (code === 0x55) return "raw";
+  if (code === 0x70) return "dag-pb";
+  throw new Error(`unexpected CID codec 0x${code.toString(16)}`);
+}
 
 /** Consumes an encoder stream and returns its last block (the root, in ipfs-car's block order). */
 async function lastBlock(stream: ReadableStream<Block>): Promise<Block> {
@@ -66,6 +75,16 @@ export async function fileCid(blob: BlobLike): Promise<string> {
 
 export function bytesCid(bytes: Uint8Array): Promise<string> {
   return fileCid(new Blob([new Uint8Array(bytes)]));
+}
+
+/** CID and codec of one file's bytes. */
+export async function bytesCidCodec(
+  bytes: Uint8Array,
+): Promise<{ cid: string; codec: Codec }> {
+  const { cid } = await lastBlock(
+    createFileEncoderStream(new Blob([new Uint8Array(bytes)])),
+  );
+  return { cid: cid.toString(), codec: codecName(cid.code) };
 }
 
 export function sha256Hex(bytes: Uint8Array): string {
@@ -125,6 +144,25 @@ export async function directoryCar(
     );
   if (encoder.finalBlock?.cid.toString() !== root.toString())
     throw new Error("the CAR's last block is not the directory root");
+  const car = new Uint8Array(Buffer.concat(parts));
+  return { root: root.toString(), car, car_sha256: sha256Hex(car) };
+}
+
+/**
+ * A CAR of one file, with the file's CID as its only root, so importing the CAR keeps that CID exactly.
+ * Two passes, as for a directory.
+ */
+export async function fileCar(blob: BlobLike): Promise<FileCar> {
+  const root = (await lastBlock(createFileEncoderStream(blob))).cid;
+  const parts: Uint8Array[] = [];
+  const encoder = new CAREncoderStream([root]);
+  await createFileEncoderStream(blob)
+    .pipeThrough(encoder)
+    .pipeTo(
+      new WritableStream({ write: (p: Uint8Array) => void parts.push(p) }),
+    );
+  if (encoder.finalBlock?.cid.toString() !== root.toString())
+    throw new Error("the CAR's last block is not the file's root");
   const car = new Uint8Array(Buffer.concat(parts));
   return { root: root.toString(), car, car_sha256: sha256Hex(car) };
 }

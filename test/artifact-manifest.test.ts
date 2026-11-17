@@ -346,7 +346,10 @@ describe("build-ipfs-artifacts CLI", () => {
 
   test("writes the four publishable files, the CAR and directory.json; leaves the source untouched; is deterministic", () => {
     const before = tree(root);
-    expect(cli()).toMatch(/guard passes; scan hits 0/);
+    // The publish guard now takes only coverage.json and the artifact manifest, never a run manifest.
+    expect(cli()).toMatch(
+      /guard REFUSES \(\(directory\): files must be exactly artifact-manifest\.json, coverage\.json; .*run_manifest\.json: a run manifest is never published.*\); scan hits 0/,
+    );
     const first = tree(outDir);
     expect(tree(root)).toEqual(before);
     expect(readdirSync(join(outDir, RUN, "publish")).sort()).toEqual(
@@ -358,7 +361,7 @@ describe("build-ipfs-artifacts CLI", () => {
     const dirJson = JSON.parse(
       readFileSync(join(outDir, RUN, "directory.json"), "utf8"),
     );
-    expect(dirJson.publish_guard).toEqual({ passes: true, refusals: [] });
+    expect(dirJson.publish_guard.passes).toBe(false);
     expect(dirJson.car.sha256).toBe(
       sha256Hex(
         new Uint8Array(readFileSync(join(outDir, RUN, "directory.car"))),
