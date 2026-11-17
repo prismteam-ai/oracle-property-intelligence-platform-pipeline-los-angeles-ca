@@ -1,186 +1,224 @@
 /**
- * coverage.json and schema.json of a run's publishable directory. Both are pure functions of the
- * recorded run manifest and the Parquet column lists: no build time, no paths, so rebuilding gives the
- * same bytes and the same CID.
+ * coverage.json of a run's publish folder: a pure function of the recorded run manifest, the run config
+ * and the permits Parquet's row count. No build time, no path, no row: rebuilding gives the same bytes
+ * and the same CID.
  *
- * coverage.json holds counts only (the run manifest's row_counts, coverage, permits and delta), the
- * sources with their terms and attribution, and the run's limitations as recorded. No request URL list,
- * no file path, no row.
+ * It holds only, in this key order:
+ *   run_id, generated_at        the run manifest's own values
+ *   run_kind, rebuild_of        exactly as the run manifest records them (null stays null)
+ *   county, roll_year           the run manifest's values
+ *   parcels                     { total, with_coordinates, with_year_built }: the manifest's
+ *                               row_counts.parquet, coverage.with_coordinates, coverage.with_year_built
+ *   permits                     the permits Parquet's row count
+ *   sources                     the County Assessor roll, then the City of Los Angeles building permits,
+ *                               each { name, download_finished_at, pages_sha256 }; the roll's entry also
+ *                               terms_of_use, the address as the run config records it
+ *
+ * download_finished_at: the generated_at of the download's own summary as the run manifest records it
+ * (roll: cache.summary.generated_at; permits: permit_caches.permits.generated_at). Each download tool
+ * writes it after its last page; it is checked to be no earlier than the last recorded page time.
+ *
+ * pages_sha256: SHA-256 over the digests of the source's downloaded pages as the run manifest records
+ * them, in recorded order (roll: cache.pages[].body_sha256; permits: permit_caches.permits.pages[]
+ * .json_sha256, the digest of each response body as downloaded). Byte form: each digest as 64 lowercase
+ * hex characters followed by one line feed (0x0a), concatenated in recorded order, ASCII; e.g. two pages
+ * hash the 130 bytes "<digest 1>\n<digest 2>\n".
+ *
+ * A value missing from the recorded files, or recorded files that disagree, stop the build with an
+ * error naming it; nothing is filled in.
  */
+import { createHash } from "node:crypto";
+import type { RunConfig } from "./run-config.ts";
 
-type Source = {
-  name?: string;
-  role?: string;
-  hub_page?: string;
-  datasets?: string[];
-  terms_of_use?: string;
-  license?: string;
-  attribution?: string;
+type RecordedSource = {
+  name?: unknown;
+  datasets?: unknown;
+  terms_of_use?: unknown;
 };
+type RecordedPage = Record<string, unknown>;
 
+/** The parts of a recorded run manifest that coverage.json reads. */
 export type RunManifestLike = {
   run_id: string;
-  run_name?: string;
-  county?: string;
-  state?: string;
-  fips?: string;
-  roll_year?: string;
-  scope?: Record<string, unknown>;
-  sources?: Source[];
-  row_counts?: unknown;
-  coverage?: unknown;
-  permits?: unknown;
-  delta?: unknown;
-  derived_field_reference_date?: string;
-  limitations?: string[];
-  permit_caches?: { contractors?: { exact_duplicate_rows?: number } };
-};
-
-const COUNTY_ATTRIBUTION =
-  "Los Angeles County Office of the Assessor, Assessor Parcel Data Roll 2026 (LA County eGIS hub)";
-
-function attributionFor(
-  s: Source,
-  m: RunManifestLike,
-): Record<string, unknown> {
-  const isCounty = !s.datasets;
-  const contractorView = s.datasets?.includes("8guu-8f5m") ?? false;
-  const out: Record<string, unknown> = {
-    source: s.name ?? null,
-    attribution: s.attribution ?? (isCounty ? COUNTY_ATTRIBUTION : null),
-    terms_of_use: s.terms_of_use ?? null,
-    license:
-      s.license ??
-      (isCounty
-        ? "none stated; the terms describe the data as for informational purposes, and republication rights are unverified (docs/los-angeles-county-findings.md, section 7)"
-        : null),
+  generated_at?: unknown;
+  run_kind?: unknown;
+  rebuild_of?: unknown;
+  county?: unknown;
+  roll_year?: unknown;
+  sources?: RecordedSource[];
+  cache?: { summary?: { generated_at?: unknown }; pages?: RecordedPage[] };
+  permit_caches?: {
+    permits?: { generated_at?: unknown; pages?: RecordedPage[] };
   };
-  if (s.datasets) out.datasets = s.datasets;
-  if (s.hub_page) out.hub_page = s.hub_page;
-  if (contractorView) {
-    const dups = m.permit_caches?.contractors?.exact_duplicate_rows;
-    out.changes_made =
-      "This file holds counts only, no rows. The counts are taken after the build's changes: " +
-      (typeof dups === "number"
-        ? `${dups} exact duplicate rows dropped; `
-        : "") +
-      "license classes normalized to the CSLB form (unknown values counted as unmapped).";
-  }
-  return out;
-}
-
-export function buildCoverage(m: RunManifestLike, runManifestSha256: string) {
-  const out: Record<string, unknown> = {
-    coverage_version: 1,
-    run_id: m.run_id,
-    run_name: m.run_name ?? null,
-    county: m.county ?? null,
-    state: m.state ?? null,
-    fips: m.fips ?? null,
-    roll_year: m.roll_year ?? null,
-    content:
-      "counts only: no rows, no addresses, no person or business names, no file paths",
-    scope: m.scope ?? null,
-    derived_field_reference_date: m.derived_field_reference_date ?? null,
-    row_counts: m.row_counts ?? null,
-    coverage: m.coverage ?? null,
-  };
-  if (m.permits !== undefined) out.permits = m.permits;
-  out.delta = m.delta ?? null;
-  out.attribution = (m.sources ?? []).map((s) => attributionFor(s, m));
-  out.limitations = m.limitations ?? [];
-  out.run_manifest_sha256 = runManifestSha256;
-  return out;
-}
-
-/**
- * Lexicon labels, from docs/los-angeles-county-findings.md section 12 (bundled kit catalog,
- * use-neutral-lexicon model-c; not the live Elephant lexicon).
- */
-const PROPERTY_LEXICON = new Set([
-  "parcel_identifier",
-  "property_structure_built_year",
-  "property_effective_built_year",
-  "unnormalized_address",
-  "street_number",
-  "street_pre_directional_text",
-  "street_name",
-  "unit_identifier",
-  "city_name",
-  "postal_code",
-  "plus_four_postal_code",
-  "county_name",
-  "state_code",
-  "latitude",
-  "longitude",
-]);
-const TABLE_LEXICON: Record<string, Set<string>> = {
-  property: PROPERTY_LEXICON,
-  permit: new Set([
-    "permit_number",
-    "application_received_date",
-    "permit_issue_date",
-    "unnormalized_address",
-    "postal_code",
-  ]),
-  permit_parcel: new Set(["permit_number", "parcel_identifier"]),
-  permit_contractor: new Set([
-    "permit_number",
-    "permit_issue_date",
-    "license_identifier",
-    "license_expiration_date",
-    "city_name",
-    "state_code",
-    "is_owner_builder",
-  ]),
-};
-/** Used by the Oracle runtime, absent from the bundled catalog (docs/los-angeles-county-findings.md section 12, "Not verified"). */
-const NOT_VERIFIED = new Set(["request_identifier", "source_http_request"]);
-
-export function tableKind(fileName: string): keyof typeof TABLE_LEXICON {
-  if (fileName.includes("permit_contractors")) return "permit_contractor";
-  if (fileName.includes("permit_parcels")) return "permit_parcel";
-  if (fileName.includes("ladbs_permits")) return "permit";
-  if (fileName.includes("property_roll")) return "property";
-  throw new Error(`unknown table file: ${fileName}`);
-}
-
-export type ParquetTable = {
-  file: string;
-  columns: { name: string; type: string }[];
+  row_counts?: { parquet?: unknown };
+  coverage?: { with_coordinates?: unknown; with_year_built?: unknown };
 };
 
-export function buildSchema(runId: string, tables: ParquetTable[]) {
+export type CoverageSource = {
+  name: string;
+  download_finished_at: string;
+  pages_sha256: string;
+  terms_of_use?: string;
+};
+
+export type Coverage = {
+  run_id: string;
+  generated_at: string;
+  run_kind: string | null;
+  rebuild_of: string | null;
+  county: string;
+  roll_year: string;
+  parcels: { total: number; with_coordinates: number; with_year_built: number };
+  permits: number;
+  sources: [CoverageSource, CoverageSource];
+};
+
+export class NotRecorded extends Error {}
+
+const HEX64 = /^[0-9a-f]{64}$/;
+const ISO = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,3})?Z$/;
+
+function str(v: unknown, what: string): string {
+  if (typeof v !== "string" || !v)
+    throw new NotRecorded(`${what} is not recorded`);
+  return v;
+}
+function iso(v: unknown, what: string): string {
+  const s = str(v, what);
+  if (!ISO.test(s)) throw new NotRecorded(`${what} is not an ISO time: ${s}`);
+  return s;
+}
+function count(v: unknown, what: string): number {
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0)
+    throw new NotRecorded(`${what} is not recorded as a count`);
+  return v;
+}
+function nullableStr(m: object, key: string): string | null {
+  if (!Object.hasOwn(m, key))
+    throw new NotRecorded(`${key} is not recorded in the run manifest`);
+  const v = (m as Record<string, unknown>)[key];
+  if (v === null || (typeof v === "string" && v)) return v;
+  throw new NotRecorded(`${key} is neither a string nor null`);
+}
+
+/** SHA-256 over the ordered digests, each as lowercase hex plus "\n" (the byte form above). */
+export function pagesSha256(digests: string[]): string {
+  if (!digests.length) throw new NotRecorded("no page digests are recorded");
+  for (const d of digests)
+    if (!HEX64.test(d))
+      throw new NotRecorded(`a page digest is not 64 lowercase hex: ${d}`);
+  return createHash("sha256")
+    .update(digests.map((d) => `${d}\n`).join(""), "ascii")
+    .digest("hex");
+}
+
+function downloadedSource(
+  name: string,
+  finishedAt: unknown,
+  pages: RecordedPage[] | undefined,
+  digestKey: string,
+  timeKey: string,
+  what: string,
+): CoverageSource {
+  const finished = iso(finishedAt, `${what} download summary generated_at`);
+  if (!Array.isArray(pages) || !pages.length)
+    throw new NotRecorded(`${what} pages are not recorded`);
+  const times = pages.map((p, i) =>
+    iso(p[timeKey], `${what} page ${i} ${timeKey}`),
+  );
+  const last = times.reduce((a, b) => (Date.parse(b) > Date.parse(a) ? b : a));
+  if (Date.parse(finished) < Date.parse(last))
+    throw new NotRecorded(
+      `${what} download summary (${finished}) is earlier than its last page (${last})`,
+    );
   return {
-    schema_version: 1,
-    run_id: runId,
-    lexicon_source:
-      "bundled kit catalog (use-neutral-lexicon model-c at kit 71b8341), not the live Elephant lexicon; docs/los-angeles-county-findings.md, section 12",
-    labels: {
-      lexicon: "the column name is a field of the bundled lexicon",
-      "not verified":
-        "used by the Oracle runtime but absent from the bundled catalog",
-      "not lexicon":
-        "a source, provenance, rule or derived column; documented, not a lexicon field",
+    name,
+    download_finished_at: finished,
+    pages_sha256: pagesSha256(
+      pages.map((p, i) => str(p[digestKey], `${what} page ${i} ${digestKey}`)),
+    ),
+  };
+}
+
+export function buildCoverage(
+  m: RunManifestLike,
+  config: RunConfig,
+  permitParquetRows: number,
+): Coverage {
+  const county = str(m.county, "county");
+  const rollYear = str(m.roll_year, "roll_year");
+  if (config.county !== county || config.roll_year !== rollYear)
+    throw new NotRecorded(
+      `the run config (${config.county}, ${config.roll_year}) is not this run's (${county}, ${rollYear})`,
+    );
+  const recorded = (name: string) => {
+    const hits = (m.sources ?? []).filter((s) => s.name === name);
+    if (hits.length !== 1)
+      throw new NotRecorded(
+        `the run manifest records ${hits.length} sources named "${name}"`,
+      );
+    return hits[0];
+  };
+  const rollName = str(config.source?.name, "run config source.name");
+  const rollRecorded = recorded(rollName);
+  const termsOfUse = str(
+    config.source?.terms_of_use,
+    "run config source.terms_of_use",
+  );
+  if (
+    rollRecorded.terms_of_use !== undefined &&
+    rollRecorded.terms_of_use !== termsOfUse
+  )
+    throw new NotRecorded(
+      "the roll's terms_of_use differs between the run config and the run manifest",
+    );
+  const permitsConfig = config.permit_sources?.permits;
+  if (!permitsConfig)
+    throw new NotRecorded("the run config has no permit_sources.permits");
+  const permitsRecorded = recorded(permitsConfig.name);
+  if (
+    JSON.stringify(permitsRecorded.datasets) !==
+    JSON.stringify(permitsConfig.datasets)
+  )
+    throw new NotRecorded(
+      "the permit datasets differ between the run config and the run manifest",
+    );
+
+  const roll = downloadedSource(
+    rollName,
+    m.cache?.summary?.generated_at,
+    m.cache?.pages,
+    "body_sha256",
+    "fetched_at",
+    "roll",
+  );
+  const permits = downloadedSource(
+    permitsConfig.name,
+    m.permit_caches?.permits?.generated_at,
+    m.permit_caches?.permits?.pages,
+    "json_sha256",
+    "retrieved_at",
+    "permits",
+  );
+  return {
+    run_id: str(m.run_id, "run_id"),
+    generated_at: iso(m.generated_at, "generated_at"),
+    run_kind: nullableStr(m, "run_kind"),
+    rebuild_of: nullableStr(m, "rebuild_of"),
+    county,
+    roll_year: rollYear,
+    parcels: {
+      total: count(m.row_counts?.parquet, "row_counts.parquet"),
+      with_coordinates: count(
+        m.coverage?.with_coordinates,
+        "coverage.with_coordinates",
+      ),
+      with_year_built: count(
+        m.coverage?.with_year_built,
+        "coverage.with_year_built",
+      ),
     },
-    tables: [...tables]
-      .sort((a, b) => (a.file < b.file ? -1 : 1))
-      .map((t) => {
-        const kind = tableKind(t.file);
-        return {
-          file: t.file,
-          table: kind,
-          published: false,
-          columns: t.columns.map((c) => ({
-            name: c.name,
-            type: c.type,
-            label: TABLE_LEXICON[kind].has(c.name)
-              ? "lexicon"
-              : NOT_VERIFIED.has(c.name)
-                ? "not verified"
-                : "not lexicon",
-          })),
-        };
-      }),
+    permits: count(permitParquetRows, "the permits Parquet row count"),
+    sources: [{ ...roll, terms_of_use: termsOfUse }, permits],
   };
 }

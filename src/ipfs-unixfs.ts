@@ -4,12 +4,12 @@
  * the manifest, the guard or the tests' expectations.
  *
  * Settings: ipfs-car 3.1.0's defaults (its unixfs.js), which cannot be changed without importing
- * @ipld/unixfs directly. They are recorded in every artifact manifest (UNIXFS_PARAMS) so a third party
+ * @ipld/unixfs directly. They are listed in UNIXFS_PARAMS (and in the publication README) so a third party
  * can rebuild each CID. For files they equal the IPIP-0499 profile "unixfs-v1-2025"
  * (https://specs.ipfs.tech/ipips/ipip-0499/): CIDv1, sha2-256, fixed 1 MiB chunks, balanced layout
  * of width 1024, raw leaves. Directories are plain dag-pb UnixFS directories; ipfs-car shards a
  * directory only above 1,000 entries (IPIP-0499 shards by block size above 256 KiB), which never
- * applies to the four-file publishable directory.
+ * applies to the two-file publish folder.
  *
  * These are UnixFS CIDs of the raw bytes, not lexicon (dag-json) CIDs.
  */

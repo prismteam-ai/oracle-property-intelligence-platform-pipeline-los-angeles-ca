@@ -10,25 +10,24 @@ import {
 // No network: every request goes to an in-memory fake, which fails the test on any unexpected host.
 const bytes = new TextEncoder().encode('{"counts":1}\n');
 const sha = createHash("sha256").update(bytes).digest("hex");
-const manifest = {
-  run_id: "r",
-  files: [
+const manifest: ArtifactManifest = {
+  objects: [
     {
+      cid: "bafkfile",
       name: "coverage.json",
       size: bytes.length,
+      codec: "raw",
       sha256: sha,
-      cid: "bafkfile",
-      published: true,
     },
     {
-      name: "data/out/r/t.parquet",
-      size: 9,
-      sha256: "0",
-      cid: "bafkdata",
-      published: false,
+      cid: "bafyobject",
+      name: "x.parquet",
+      size: bytes.length,
+      codec: "dag-pb",
+      sha256: sha,
     },
   ],
-} as unknown as ArtifactManifest;
+};
 
 function fakeFetch(
   body: (url: string) => Uint8Array | Error,
@@ -44,7 +43,7 @@ function fakeFetch(
   };
 }
 
-test("checks every published file by its CID and through the directory, on both gateways; skips unpublished files", async () => {
+test("checks every object by its CID on both gateways, and the folder's file also through the folder", async () => {
   const seen: string[] = [];
   const res = await verifyOnGateways({
     manifest,
@@ -59,8 +58,10 @@ test("checks every published file by its CID and through the directory, on both 
   expect(seen).toEqual([
     "https://ipfs.io/ipfs/bafkfile",
     "https://ipfs.io/ipfs/bafydir/coverage.json",
+    "https://ipfs.io/ipfs/bafyobject",
     "https://dweb.link/ipfs/bafkfile",
     "https://dweb.link/ipfs/bafydir/coverage.json",
+    "https://dweb.link/ipfs/bafyobject",
     "https://ipfs.io/ipfs/bafydir?format=car",
     "https://dweb.link/ipfs/bafydir?format=car",
   ]);
