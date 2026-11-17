@@ -27,6 +27,7 @@ import {
   type Staged,
   tempFolders,
 } from "./helpers.ts";
+import { HISTORY, MANIFEST, measured, RUN } from "./run-under-test.ts";
 
 const VAN_NUYS = { lat: 34.199, lon: -118.487 };
 const SOURCE = "LA County Assessor - Assessor Parcel Data Roll 2026";
@@ -34,15 +35,16 @@ const PERMIT_SOURCE =
   "LADBS building permits (City of Los Angeles, data.lacity.org)";
 const CONTRACTOR_SOURCE =
   "LADBS roofing permits, contractor view (data.lacity.org 8guu-8f5m)";
-// Parcel and page counts measured on the county run 2026-11-12T01-44-04-047Z (sha256 44dab72e...) with plain
-// SQL on the Parquet columns, without the views or the macro; the permits run has the same roll rows. That
-// check also showed the bounding-box prefilter gives rows identical to a plain haversine scan at 1, 5 and
-// 10 mi and in every other case checked. The roof-age and permit counts below were measured on the permits
-// run 2026-11-12T14-00-51-383Z through the API (and checked against plain SQL on the views where a test says so).
-const ROWS = 2_428_433;
-const PAGES = 2_429;
-const PERMITS = 296_909;
-const CONTRACTOR_ROWS = 113_642;
+// The run under test's counts as its build recorded them (run-under-test.ts). The numbers written below were
+// measured on MEASURED_RUN through the API and checked against plain SQL on the views where a test says so; each is
+// expected only when the run under test has MEASURED_RUN's inputs (measured()), and every test also checks its
+// values against the run itself. Measured on that run: 2,428,433 parcels over 2,429 roll pages, 296,909 permits
+// over 10 pages, 113,642 contractor rows over 3 pages. An earlier check on the county run 2026-11-12T01-44-04-047Z
+// showed the bounding-box prefilter gives rows identical to a plain haversine scan at 1, 5 and 10 mi.
+const ROWS = RUN.rows;
+const PAGES = RUN.rollPages;
+const PERMITS = RUN.permits;
+const CONTRACTOR_ROWS = RUN.contractorRows;
 
 /** REQUIRE_REAL_DATA=1: a missing data/ is a failure, not a skip (for runs that must check the real data). */
 const REQUIRE_REAL_DATA = process.env.REQUIRE_REAL_DATA === "1";
@@ -87,6 +89,16 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     };
     caller = appRouter.createCaller(ctx);
   });
+  /** The roof-age rule's count without the views' macro: a plain haversine scan of v_property around Van Nuys. */
+  const plainCount = async (miles: number, years: number) => {
+    const [r] = await db.rows(
+      `select count(*)::integer n from oracle.v_property
+       where latitude is not null and longitude is not null and effective_roof_year < roll_year - $1
+         and oracle.haversine_miles($2, $3, latitude, longitude) <= $4`,
+      [years, VAN_NUYS.lat, VAN_NUYS.lon, miles],
+    );
+    return Number(r!.n);
+  };
 
   test("meta.info reports the run and a verified sha256", async () => {
     expect(await caller.meta.info()).toMatchObject({
@@ -100,25 +112,36 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     expect(m.permit_files).toEqual(
       PERMIT_FILES.map((f) => ({ role: f.role, sha256: f.sha256 })),
     );
-    expect(m.reference_date).toBe("2026-11-12");
+    expect(m.reference_date).toBe(RUN.referenceDate);
+    expect(RUN.referenceDate).toEqual(measured("2026-11-12"));
   });
-  test("explorer.runSummary: 2,428,433 parcels, roll 2026, history has the run", async () => {
+  test("explorer.runSummary: the run's parcels (2,428,433 measured), roll 2026, history has the run", async () => {
     const s = await caller.explorer.runSummary();
     expect(s.run).toMatchObject({ run_id: RUN_ID, roll_year: "2026" });
     expect((s.run.row_counts as Record<string, number>).parquet).toBe(ROWS);
+    expect(ROWS).toEqual(measured(2_428_433, "roll"));
+    const [n] = await db.rows(
+      "select count(*)::integer n from oracle.v_property",
+    );
+    expect(n).toEqual({ n: ROWS });
     expect(s.history.map((h) => h.run_id)).toContain(RUN_ID);
   });
-  test("explorer.runSummary: permit coverage, 805,901 parcels with permit data", async () => {
+  test("explorer.runSummary: permit coverage as the run records it (805,901 parcels with permit data measured)", async () => {
     const s = await caller.explorer.runSummary();
-    expect(s.run.coverage).toMatchObject({
-      permit_data: {
+    expect(s.run.coverage).toMatchObject({ permit_data: RUN.permitData });
+    expect(RUN.permitData).toEqual(
+      measured({
         parcels_with_permit_data: 805_901,
         parcels_without_permit_data: 1_622_532,
         parcels_with_permits: 279_900,
-      },
-    });
+      }),
+    );
+    expect(
+      RUN.permitData.parcels_with_permit_data +
+        RUN.permitData.parcels_without_permit_data,
+    ).toBe(ROWS);
   });
-  test("explorer.sources: three sources with their page counts (2,429 roll, 10 permit, 3 contractor pages), no page list, under 3,000 bytes", async () => {
+  test("explorer.sources: three sources with the run's page counts (2,429 roll, 10 permit, 3 contractor pages measured), no page list, under 3,000 bytes", async () => {
     const s = await caller.explorer.sources();
     expect(
       s.sources.map((x) => [
@@ -129,9 +152,12 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       ]),
     ).toEqual([
       ["parcel", SOURCE, ROWS, PAGES],
-      ["permit", PERMIT_SOURCE, PERMITS, 10],
-      ["contractor", CONTRACTOR_SOURCE, CONTRACTOR_ROWS, 3],
+      ["permit", PERMIT_SOURCE, PERMITS, RUN.permitPages],
+      ["contractor", CONTRACTOR_SOURCE, CONTRACTOR_ROWS, RUN.contractorPages],
     ]);
+    expect([PAGES, PERMITS, RUN.permitPages, CONTRACTOR_ROWS]).toEqual(
+      measured([2_429, 296_909, 10, 113_642]),
+    );
     expect(s.sources[2]).toMatchObject({
       license: "CC BY 4.0",
       attribution: "LADBS",
@@ -140,14 +166,14 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     // Measured on this run: 2,396 bytes as JSON (with the page list it was about 1.4 MB).
     expect(Buffer.byteLength(JSON.stringify(s))).toBeLessThan(3_000);
   });
-  test("explorer.sourcePages: every page of the three sources (2,429 + 10 + 3), each with request URL, time and sha256; every 100-page response under 64,000 bytes", async () => {
+  test("explorer.sourcePages: every page of the three sources (the run's 2,429 + 10 + 3 measured), each with request URL, time and sha256; every 100-page response under 64,000 bytes", async () => {
     const all: Array<
       Awaited<ReturnType<typeof caller.explorer.sourcePages>>["items"][number]
     > = [];
     for (const [name, n] of [
       [SOURCE, PAGES],
-      [PERMIT_SOURCE, 10],
-      [CONTRACTOR_SOURCE, 3],
+      [PERMIT_SOURCE, RUN.permitPages],
+      [CONTRACTOR_SOURCE, RUN.contractorPages],
     ] as const) {
       let offset: number | null = 0;
       let calls = 0;
@@ -167,10 +193,11 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       }
       expect(calls).toBe(Math.ceil(n / 100));
     }
-    expect(all).toHaveLength(PAGES + 13);
+    const pageCount = PAGES + RUN.permitPages + RUN.contractorPages;
+    expect(all).toHaveLength(pageCount);
     expect(
       new Set(all.map((p) => `${p.source_name}/${p.source_page_file}`)).size,
-    ).toBe(PAGES + 13);
+    ).toBe(pageCount);
     for (const p of all) {
       expect(p.source_request_url).toMatch(
         p.source_kind === "parcel"
@@ -252,78 +279,91 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     });
     expect(b.items[0]!.parcel_id! > a.items.at(-1)!.parcel_id!).toBe(true);
   });
-  test("parcels.search on the effective roof year: 113,632 at 5 mi / 15 y; every item inside the radius; rule text", async () => {
+  test("parcels.search on the effective roof year: the plain scan's count at 5 mi / 15 y (113,632 measured); every item inside the radius; rule text", async () => {
     const r = await caller.parcels.search({
       ...VAN_NUYS,
       radius_miles: 5,
       threshold_years: 15,
       limit: 100,
     });
-    expect(r.count).toBe(113632);
+    expect(r.count).toBe(await plainCount(5, 15));
+    expect(r.count).toEqual(measured(113632));
     expect(r.rule.built_before_year).toBe(2011);
     expect(r.rule.text).toMatch(/PERMIT.*PROXY|PROXY.*PERMIT/s);
     for (const i of r.items) expect(i.effective_roof_year).toBeLessThan(2011);
     expect(
       Math.max(...r.items.map((i) => i.distance_miles)),
     ).toBeLessThanOrEqual(5);
-    expect(
-      (
+    for (const [miles, years, n] of [[1, 15, 4183]] as const) {
+      const count = (
         await caller.parcels.search({
           ...VAN_NUYS,
-          radius_miles: 1,
-          threshold_years: 15,
+          radius_miles: miles,
+          threshold_years: years,
         })
-      ).count,
-    ).toBe(4183);
-    expect(
-      (
+      ).count;
+      expect(count).toBe(await plainCount(miles, years));
+      expect(count).toEqual(measured(n));
+    }
+    for (const [miles, years, n] of [[5, 30, 97350]] as const) {
+      const count = (
         await caller.parcels.search({
           ...VAN_NUYS,
-          radius_miles: 5,
-          threshold_years: 30,
+          radius_miles: miles,
+          threshold_years: years,
         })
-      ).count,
-    ).toBe(97350);
-    expect(
-      (
+      ).count;
+      expect(count).toBe(await plainCount(miles, years));
+      expect(count).toEqual(measured(n));
+    }
+    for (const [miles, years, n] of [[5, 80, 6059]] as const) {
+      const count = (
         await caller.parcels.search({
           ...VAN_NUYS,
-          radius_miles: 5,
-          threshold_years: 80,
+          radius_miles: miles,
+          threshold_years: years,
         })
-      ).count,
-    ).toBe(6059);
+      ).count;
+      expect(count).toBe(await plainCount(miles, years));
+      expect(count).toEqual(measured(n));
+    }
   });
-  test("parcels.points at 1 mi: all 4,183 points, not truncated, well under the response limit", async () => {
+  test("parcels.points at 1 mi: all of the plain scan's points (4,183 measured), not truncated, well under the response limit", async () => {
     const p = await caller.parcels.points({
       ...VAN_NUYS,
       radius_miles: 1,
       threshold_years: 15,
     });
-    expect(p.count).toBe(4183);
-    expect(p.id).toHaveLength(4183);
+    expect(p.count).toBe(await plainCount(1, 15));
+    expect(p.count).toEqual(measured(4183));
+    expect(p.id).toHaveLength(p.count);
     expect(p.truncated).toBe(false);
     const bytes = Buffer.byteLength(JSON.stringify(p));
     expect(bytes).toBeLessThan(MAX_RESPONSE_BYTES / 3);
   });
-  test("parcels.points at 10 mi: count 309,117, the nearest 25,000 points with both 0/1 columns, truncated, under 3,000,000 bytes", async () => {
+  test("parcels.points at 10 mi: the plain scan's count (309,117 measured), the nearest 25,000 points with both 0/1 columns, truncated, under 3,000,000 bytes", async () => {
     metrics.length = 0;
     const p = await caller.parcels.points({
       ...VAN_NUYS,
       radius_miles: 10,
       threshold_years: 15,
     });
-    expect(p.count).toBe(309117);
+    expect(p.count).toBe(await plainCount(10, 15));
+    expect(p.count).toEqual(measured(309117));
     expect(p.id).toHaveLength(MAX_POINTS);
     expect(p.id.length).toBe(25_000);
     expect(p.truncated).toBe(true);
     expect(p.max_points).toBe(MAX_POINTS);
-    // The 25,000th nearest (distance, then parcel ID) is 2259006029, about 2.524 mi away.
-    expect(p.id.at(-1)).toBe("2259006029");
-    // All 25,000 nearest are in the City of Los Angeles; 806 have a long-open roofing permit (default window;
-    // 858 before long-open counted roofing work only).
-    expect(p.permit_data_available.filter((x) => x === 1)).toHaveLength(25_000);
-    expect(p.long_open_permit.filter((x) => x === 1)).toHaveLength(806);
+    // Measured: the 25,000th nearest (distance, then parcel ID) is 2259006029, about 2.524 mi away; all 25,000
+    // nearest are in the City of Los Angeles; 806 have a long-open roofing permit (default window; 858 before
+    // long-open counted roofing work only).
+    expect(p.id.at(-1)).toEqual(measured("2259006029"));
+    expect(p.permit_data_available.filter((x) => x === 1).length).toEqual(
+      measured(25_000),
+    );
+    expect(p.long_open_permit.filter((x) => x === 1).length).toEqual(
+      measured(806),
+    );
     const bytes = Buffer.byteLength(JSON.stringify(p));
     expect(bytes).toBeLessThan(3_000_000);
     expect(metrics).toEqual([["PointsResponseBytes", bytes]]);
@@ -344,7 +384,7 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       );
       expect(r, `${miles} mi`).toEqual({
         n_macro: r!.n_plain,
-        n_plain: { 1: 4183, 5: 113632, 10: 309117 }[miles],
+        n_plain: measured({ 1: 4183, 5: 113632, 10: 309117 }[miles]),
         only_macro: 0,
         only_plain: 0,
       });
@@ -374,42 +414,59 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     });
     expect(all.parcel_ids).toEqual([...far, ...near].sort());
   });
-  test("explorer.runSummary: the rebuild run's kind (a rebuild of 2026-11-12T14-00-51-383Z, no source changes); the three earlier history rows have none", async () => {
+  test("explorer.runSummary: the run's kind as its manifest and history row record it (measured: a rebuild of 2026-11-12T14-00-51-383Z, no source changes); the three first history rows have none", async () => {
     const s = await caller.explorer.runSummary();
-    expect(s.run).toMatchObject({
-      run_id: RUN_ID,
-      run_kind: "rebuild",
-      rebuild_of: "2026-11-12T14-00-51-383Z",
-      source_changes: "none",
-    });
-    expect(
-      s.history.map((h) => [
+    const kind = {
+      run_kind: MANIFEST.run_kind ?? null,
+      rebuild_of: MANIFEST.rebuild_of ?? null,
+      source_changes: MANIFEST.source_changes ?? null,
+    };
+    expect(s.run).toMatchObject({ run_id: RUN_ID, ...kind });
+    expect(kind).toEqual(
+      measured({
+        run_kind: "rebuild",
+        rebuild_of: "2026-11-12T14-00-51-383Z",
+        source_changes: "none",
+      }),
+    );
+    const rows = s.history.map((h) => [
+      h.run_id,
+      h.run_kind,
+      h.rebuild_of,
+      h.source_changes,
+    ]);
+    // Every history row as recorded, the run under test last; the first three are older than run kinds.
+    expect(rows).toEqual(
+      HISTORY.map((h) => [
         h.run_id,
-        h.run_kind,
-        h.rebuild_of,
-        h.source_changes,
+        h.run_kind ?? null,
+        h.rebuild_of ?? null,
+        h.source_changes ?? null,
       ]),
-    ).toEqual([
+    );
+    expect(rows.slice(0, 3)).toEqual([
       ["2026-11-11T16-17-38-928Z", null, null, null],
       ["2026-11-12T01-44-04-047Z", null, null, null],
       ["2026-11-12T14-00-51-383Z", null, null, null],
-      [RUN_ID, "rebuild", "2026-11-12T14-00-51-383Z", "none"],
+    ]);
+    expect(rows.at(-1)).toEqual([
+      RUN_ID,
+      kind.run_kind,
+      kind.rebuild_of,
+      kind.source_changes,
     ]);
   });
-  test("explorer.sources: the contractor source's coverage window 2013-01-02 to 2023-05-19 (min and max of its permit_issue_date); null for the roll and the permits", async () => {
+  test("explorer.sources: the contractor source's coverage window, the min and max of its permit_issue_date (2013-01-02 to 2023-05-19 measured); null for the roll and the permits", async () => {
     const s = await caller.explorer.sources();
-    expect(s.sources.map((x) => [x.source_kind, x.coverage])).toEqual([
-      ["parcel", null],
-      ["permit", null],
-      [
-        "contractor",
-        { field: "permit_issue_date", first: "2013-01-02", last: "2023-05-19" },
-      ],
-    ]);
     const [w] = await db.rows(
       "select min(permit_issue_date) first, max(permit_issue_date) last from oracle.v_permit_contractor",
     );
-    expect(w).toEqual({ first: "2013-01-02", last: "2023-05-19" });
+    expect(s.sources.map((x) => [x.source_kind, x.coverage])).toEqual([
+      ["parcel", null],
+      ["permit", null],
+      ["contractor", { field: "permit_issue_date", ...w }],
+    ]);
+    expect(w).toEqual(measured({ first: "2013-01-02", last: "2023-05-19" }));
   });
   test("ownership at 1 / 5 / 10 mi (15 years): counts per basis, both = the intersection, equal to plain SQL; the basis stated", async () => {
     const want = {
@@ -417,17 +474,9 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       5: { recording: 51586, base_year: 78833, both: 50826 },
       10: { recording: 138731, base_year: 212683, both: 136634 },
     } as const;
+    let both1 = 0;
     for (const miles of [1, 5, 10] as const) {
       const f = { ...VAN_NUYS, radius_miles: miles, threshold_years: 15 };
-      for (const basis of ["recording", "base_year", "both"] as const) {
-        const r = await caller.parcels.search({ ...f, ownership_basis: basis });
-        expect(r.count, `${miles} mi ${basis}`).toBe(want[miles][basis]);
-        expect(r.ownership).toEqual({
-          basis,
-          ...OWNERSHIP_BASIS[basis],
-          proxy_note: OWNERSHIP_PROXY_NOTE,
-        });
-      }
       const [plain] = await db.rows(
         `select count(*) filter (where owner_unchanged_10y_proxy)::integer recording,
            count(*) filter (where ownership_base_year_10y_proxy)::integer base_year,
@@ -437,12 +486,22 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
            and oracle.haversine_miles($1, $2, latitude, longitude) <= $3`,
         [VAN_NUYS.lat, VAN_NUYS.lon, miles],
       );
-      expect(plain, `${miles} mi plain`).toEqual(want[miles]);
+      expect(plain, `${miles} mi plain`).toEqual(measured(want[miles]));
+      for (const basis of ["recording", "base_year", "both"] as const) {
+        const r = await caller.parcels.search({ ...f, ownership_basis: basis });
+        expect(r.count, `${miles} mi ${basis}`).toBe(plain![basis]);
+        expect(r.ownership).toEqual({
+          basis,
+          ...OWNERSHIP_BASIS[basis],
+          proxy_note: OWNERSHIP_PROXY_NOTE,
+        });
+      }
+      if (miles === 1) both1 = Number(plain!.both);
     }
     // At 1 mi (not truncated) points and match keep the search's set for a basis.
     const f = { ...VAN_NUYS, radius_miles: 1, threshold_years: 15 };
     const p = await caller.parcels.points({ ...f, ownership_basis: "both" });
-    expect(p.id).toHaveLength(1935);
+    expect(p.id).toHaveLength(both1);
     const all = await caller.parcels.points(f);
     const ids = all.id.slice(0, MAX_MATCH_IDS);
     const m = await caller.parcels.match({
@@ -452,12 +511,12 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     });
     expect(m.parcel_ids).toEqual(ids.filter((i) => p.id.includes(i)).sort());
   });
-  test("parcels.match with long_open_permit over every parcel of the 1 mi search: 164, the points' long-open marks, with and without the filter", async () => {
+  test("parcels.match with long_open_permit over every parcel of the 1 mi search: the points' long-open marks (164 measured), with and without the filter", async () => {
     const f = { ...VAN_NUYS, radius_miles: 1, threshold_years: 15 };
     const p = await caller.parcels.points(f);
     expect(p.truncated).toBe(false);
     const marked = p.id.filter((_, i) => p.long_open_permit[i] === 1).sort();
-    expect(marked).toHaveLength(164);
+    expect(marked.length).toEqual(measured(164));
     const on: string[] = [];
     const leads: string[] = [];
     for (let i = 0; i < p.id.length; i += MAX_MATCH_IDS) {
@@ -479,37 +538,52 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       );
     }
     expect(on.sort()).toEqual(marked);
-    // These IDs all match the search, so the toggle without the filter gives the same 164.
+    // These IDs all match the search, so the toggle without the filter gives the same parcels.
     expect(leads.sort()).toEqual(marked);
   });
-  test("contractor identity served: 8,240 license numbers over 101,817 of 113,642 rows; 41 licenses without any name have no canonical name; rows without a license have no identity", async () => {
+  test("contractor identity served: one identity per license number (measured: 8,240 over 101,817 of 113,642 rows; 41 without any name have no canonical name); rows without a license have no identity", async () => {
     const [n] = await db.rows(
       `select count(*)::integer rows_, count(contractor_identity_key)::integer keyed,
          count(distinct contractor_identity_key)::integer keys,
          count(distinct contractor_identity_key) filter (where canonical_business_name is null)::integer no_name,
          count(*) filter (where contractor_identity_key is null and (canonical_business_name is not null
-           or name_variant_count is not null or identity_permit_count is not null))::integer unkeyed_with_identity
+           or name_variant_count is not null or identity_permit_count is not null))::integer unkeyed_with_identity,
+         count(license_identifier)::integer licensed,
+         count(distinct license_identifier)::integer licenses
        from oracle.v_permit_contractor`,
     );
+    // One identity per license number: the keyed rows are the rows with a license.
     expect(n).toEqual({
       rows_: CONTRACTOR_ROWS,
-      keyed: 101817,
-      keys: 8240,
-      no_name: 41,
+      keyed: n!.licensed,
+      keys: n!.licenses,
+      no_name: measured(41),
       unkeyed_with_identity: 0,
+      licensed: measured(101817),
+      licenses: measured(8240),
     });
-    // One of the 41 through the records route: the key and counts, and no name.
+    // The first row of a license without any name, through the records route (the cursor is the row before it):
+    // the key and counts, and no name.
+    const [first] = await db.rows(
+      `select permit_number, contractor_row, contractor_identity_key, identity_permit_count,
+         lag(permit_number) over w before_permit, lag(contractor_row) over w before_row
+       from oracle.v_permit_contractor window w as (order by permit_number, contractor_row)
+       qualify contractor_identity_key is not null and canonical_business_name is null
+       order by permit_number, contractor_row limit 1`,
+    );
     const r = await caller.explorer.records({
       source_name: CONTRACTOR_SOURCE,
-      after: "17016-10000-19350:0",
+      ...(first!.before_permit !== null && {
+        after: `${String(first!.before_permit)}:${Number(first!.before_row)}`,
+      }),
       limit: 1,
     });
     expect(r.items[0]).toMatchObject({
-      record_key: "17016-10000-19350:1",
-      contractor_identity_key: "1022563",
+      record_key: `${String(first!.permit_number)}:${Number(first!.contractor_row)}`,
+      contractor_identity_key: first!.contractor_identity_key,
       canonical_business_name: null,
       name_variant_count: 0,
-      identity_permit_count: 1,
+      identity_permit_count: Number(first!.identity_permit_count),
     });
     const [top] = await db.rows(
       "select parcel_id from oracle.v_permit_parcel group by 1 order by count(*) desc, parcel_id limit 1",
@@ -531,9 +605,10 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     expect(await caller.places.resolve({ name: "Van Nuys" })).toMatchObject({
       status: "resolved",
       basis: "postal_city",
-      center: { lat: 34.20155, lon: -118.45361 },
-      parcel_count: 456,
-      raw_values: ["VAN NUYS", "VAN NUYS CALIF", "VAN NUYS,"],
+      // Roll facts: measured on the roll cache of MEASURED_RUN.
+      center: measured({ lat: 34.20155, lon: -118.45361 }, "roll"),
+      parcel_count: measured(456, "roll"),
+      raw_values: measured(["VAN NUYS", "VAN NUYS CALIF", "VAN NUYS,"], "roll"),
       center_reliable: true,
       also_matched: null,
     });
@@ -544,13 +619,18 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     });
   });
   test("parcels.detail returns property and provenance, no personal fields; unknown id is NOT_FOUND", async () => {
-    const d = await caller.parcels.detail({ parcel_id: "2224012045" });
+    // A parcel of the run (2224012045 on MEASURED_RUN's roll).
+    const [one] = await db.rows(
+      "select parcel_id from oracle.v_property order by parcel_id limit 1 offset 1000",
+    );
+    const id = String(one!.parcel_id);
+    const d = await caller.parcels.detail({ parcel_id: id });
     expect(d.property).toMatchObject({
-      parcel_id: "2224012045",
+      parcel_id: id,
       roll_year: 2026,
     });
     expect(d.provenance).toMatchObject({
-      parcel_id: "2224012045",
+      parcel_id: id,
       source_request_method: "GET",
     });
     expect(
@@ -562,18 +642,16 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       caller.parcels.detail({ parcel_id: "0000000000" }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
-  test("permits.longOpen: 112 / 2,409 / 5,614 long-open roofing permits at 1 / 5 / 10 mi (default 1,826 days), equal to plain SQL on the views", async () => {
+  test("permits.longOpen: long-open roofing permits at 1 / 5 / 10 mi (default 1,826 days) equal plain SQL on the views (112 / 2,409 / 5,614 measured)", async () => {
     // Roofing work only: 126 / 2,759 / 6,614 without that condition.
     for (const [miles, n] of [
       [1, 112],
       [5, 2409],
       [10, 5614],
     ] as const) {
-      expect(
-        (await caller.permits.longOpen({ ...VAN_NUYS, radius_miles: miles }))
-          .count,
-        `${miles} mi`,
-      ).toBe(n);
+      const count = (
+        await caller.permits.longOpen({ ...VAN_NUYS, radius_miles: miles })
+      ).count;
       // Without the macro: distinct open-issued roofing-work permits of at least 1,826 days with a linked
       // parcel inside.
       const [r] = await db.rows(
@@ -585,10 +663,11 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
            and oracle.haversine_miles($1, $2, v.latitude, v.longitude) <= $3`,
         [VAN_NUYS.lat, VAN_NUYS.lon, miles],
       );
-      expect(r, `${miles} mi plain`).toEqual({ n });
+      expect(r, `${miles} mi plain`).toEqual({ n: measured(n) });
+      expect(count, `${miles} mi`).toBe(r!.n);
     }
   });
-  test("permits.longOpen at 10 mi: each permit once (388 building-level), sorted, max and threshold, first page under 3,000,000 bytes", async () => {
+  test("permits.longOpen at 10 mi: each permit once (388 building-level measured), sorted, max and threshold, first page under 3,000,000 bytes", async () => {
     const r = await caller.permits.longOpen({
       ...VAN_NUYS,
       radius_miles: 10,
@@ -611,7 +690,12 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
        from oracle.long_open_permits(1826, null, null, $1, $2, 10)`,
       [VAN_NUYS.lat, VAN_NUYS.lon],
     );
-    expect(once).toEqual({ n: 5614, d: 5614, bl: 388 });
+    expect(once).toEqual({
+      n: r.count,
+      d: r.count,
+      bl: measured(388),
+    });
+    expect(r.count).toEqual(measured(5614));
     const near = await caller.permits.longOpen({
       ...VAN_NUYS,
       radius_miles: 10,
@@ -628,7 +712,7 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
           max_open_days: 3652,
         })
       ).count,
-    ).toBe(4167);
+    ).toEqual(measured(4167));
     expect(
       (
         await caller.permits.longOpen({
@@ -637,42 +721,46 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
           threshold_years: 15,
         })
       ).count,
-    ).toBe(4662);
+    ).toEqual(measured(4662));
   });
-  test("long-open counts roofing work only: 10,974 joined long-open roofing permits city-wide, 2,318 of 13,292 left out; coating-only permits are roofing work", async () => {
+  test("long-open counts roofing work only: the macro gives exactly the joined long-open roofing permits city-wide (10,974 measured, 2,318 of 13,292 left out); coating-only permits are roofing work", async () => {
     // Default window (at least 1,826 days to the reference date), permits linked to at least one parcel.
     const split = await db.rows(
       `select p.roofing_work, count(distinct p.permit_number)::integer n
        from oracle.v_permit p join oracle.v_permit_parcel pp using (permit_number)
        where p.permit_status_class = 'open-issued' and p.open_days >= 1826 group by 1 order by 1`,
     );
-    expect(split).toEqual([
-      { roofing_work: false, n: 2318 },
-      { roofing_work: true, n: 10974 },
-    ]);
+    expect(split).toEqual(
+      measured([
+        { roofing_work: false, n: 2318 },
+        { roofing_work: true, n: 10974 },
+      ]),
+    );
+    const roofing = split.find((x) => x.roofing_work === true)!.n;
     const [macro] = await db.rows(
       `select count(distinct permit_number)::integer n,
          count(distinct permit_number) filter (where not roofing_work)::integer non_roofing
        from oracle.long_open_parcels(1826, null) join oracle.v_permit using (permit_number)`,
     );
-    expect(macro).toEqual({ n: 10974, non_roofing: 0 });
-    // Every one of the 574 coating-only permits is roofing work, so the filter keeps them.
+    expect(macro).toEqual({ n: roofing, non_roofing: 0 });
+    // Every coating-only permit (574 measured) is roofing work, so the filter keeps them.
     const [coating] = await db.rows(
       `select count(*)::integer n, count(*) filter (where roofing_work)::integer roofing
        from oracle.v_permit where roof_coating_only`,
     );
-    expect(coating).toEqual({ n: 574, roofing: 574 });
+    expect(coating).toEqual({ n: measured(574), roofing: coating!.n });
     const r = await caller.permits.longOpen({ ...VAN_NUYS, radius_miles: 1 });
     expect(r.rule.text).toContain("Roofing work only");
   });
-  test("permits.forParcel: the parcel with the most permits (174) under 3,000,000 bytes; outside-LA parcels keep their 60 joined permits", async () => {
+  test("permits.forParcel: the parcel with the most permits (174 measured) under 3,000,000 bytes; outside-LA parcels keep their joined permits", async () => {
     const [top] = await db.rows(
       "select parcel_id, count(*)::integer n from oracle.v_permit_parcel group by 1 order by n desc, parcel_id limit 1",
     );
     const r = await caller.permits.forParcel({
       parcel_id: String(top!.parcel_id),
     });
-    expect(r.permits).toHaveLength(174);
+    expect(r.permits).toHaveLength(Number(top!.n));
+    expect(Number(top!.n)).toEqual(measured(174));
     expect(r.bbb.available).toBe(false);
     expect(Buffer.byteLength(JSON.stringify(r))).toBeLessThan(
       MAX_RESPONSE_BYTES,
@@ -681,7 +769,8 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
       `select pp.parcel_id, count(*)::integer n from oracle.v_permit_parcel pp join oracle.v_property v using (parcel_id)
        where not v.permit_data_available group by 1 order by 1`,
     );
-    expect(outside).toHaveLength(61);
+    expect(outside.length).toEqual(measured(61));
+    expect(outside.length).toBeGreaterThan(0);
     const o = await caller.permits.forParcel({
       parcel_id: String(outside[0]!.parcel_id),
     });
