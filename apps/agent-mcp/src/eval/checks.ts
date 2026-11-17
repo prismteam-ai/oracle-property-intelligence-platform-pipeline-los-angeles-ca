@@ -17,8 +17,8 @@
  *   another listed permit's contractor alone on its line; a named contractor named only away from its row (no other
  *   license number on its line) is a warning;
  * - stated_counts: every number the text states for the rows it shows from a long-open list equals the rows of that
- *   list the text names (totals, such as how many match, are not such statements); when only the number's place in
- *   the text says which list it is about, equal for another of the answer's lists is a warning;
+ *   list the text names (totals, such as how many match, are not such statements); equal instead to another of the
+ *   answer's lists' rows shown is a warning, except for a "per list" statement;
  * - screen: with the request's screen values, the search's radius and roof age threshold are the expected ones (the
  *   screen's, or the question's from the prompt's tool_inputs) and the agent's assumptions name where each came from;
  *   the text stating each value with its source is a warning, not a failure.
@@ -1140,10 +1140,10 @@ const LIST_LABEL: Record<string, string> = {
  * text). When the text names no row of that list, the statement passes if it equals the tool's returned count or
  * its total (count) for that list. The list a statement is about: "per list", "each list" or "both lists" means every list; "window" the
  * within-window list; "overall" or "any issue date" the longest-open list; otherwise the list whose first named row
- * follows the statement most closely (else the one whose last named row precedes it). When only that placement
- * decides the list (no "per list", "window" or "overall" in the sentence), a statement not equal for that list but
- * equal, the same way, for another long-open list of the answer is a warning (which list a count belongs to is
- * placement); equal for none of them fails. n/a without the expectation.
+ * follows the statement most closely (else the one whose last named row precedes it). Which list a statement is about
+ * comes from wording ("window", "overall") or placement, so a statement not equal for that list but equal to the rows
+ * shown of another long-open list of the answer is a warning; otherwise it fails. A "per list" statement claims the
+ * count for every list and never warns. n/a without the expectation.
  */
 export function checkStatedCounts(
   answer: AgentAnswer,
@@ -1197,15 +1197,18 @@ export function checkStatedCounts(
         : n === l.count
           ? `the tool's total (${l.count})`
           : null;
-  /** Not equal for its list: with the list chosen by placement only, equal for another list is a warning; else a failure. */
+  /**
+   * Not equal for the list its wording or place points to: equal to another list's rows shown is a warning, except for
+   * a "per list" statement (about every list); else a failure.
+   */
   const elsewhere = (
     s: StatedCount,
     l: (typeof lists)[number],
-    byPlace: boolean,
+    perList: boolean,
   ): void => {
-    const m = byPlace
-      ? lists.find((x) => x !== l && equalTo(s.count, x) !== null)
-      : undefined;
+    const m = perList
+      ? undefined
+      : lists.find((x) => x !== l && x.shown > 0 && s.count === x.shown);
     if (m === undefined) ok = false;
     else
       warnings.push(
@@ -1215,7 +1218,6 @@ export function checkStatedCounts(
   for (const s of statements) {
     const sentence = s.sentence.toLowerCase();
     let about: typeof lists;
-    let byPlace = false;
     if (/\b(?:per|each|both)\s+lists?\b/.test(sentence)) about = lists;
     else if (
       /\bwindow\b/.test(sentence) &&
@@ -1235,12 +1237,11 @@ export function checkStatedCounts(
         .filter((l) => l.last >= 0 && l.last < s.at)
         .sort((a, b) => b.last - a.last)[0];
       about = [after ?? before ?? lists[0]!];
-      byPlace = lists.length > 1;
     }
     for (const l of about) {
       if (l.shown > 0) {
         const equal = s.count === l.shown;
-        if (!equal) elsewhere(s, l, byPlace);
+        if (!equal) elsewhere(s, l, about === lists);
         details.push(
           `"${s.said}" (${s.count}) → ${l.label}, ${l.shown} row(s) shown: ${equal ? "equal" : "NOT equal"}`,
         );
@@ -1253,7 +1254,7 @@ export function checkStatedCounts(
           : s.count === l.count
             ? `the tool's total (${l.count})`
             : null;
-      if (as === null) elsewhere(s, l, byPlace);
+      if (as === null) elsewhere(s, l, about === lists);
       details.push(
         `"${s.said}" (${s.count}) → ${l.label}, no row shown: ${as !== null ? `equal to ${as}` : `NOT equal to the tool's returned count (${l.returned ?? "none"}) or total (${l.count ?? "none"})`}`,
       );

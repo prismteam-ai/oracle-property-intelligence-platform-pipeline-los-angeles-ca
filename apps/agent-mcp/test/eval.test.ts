@@ -3354,7 +3354,7 @@ describe("check stated_counts: numbers of rows shown equal the rows the text lis
     expect(c.details).toContain(
       '"10 longest are shown" (10) → long-open list, 5 row(s) shown: NOT equal',
     );
-    // "per list" is about every list: the longest-open list shows 3, not 10.
+    // "per list" is about every list: the longest-open list shows 3, not 5. The claim is for every list: a failure.
     const both = run(
       [rows(0, 3), rows(100, 5), "Only 5 permits are shown per list."].join(
         "\n",
@@ -3365,10 +3365,52 @@ describe("check stated_counts: numbers of rows shown equal the rows the text lis
       '"5 permits are shown" (5) → longest-open list, 3 row(s) shown: NOT equal',
       '"5 permits are shown" (5) → within-window list, 5 row(s) shown: equal',
     ]);
-    // "window" names the within-window list wherever the sentence stands.
+    expect(both.warnings).toBeUndefined();
+    expect(
+      run(
+        [rows(0, 3), rows(100, 5), "Only 4 permits are shown per list."].join(
+          "\n",
+        ),
+      ).result,
+    ).toBe("fail");
+    // "window" names the within-window list wherever the sentence stands: 10 is only the longest-open list's
+    // returned count (none of its rows shown), not rows shown, so a failure; 7 is no list's, a failure.
     expect(
       run(`The 10 longest in the contractor window:\n${rows(100, 5)}`).result,
     ).toBe("fail");
+    expect(
+      run(`The 7 longest in the contractor window:\n${rows(100, 5)}`).result,
+    ).toBe("fail");
+  });
+
+  test('c8a8712-r1 run 2 a2: a true count whose sentence also says "window" is a warning; a count equal to no list fails; a keyword that picks the right list passes', () => {
+    const sentence =
+      "The 10 longest-open permits date from 1997 to 2002, so they fall outside that window and have no contractor data.";
+    const text = (s: string) =>
+      [
+        "The longest-open permits overall:",
+        rows(0, 10),
+        s,
+        "Here are the 5 longest-open permits in the contractor window:",
+        rows(100, 5),
+      ].join("\n");
+    const c = run(text(sentence));
+    expect(c.result).toBe("pass");
+    expect(c.details).toContain(
+      '"The 10" (10) → within-window list, 5 row(s) shown: NOT equal',
+    );
+    expect(c.warnings).toEqual([
+      '"The 10" (10): its sentence points to the within-window list, but it equals its 10 row(s) shown of the longest-open list',
+    ]);
+    // A wrong count, equal to no list: a failure.
+    expect(run(text(sentence.replace("The 10", "The 7"))).result).toBe("fail");
+    // The keyword picks the right list: pass, no warning.
+    const right = run(text("Their contractors are not in the data."));
+    expect(right.result).toBe("pass");
+    expect(right.details).toContain(
+      '"Here are the 5" (5) → within-window list, 5 row(s) shown: equal',
+    );
+    expect(right.warnings).toBeUndefined();
   });
 
   test("which list: when only its place in the text decides, a number equal for another of the answer's lists is a warning; equal for none fails", () => {
