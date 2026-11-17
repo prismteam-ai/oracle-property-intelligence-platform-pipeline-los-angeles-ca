@@ -15,13 +15,18 @@ import { DuckDBInstance } from "@duckdb/node-api";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
   buildArtifactManifest,
+  folderEntry,
   jsonBytes,
   namedObjectEntry,
   objectOf,
 } from "../src/artifact-manifest.ts";
 import { buildPublication } from "../src/build-ipfs-artifacts.ts";
 import { bytesCidCodec, directoryCar, sha256Hex } from "../src/ipfs-unixfs.ts";
-import { guardDirectory, guardObject } from "../src/publish-guard.ts";
+import {
+  guardDirectory,
+  guardManifestFile,
+  guardObject,
+} from "../src/publish-guard.ts";
 import type { NamedObject } from "../src/publish-named-objects.ts";
 import {
   NotRecorded,
@@ -32,6 +37,14 @@ import {
 import { loadRunConfig } from "../src/run-config.ts";
 
 const RUN = "2026-01-02T03-04-05-678Z-b0123456789ab";
+/** The sample as the fixtures describe it (x-sample.parquet holds one row). */
+const SAMPLE = {
+  object: "x-sample.parquet",
+  center_latitude: 34.2,
+  center_longitude: -118.4,
+  radius_miles: 5,
+  rows: 1,
+};
 const config = loadRunConfig("config/la-county-permits-run.json");
 const hex = (c: string) => c.repeat(64);
 
@@ -120,7 +133,7 @@ describe("coverage.json", () => {
 
   test("holds only the listed values, in a fixed key order, with the roll's terms address from the run config", () => {
     const m = runManifest() as RunManifestLike;
-    const cov = buildCoverage(m, config, 5);
+    const cov = buildCoverage(m, config, 5, SAMPLE);
     expect(JSON.stringify(cov, null, 2)).toBe(
       JSON.stringify(
         {
@@ -132,6 +145,12 @@ describe("coverage.json", () => {
           roll_year: "2026",
           parcels: { total: 3, with_coordinates: 2, with_year_built: 1 },
           permits: 5,
+          sample: {
+            center_latitude: 34.2,
+            center_longitude: -118.4,
+            radius_miles: 5,
+            rows: 1,
+          },
           sources: [
             {
               name: config.source.name,
@@ -163,7 +182,7 @@ describe("coverage.json", () => {
       run_kind: "rebuild",
       rebuild_of: "2026-01-01T00-00-00-000Z",
     } as RunManifestLike;
-    expect(buildCoverage(m, config, 5)).toMatchObject({
+    expect(buildCoverage(m, config, 5, SAMPLE)).toMatchObject({
       run_kind: "rebuild",
       rebuild_of: "2026-01-01T00-00-00-000Z",
     });
@@ -227,18 +246,18 @@ describe("coverage.json", () => {
     for (const [, change, error] of stops) {
       const m = structuredClone(runManifest()) as Record<string, unknown>;
       change(m);
-      expect(() => buildCoverage(m as RunManifestLike, config, 5)).toThrow(
-        error,
-      );
+      expect(() =>
+        buildCoverage(m as RunManifestLike, config, 5, SAMPLE),
+      ).toThrow(error);
     }
     expect(() =>
-      buildCoverage(runManifest() as RunManifestLike, config, -1),
+      buildCoverage(runManifest() as RunManifestLike, config, -1, SAMPLE),
     ).toThrow(/permits Parquet row count/);
   });
 });
 
 describe("artifact-manifest.json", () => {
-  test("lists each object once with cid, name, size, codec (file), ipld_codec and sha256 in that order, sorted by name, not itself", async () => {
+  test("lists the folder first as the one directory, then each file with cid, name, size, codec, ipld_codec and sha256, sorted by name, not itself", async () => {
     const cov = new TextEncoder().encode('{"run_id":"r"}\n');
     const named: NamedObject = {
       name: "a.parquet",
@@ -247,7 +266,8 @@ describe("artifact-manifest.json", () => {
       cid: "bafy-a",
       ipld_codec: "dag-pb",
     };
-    const m = buildArtifactManifest([
+    const folder = await directoryCar([{ name: "coverage.json", bytes: cov }]);
+    const m = buildArtifactManifest(folderEntry(folder), [
       namedObjectEntry(named),
       await objectOf("coverage.json", cov),
     ]);
@@ -256,6 +276,14 @@ describe("artifact-manifest.json", () => {
       JSON.stringify(
         {
           objects: [
+            {
+              cid: folder.root,
+              name: "publish",
+              size: folder.car.length,
+              codec: "directory",
+              ipld_codec: "dag-pb",
+              sha256: folder.car_sha256,
+            },
             {
               cid: "bafy-a",
               name: "a.parquet",
@@ -365,9 +393,10 @@ describe("buildPublication (the build-ipfs-artifacts tool)", () => {
       objects,
       runIds: [RUN],
       named,
+      sample: SAMPLE,
     });
 
-  test("writes the folder, its CAR and directory.json, and the objects with their CARs; passes the guard; leaves the source untouched; is deterministic", async () => {
+  test("writes the folder, its CAR, the manifest beside it with its CAR, directory.json, and the objects with their CARs; passes the guard; leaves the source untouched; is deterministic", async () => {
     const before = tree(root);
     expect(await build()).toBe(true);
     const first = tree(outDir);
@@ -378,9 +407,10 @@ describe("buildPublication (the build-ipfs-artifacts tool)", () => {
       "objects/x-county.parquet.car",
       "objects/x-sample.parquet",
       "objects/x-sample.parquet.car",
+      `runs/${RUN}/artifact-manifest.car`,
+      `runs/${RUN}/artifact-manifest.json`,
       `runs/${RUN}/directory.car`,
       `runs/${RUN}/directory.json`,
-      `runs/${RUN}/publish/artifact-manifest.json`,
       `runs/${RUN}/publish/coverage.json`,
     ]);
     const read = (p: string) => new Uint8Array(readFileSync(join(outDir, p)));
@@ -393,21 +423,23 @@ describe("buildPublication (the build-ipfs-artifacts tool)", () => {
       with_year_built: 1,
     });
     expect(coverage.permits).toBe(5);
-    const am = JSON.parse(
-      new TextDecoder().decode(
-        read(`runs/${RUN}/publish/artifact-manifest.json`),
-      ),
-    );
-    expect(am.objects.map((o: { name: string }) => o.name)).toEqual([
-      "coverage.json",
-      "x-county.parquet",
-      "x-sample.parquet",
+    expect(coverage.sample).toEqual({
+      center_latitude: 34.2,
+      center_longitude: -118.4,
+      radius_miles: 5,
+      rows: 1,
+    });
+    const manifestBytes = read(`runs/${RUN}/artifact-manifest.json`);
+    const am = JSON.parse(new TextDecoder().decode(manifestBytes));
+    expect(
+      am.objects.map((o: { name: string; codec: string }) => [o.name, o.codec]),
+    ).toEqual([
+      ["publish", "directory"],
+      ["coverage.json", "file"],
+      ["x-county.parquet", "file"],
+      ["x-sample.parquet", "file"],
     ]);
     const files = [
-      {
-        name: "artifact-manifest.json",
-        bytes: read(`runs/${RUN}/publish/artifact-manifest.json`),
-      },
       {
         name: "coverage.json",
         bytes: read(`runs/${RUN}/publish/coverage.json`),
@@ -417,18 +449,37 @@ describe("buildPublication (the build-ipfs-artifacts tool)", () => {
       new TextDecoder().decode(read(`runs/${RUN}/directory.json`)),
     );
     const car = await directoryCar(files);
+    const manifestCar = read(`runs/${RUN}/artifact-manifest.car`);
+    const manifestCid = (await bytesCidCodec(manifestBytes)).cid;
     expect(dirJson).toMatchObject({
       run_id: RUN,
       directory_cid: car.root,
       car: { size: car.car.length, sha256: car.car_sha256 },
+      artifact_manifest: {
+        cid: manifestCid,
+        size: manifestBytes.length,
+        sha256: sha256Hex(manifestBytes),
+        car: { size: manifestCar.length, sha256: sha256Hex(manifestCar) },
+      },
       publish_guard: { passes: true, refusals: [] },
       scans: { hits: [] },
     });
+    expect(
+      await guardManifestFile(
+        {
+          name: "artifact-manifest.json",
+          bytes: manifestBytes,
+          root: manifestCid,
+          car: manifestCar,
+        },
+        named,
+      ),
+    ).toEqual([]);
     expect(sha256Hex(read(`runs/${RUN}/directory.car`))).toBe(car.car_sha256);
     expect(
       await guardDirectory(
         { files, root: car.root, car: read(`runs/${RUN}/directory.car`) },
-        named,
+        manifestBytes,
       ),
     ).toEqual([]);
     for (const n of named) {
@@ -479,6 +530,27 @@ describe("buildPublication (the build-ipfs-artifacts tool)", () => {
       await expect(build(out)).rejects.toThrow(/is not the recorded file/);
     } finally {
       writeFileSync(p, original);
+      rmSync(out, { recursive: true, force: true });
+    }
+  });
+
+  test("stops when the sample Parquet's row count differs from the published sample's", async () => {
+    const out = mkdtempSync(join(tmpdir(), "publication-out4-"));
+    try {
+      await expect(
+        buildPublication({
+          source: root,
+          out,
+          config,
+          objects: objectPaths(),
+          runIds: [RUN],
+          named,
+          sample: { ...SAMPLE, rows: 2 },
+        }),
+      ).rejects.toThrow(
+        /x-sample\.parquet holds 1 rows; the published sample says 2/,
+      );
+    } finally {
       rmSync(out, { recursive: true, force: true });
     }
   });

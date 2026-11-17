@@ -10,6 +10,10 @@
  *   parcels                     { total, with_coordinates, with_year_built }: the manifest's
  *                               row_counts.parquet, coverage.with_coordinates, coverage.with_year_built
  *   permits                     the permits Parquet's row count
+ *   sample                      the published 5-mile sample: { center_latitude, center_longitude,
+ *                               radius_miles, rows }, from publish-named-objects.ts PUBLISHED_SAMPLE
+ *                               (its recorded build's center and radius; rows checked against the
+ *                               sample Parquet by the build)
  *   sources                     the County Assessor roll, then the City of Los Angeles building permits,
  *                               each { name, download_finished_at, pages_sha256, terms_of_use }:
  *                               terms_of_use is the source's terms-of-use address as the run config
@@ -30,6 +34,7 @@
  * error naming it; nothing is filled in.
  */
 import { createHash } from "node:crypto";
+import type { SampleSpec } from "./publish-named-objects.ts";
 import type { RunConfig } from "./run-config.ts";
 
 type RecordedSource = {
@@ -72,6 +77,12 @@ export type Coverage = {
   roll_year: string;
   parcels: { total: number; with_coordinates: number; with_year_built: number };
   permits: number;
+  sample: {
+    center_latitude: number;
+    center_longitude: number;
+    radius_miles: number;
+    rows: number;
+  };
   sources: [CoverageSource, CoverageSource];
 };
 
@@ -146,6 +157,7 @@ export function buildCoverage(
   m: RunManifestLike,
   config: RunConfig,
   permitParquetRows: number,
+  sample: SampleSpec,
 ): Coverage {
   const county = str(m.county, "county");
   const rollYear = str(m.roll_year, "roll_year");
@@ -233,6 +245,12 @@ export function buildCoverage(
       ),
     },
     permits: count(permitParquetRows, "the permits Parquet row count"),
+    sample: {
+      center_latitude: sample.center_latitude,
+      center_longitude: sample.center_longitude,
+      radius_miles: sample.radius_miles,
+      rows: count(sample.rows, "the sample's row count"),
+    },
     sources: [
       { ...roll, terms_of_use: termsOfUse },
       { ...permits, terms_of_use: permitsTerms },

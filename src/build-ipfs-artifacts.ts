@@ -2,12 +2,16 @@
  * Builds the publication of recorded runs. Local only: no IPFS node, no network, no upload.
  *
  * Per run, from runs/<run_id>/run_manifest.json, data/out/<run_id>/ and the run config:
- *   runs/<run_id>/publish/coverage.json           counts and sources only (publishable-docs.ts)
- *   runs/<run_id>/publish/artifact-manifest.json  every published object: coverage.json and the named
- *                                                 Parquet objects (artifact-manifest.ts)
+ *   runs/<run_id>/publish/coverage.json           the publish folder's one file: counts, the sample
+ *                                                 and the sources only (publishable-docs.ts)
  *   runs/<run_id>/directory.car                   the CAR of publish/, rooted at the folder's CID
- *   runs/<run_id>/directory.json                  the folder's CID, its files, the CAR's size and
- *                                                 sha256, the publish-guard result and the scan hits
+ *   runs/<run_id>/artifact-manifest.json          the run's artifact manifest, its own published file:
+ *                                                 the folder, coverage.json and the named Parquet
+ *                                                 objects (artifact-manifest.ts)
+ *   runs/<run_id>/artifact-manifest.car           the CAR of artifact-manifest.json, rooted at its CID
+ *   runs/<run_id>/directory.json                  the folder's CID, its file, its CAR's size and
+ *                                                 sha256, the manifest's CID and CAR, the
+ *                                                 publish-guard result and the scan hits
  * Once, from the given Parquet files (the named objects of publish-named-objects.ts, never rebuilt):
  *   objects/<name>, objects/<name>.car            each file's bytes and its CAR, rooted at its CID
  *   objects.json                                  each object's CID, size, sha256, its CAR's size and
@@ -15,7 +19,8 @@
  *
  * Before coverage.json is built, the run's property and permits Parquet files in data/out/<run_id>/
  * must have the size and sha256 the run manifest records, and their Parquet row counts must equal the
- * recorded ones; the permit count is that row count. Any value not in the recorded files stops the
+ * recorded ones; the permit count is that row count. The sample's row count (PUBLISHED_SAMPLE) must
+ * equal the given sample Parquet's footer row count. Any value not in the recorded files stops the
  * build (publishable-docs.ts). No build time is written anywhere: a rebuild gives identical bytes.
  * The run folders are only read. The exit code is 1 when the guard refuses anything or a scan hits.
  *
@@ -37,14 +42,25 @@ import { parseArgs } from "node:util";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import {
   buildArtifactManifest,
+  folderEntry,
   jsonBytes,
   namedObjectEntry,
   objectOf,
 } from "./artifact-manifest.ts";
 import { directoryCar, fileCar, sha256Hex } from "./ipfs-unixfs.ts";
 import { buildCoverage, type RunManifestLike } from "./publishable-docs.ts";
-import { NAMED_OBJECTS, type NamedObject } from "./publish-named-objects.ts";
-import { guardDirectory, guardObject } from "./publish-guard.ts";
+import {
+  NAMED_OBJECTS,
+  PUBLISHED_SAMPLE,
+  type NamedObject,
+  type SampleSpec,
+} from "./publish-named-objects.ts";
+import {
+  ARTIFACT_MANIFEST_NAME,
+  guardDirectory,
+  guardManifestFile,
+  guardObject,
+} from "./publish-guard.ts";
 import { scanJson } from "./publish-scans.ts";
 import { RUN_ID_PATTERN, loadRunConfig, type RunConfig } from "./run-config.ts";
 
@@ -114,8 +130,9 @@ export type BuildArgs = {
   /** Paths of the given Parquet files, one per named object, found by file name. */
   objects: string[];
   runIds: string[];
-  /** The named objects; tests pass small ones. */
+  /** The named objects and the published sample; tests pass small ones. */
   named?: readonly NamedObject[];
+  sample?: SampleSpec;
   log?: (line: string) => void;
 };
 
@@ -124,6 +141,9 @@ export async function buildPublication(a: BuildArgs): Promise<boolean> {
   const source = resolve(a.source);
   const out = resolve(a.out);
   const named = a.named ?? NAMED_OBJECTS;
+  const sample = a.sample ?? PUBLISHED_SAMPLE;
+  if (!named.some((n) => n.name === sample.object))
+    throw new Error(`the sample ${sample.object} is not a named object`);
   const log = a.log ?? (() => {});
   for (const ro of ["runs", "data/out", "data/raw"]) {
     const r = relative(join(source, ro), out);
@@ -179,6 +199,14 @@ export async function buildPublication(a: BuildArgs): Promise<boolean> {
   });
   const conn = await db.connect();
   try {
+    const sampleRows = await parquetRows(
+      conn,
+      given.get(sample.object) as string,
+    );
+    if (sampleRows !== sample.rows)
+      throw new Error(
+        `${sample.object} holds ${sampleRows} rows; the published sample says ${sample.rows}`,
+      );
     for (const runId of a.runIds) {
       const manifestPath = join(source, "runs", runId, "run_manifest.json");
       const m = JSON.parse(
@@ -206,25 +234,35 @@ export async function buildPublication(a: BuildArgs): Promise<boolean> {
         "los-angeles_ladbs_permits.parquet",
       );
 
-      const coverage = jsonBytes(buildCoverage(m, a.config, permits));
+      const coverage = jsonBytes(buildCoverage(m, a.config, permits, sample));
+      const folder = [{ name: "coverage.json", bytes: coverage }];
+      const car = await directoryCar(folder);
       const manifest = jsonBytes(
-        buildArtifactManifest([
+        buildArtifactManifest(folderEntry(car), [
           await objectOf("coverage.json", coverage),
           ...named.map(namedObjectEntry),
         ]),
       );
-      const folder = [
-        { name: "artifact-manifest.json", bytes: manifest },
-        { name: "coverage.json", bytes: coverage },
+      const manifestCar = await fileCar(new Blob([new Uint8Array(manifest)]));
+      const refusals = [
+        ...(await guardDirectory(
+          { files: folder, root: car.root, car: car.car },
+          manifest,
+        )),
+        ...(await guardManifestFile(
+          {
+            name: ARTIFACT_MANIFEST_NAME,
+            bytes: manifest,
+            root: manifestCar.root,
+            car: manifestCar.car,
+          },
+          named,
+        )),
       ];
-      const car = await directoryCar(folder);
-      const refusals = await guardDirectory(
-        { files: folder, root: car.root, car: car.car },
-        named,
-      );
-      const scanHits = folder.flatMap((f) =>
-        scanJson(f.name, new TextDecoder().decode(f.bytes)),
-      );
+      const scanHits = [
+        ...folder,
+        { name: ARTIFACT_MANIFEST_NAME, bytes: manifest },
+      ].flatMap((f) => scanJson(f.name, new TextDecoder().decode(f.bytes)));
       if (refusals.length || scanHits.length) ok = false;
 
       const runOut = join(out, "runs", runId);
@@ -233,6 +271,8 @@ export async function buildPublication(a: BuildArgs): Promise<boolean> {
       for (const f of folder)
         writeFileSync(join(runOut, "publish", f.name), f.bytes);
       writeFileSync(join(runOut, "directory.car"), car.car);
+      writeFileSync(join(runOut, ARTIFACT_MANIFEST_NAME), manifest);
+      writeFileSync(join(runOut, "artifact-manifest.car"), manifestCar.car);
       writeFileSync(
         join(runOut, "directory.json"),
         jsonBytes({
@@ -246,12 +286,20 @@ export async function buildPublication(a: BuildArgs): Promise<boolean> {
             size: car.car.length,
             sha256: car.car_sha256,
           },
+          artifact_manifest: {
+            ...(await objectOf(ARTIFACT_MANIFEST_NAME, manifest)),
+            car: {
+              file: "artifact-manifest.car",
+              size: manifestCar.car.length,
+              sha256: manifestCar.car_sha256,
+            },
+          },
           publish_guard: { passes: refusals.length === 0, refusals },
           scans: { hits: scanHits },
         }),
       );
       log(
-        `${runId}: folder ${car.root}; coverage ${sha256Hex(coverage)}; guard ${
+        `${runId}: manifest ${manifestCar.root}; folder ${car.root}; coverage ${sha256Hex(coverage)}; guard ${
           refusals.length
             ? `REFUSES (${refusals.map((r) => `${r.name}: ${r.reason}`).join("; ")})`
             : "passes"

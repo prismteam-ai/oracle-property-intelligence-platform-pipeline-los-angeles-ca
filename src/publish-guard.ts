@@ -1,26 +1,31 @@
 /**
  * Publish guard and upload boundary. Nothing in this repository uploads: the only Uploader here is
  * FakeUploader, for tests. A real adapter (for example a pinning service's RPC `dag/import`) is a
- * separate, approved step; it implements Uploader and is called only through publishDirectory or
- * publishObject, so every upload passes the guard first (kit apply-engineering-guidelines,
- * rules/external-dependency-boundaries.md, "Adapter Boundary for Migrations").
+ * separate, approved step; it implements Uploader and is called only through publishDirectory,
+ * publishManifest or publishObject, so every upload passes the guard first (kit
+ * apply-engineering-guidelines, rules/external-dependency-boundaries.md, "Adapter Boundary for
+ * Migrations").
  *
- * A publication is, per run, one publish folder, and once, the named Parquet objects
- * (publish-named-objects.ts), each uploaded as its own CAR.
+ * A publication is, per run, one publish folder (named "publish", holding coverage.json only) and the
+ * run's artifact-manifest.json beside it, and once, the named Parquet objects
+ * (publish-named-objects.ts); each is uploaded as its own CAR.
  *
- * The publish folder holds exactly artifact-manifest.json and coverage.json. The guard refuses:
- * - any other file in the folder, and any file over 1 MB (1,000,000 bytes), files and the CAR alike;
+ * The guard refuses:
+ * - any file in the folder other than coverage.json, and any folder file, artifact manifest or their
+ *   CARs over 1 MB (1,000,000 bytes);
  * - a run manifest: by name (run_manifest.json or any name with "run manifest" in it), and wherever it
- *   appears: as a folder file under another name (by its keys, also when embedded as a value or as
- *   escaped text), as an entry of the artifact manifest, or as an object;
- * - any Parquet file in the folder, by name or by its PAR1 magic bytes;
+ *   appears: as a folder file or a manifest under another name (by its keys, also when embedded as a
+ *   value or as escaped text), as an entry of the artifact manifest, or as an object;
+ * - any Parquet file in the folder or as the manifest, by name or by its PAR1 magic bytes;
  * - coverage.json when the artifact manifest does not list it with these exact bytes (size, sha256,
  *   CID and IPLD codec);
- * - an artifact-manifest.json that is not the folder's own manifest, lists itself, lists an object that
- *   is neither coverage.json nor a named object (with the named object's exact CID, size, IPLD codec
- *   and sha256), lists an object whose codec is not "file", or leaves out coverage.json or a named
- *   object;
- * - a CAR that is not the deterministic CAR of exactly the folder's files with the expected root.
+ * - an artifact manifest that lists itself; does not list, first and only once, one entry with codec
+ *   "directory" (the publish folder: name "publish", ipld_codec dag-pb, the folder's CID, and the size
+ *   and sha256 of the folder's CAR); lists another object that is neither coverage.json nor a named
+ *   object (with its exact CID, size, IPLD codec and sha256) or whose codec is not "file"; or leaves
+ *   out coverage.json or a named object;
+ * - a CAR that is not the deterministic CAR of exactly the folder's files, or of the manifest's bytes,
+ *   with the expected root.
  *
  * An object passes only when its name, size and sha256 are a named object's exactly, and its CAR is
  * the deterministic CAR of those bytes rooted at the named CID. Parquet and the 1 MB limit are lifted
@@ -35,19 +40,21 @@ import {
 } from "./ipfs-unixfs.ts";
 import { NAMED_OBJECTS, type NamedObject } from "./publish-named-objects.ts";
 
-/** The publish limit: 1 MB (1,000,000 bytes) per publish-folder file, and for the folder's CAR. */
+/** The publish limit: 1 MB (1,000,000 bytes) per folder file, manifest and their CARs. */
 export const MAX_PUBLISH_BYTES = 1_000_000;
 
-/** The only files a publish folder may hold. */
-export const PUBLISH_FOLDER_FILES = [
-  "artifact-manifest.json",
-  "coverage.json",
-] as const;
+/** The publish folder's name (its entry in the artifact manifest) and the only file it may hold. */
+export const PUBLISH_FOLDER_NAME = "publish";
+export const PUBLISH_FOLDER_FILES = ["coverage.json"] as const;
+/** The run's artifact manifest: its own published file, beside the folder. */
+export const ARTIFACT_MANIFEST_NAME = "artifact-manifest.json";
 
 /**
  * One published object as the artifact manifest lists it, in this key order. codec is the IPFS codec
- * in the assignment's sense, "file" or "directory" (every listed object is a file); ipld_codec is the
- * CID's codec, "raw" for a file of one 1 MiB chunk or less, "dag-pb" for a larger one.
+ * in the assignment's sense, "file" or "directory"; ipld_codec is the CID's codec: "raw" for a file of
+ * one 1 MiB chunk or less, "dag-pb" for a larger file or a directory. For the one directory (the
+ * publish folder) size and sha256 are those of its CAR: a directory has no byte stream of its own, and
+ * its deterministic CAR is the one byte form that is uploaded and kept.
  */
 export type PublishedObject = {
   cid: string;
@@ -66,7 +73,7 @@ export const PUBLISHED_OBJECT_KEYS = [
   "sha256",
 ] as const;
 
-/** artifact-manifest.json: every published object of the run except itself. */
+/** artifact-manifest.json: every published object of the run except itself, the folder first. */
 export type ArtifactManifest = { objects: PublishedObject[] };
 
 export type Candidate = { name: string; bytes: Uint8Array };
@@ -132,12 +139,8 @@ function isParquet(c: Candidate): boolean {
   return magic(0) || magic(b.length - 4);
 }
 
-/** Refusals for one publish-folder file against the folder's artifact manifest (empty when it may be published). */
-export function guardFile(
-  c: Candidate,
-  manifest: ArtifactManifest,
-  manifestBytes: Uint8Array,
-): Refusal[] {
+/** Refusals for one publish-folder file against the run's artifact manifest (empty when it may be published). */
+export function guardFile(c: Candidate, manifest: ArtifactManifest): Refusal[] {
   const out: Refusal[] = [];
   const refuse = (reason: string) => out.push({ name: c.name, reason });
   if (isRunManifestName(c.name)) refuse(RUN_MANIFEST_REASON);
@@ -151,11 +154,6 @@ export function guardFile(
     refuse("Parquet is never in a publish folder (only as a named object)");
   if (c.bytes.length > MAX_PUBLISH_BYTES)
     refuse(`over 1 MB (${c.bytes.length} bytes > ${MAX_PUBLISH_BYTES})`);
-  if (c.name === "artifact-manifest.json") {
-    if (sha256Hex(c.bytes) !== sha256Hex(manifestBytes))
-      refuse("not the folder's artifact manifest");
-    return out;
-  }
   if (c.name !== "coverage.json") return out;
   const entry = manifest.objects.find((o) => o?.name === c.name);
   if (!entry) refuse("not listed in the artifact manifest");
@@ -173,9 +171,10 @@ export function guardManifest(
   const at = (o: unknown, i: number) => {
     const n =
       o && typeof o === "object" ? (o as { name?: unknown }).name : null;
-    return `artifact-manifest.json objects[${i}]${typeof n === "string" ? ` (${n})` : ""}`;
+    return `${ARTIFACT_MANIFEST_NAME} objects[${i}]${typeof n === "string" ? ` (${n})` : ""}`;
   };
   const seen = new Set<string>();
+  let directories = 0;
   manifest.objects.forEach((o, i) => {
     const where = at(o, i);
     const keys = o && typeof o === "object" ? Object.keys(o) : [];
@@ -188,12 +187,23 @@ export function guardManifest(
     }
     if (seen.has(o.name))
       out.push({ name: where, reason: "listed more than once" });
-    if (o.codec !== "file")
-      out.push({ name: where, reason: 'codec must be "file"' });
     seen.add(o.name);
+    if (o.codec === "directory") {
+      directories++;
+      if (i !== 0)
+        out.push({ name: where, reason: "the folder must be listed first" });
+      if (o.name !== PUBLISH_FOLDER_NAME || o.ipld_codec !== "dag-pb")
+        out.push({
+          name: where,
+          reason: `the one directory is the publish folder ("${PUBLISH_FOLDER_NAME}", ipld_codec dag-pb)`,
+        });
+      return;
+    }
+    if (o.codec !== "file")
+      out.push({ name: where, reason: 'codec must be "file" or "directory"' });
     if (isRunManifestName(o.name))
       out.push({ name: where, reason: RUN_MANIFEST_REASON });
-    else if (o.name === "artifact-manifest.json")
+    else if (o.name === ARTIFACT_MANIFEST_NAME)
       out.push({ name: where, reason: "the artifact manifest lists itself" });
     else if (o.name === "coverage.json") return;
     else {
@@ -216,13 +226,45 @@ export function guardManifest(
         });
     }
   });
+  if (directories !== 1)
+    out.push({
+      name: ARTIFACT_MANIFEST_NAME,
+      reason: `must list exactly one directory (the publish folder); lists ${directories}`,
+    });
   for (const required of ["coverage.json", ...named.map((n) => n.name)])
     if (!seen.has(required))
       out.push({
-        name: "artifact-manifest.json",
+        name: ARTIFACT_MANIFEST_NAME,
         reason: `does not list ${required}`,
       });
   return out;
+}
+
+/** The manifest's bytes parsed, or the refusal for a malformed one. */
+export function parseManifest(
+  bytes: Uint8Array,
+): { manifest: ArtifactManifest } | { refusal: Refusal } {
+  let manifest: ArtifactManifest;
+  try {
+    manifest = JSON.parse(new TextDecoder().decode(bytes)) as ArtifactManifest;
+  } catch {
+    return {
+      refusal: { name: ARTIFACT_MANIFEST_NAME, reason: "not valid JSON" },
+    };
+  }
+  if (
+    !manifest ||
+    typeof manifest !== "object" ||
+    JSON.stringify(Object.keys(manifest)) !== JSON.stringify(["objects"]) ||
+    !Array.isArray(manifest.objects)
+  )
+    return {
+      refusal: {
+        name: ARTIFACT_MANIFEST_NAME,
+        reason: "must be { objects: [...] }",
+      },
+    };
+  return { manifest };
 }
 
 export type DirectoryCandidate = {
@@ -231,10 +273,13 @@ export type DirectoryCandidate = {
   car: Uint8Array;
 };
 
-/** Every refusal for a publish folder and its CAR (empty when it may be uploaded). */
+/**
+ * Every refusal for a publish folder and its CAR against the run's artifact manifest (empty when it
+ * may be uploaded). The manifest's own rules are checked by guardManifestFile.
+ */
 export async function guardDirectory(
   d: DirectoryCandidate,
-  named: readonly NamedObject[] = NAMED_OBJECTS,
+  manifestBytes: Uint8Array,
 ): Promise<Refusal[]> {
   const out: Refusal[] = [];
   const names = d.files.map((f) => f.name).sort();
@@ -244,36 +289,10 @@ export async function guardDirectory(
       name: "(directory)",
       reason: `files must be exactly ${expected.join(", ")}; got ${names.join(", ")}`,
     });
-  const mf = d.files.find((f) => f.name === "artifact-manifest.json");
-  if (!mf) {
-    for (const f of d.files)
-      out.push(...guardFile(f, { objects: [] }, new Uint8Array()));
-    return out;
-  }
-  // A malformed manifest is refused, and the other files are still checked on their own.
-  const malformed = (reason: string) => {
-    out.push({ name: mf.name, reason });
-    for (const f of d.files)
-      if (f !== mf) out.push(...guardFile(f, { objects: [] }, mf.bytes));
-    return out;
-  };
-  let manifest: ArtifactManifest;
-  try {
-    manifest = JSON.parse(
-      new TextDecoder().decode(mf.bytes),
-    ) as ArtifactManifest;
-  } catch {
-    return malformed("not valid JSON");
-  }
-  if (
-    !manifest ||
-    typeof manifest !== "object" ||
-    JSON.stringify(Object.keys(manifest)) !== JSON.stringify(["objects"]) ||
-    !Array.isArray(manifest.objects)
-  )
-    return malformed("must be { objects: [...] }");
-  out.push(...guardManifest(manifest, named));
-  for (const f of d.files) out.push(...guardFile(f, manifest, mf.bytes));
+  const parsed = parseManifest(manifestBytes);
+  const manifest = "manifest" in parsed ? parsed.manifest : { objects: [] };
+  if ("refusal" in parsed) out.push(parsed.refusal);
+  for (const f of d.files) out.push(...guardFile(f, manifest));
   const coverage = d.files.find((f) => f.name === "coverage.json");
   const entry = manifest.objects.find((o) => o?.name === "coverage.json");
   if (coverage && entry) {
@@ -297,6 +316,24 @@ export async function guardDirectory(
       name: "(car)",
       reason: "CAR is not the deterministic CAR of these files",
     });
+  if ("manifest" in parsed) {
+    const dir = manifest.objects.filter((o) => o?.codec === "directory");
+    if (dir.length !== 1)
+      out.push({
+        name: "(directory)",
+        reason: "the artifact manifest does not list exactly one directory",
+      });
+    else if (
+      dir[0].cid !== d.root ||
+      dir[0].size !== d.car.length ||
+      dir[0].sha256 !== sha256Hex(d.car)
+    )
+      out.push({
+        name: "(directory)",
+        reason:
+          "the artifact manifest's directory is not this folder (CID, CAR size and sha256)",
+      });
+  }
   return out;
 }
 
@@ -330,6 +367,40 @@ export async function guardObject(
   if (rebuilt.root !== n.cid)
     out.push({ name: o.name, reason: "bytes do not give the named CID" });
   if (rebuilt.car_sha256 !== sha256Hex(o.car))
+    out.push({
+      name: "(car)",
+      reason: "CAR is not the deterministic CAR of these bytes",
+    });
+  return out;
+}
+
+/** Every refusal for a run's artifact manifest as its own published file, with its CAR. */
+export async function guardManifestFile(
+  m: ObjectCandidate,
+  named: readonly NamedObject[] = NAMED_OBJECTS,
+): Promise<Refusal[]> {
+  const out: Refusal[] = [];
+  const refuse = (reason: string) => out.push({ name: m.name, reason });
+  if (isRunManifestName(m.name)) refuse(RUN_MANIFEST_REASON);
+  else if (holdsRunManifest(m.bytes))
+    refuse(`holds a run manifest; ${RUN_MANIFEST_REASON}`);
+  if (m.name !== ARTIFACT_MANIFEST_NAME)
+    refuse(`an artifact manifest is named ${ARTIFACT_MANIFEST_NAME}`);
+  if (isParquet(m)) refuse("Parquet is never an artifact manifest");
+  if (m.bytes.length > MAX_PUBLISH_BYTES)
+    refuse(`over 1 MB (${m.bytes.length} bytes > ${MAX_PUBLISH_BYTES})`);
+  const parsed = parseManifest(m.bytes);
+  if ("refusal" in parsed) out.push(parsed.refusal);
+  else out.push(...guardManifest(parsed.manifest, named));
+  if (m.car.length > MAX_PUBLISH_BYTES)
+    out.push({
+      name: "(car)",
+      reason: `over 1 MB (${m.car.length} bytes > ${MAX_PUBLISH_BYTES})`,
+    });
+  const rebuilt = await fileCar(new Blob([new Uint8Array(m.bytes)]));
+  if (rebuilt.root !== m.root)
+    out.push({ name: "(car)", reason: "root is not the CID of these bytes" });
+  if (rebuilt.car_sha256 !== sha256Hex(m.car))
     out.push({
       name: "(car)",
       reason: "CAR is not the deterministic CAR of these bytes",
@@ -382,12 +453,23 @@ async function importChecked(
 /** The only way to upload a publish folder: the guard runs first, and the service's root must match. */
 export async function publishDirectory(
   d: DirectoryCandidate,
+  manifestBytes: Uint8Array,
+  uploader: Uploader,
+): Promise<{ root: string }> {
+  const refusals = await guardDirectory(d, manifestBytes);
+  if (refusals.length) throw new PublishRefused(refusals);
+  return importChecked(d.car, d.root, uploader);
+}
+
+/** The only way to upload an artifact manifest: the guard runs first, and the service's root must match. */
+export async function publishManifest(
+  m: ObjectCandidate,
   uploader: Uploader,
   named: readonly NamedObject[] = NAMED_OBJECTS,
 ): Promise<{ root: string }> {
-  const refusals = await guardDirectory(d, named);
+  const refusals = await guardManifestFile(m, named);
   if (refusals.length) throw new PublishRefused(refusals);
-  return importChecked(d.car, d.root, uploader);
+  return importChecked(m.car, m.root, uploader);
 }
 
 /** The only way to upload an object: the guard runs first, and the service's root must match. */

@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
+import { folderEntry } from "../src/artifact-manifest.ts";
 import {
   bytesCidCodec,
   directoryCar,
@@ -14,10 +15,12 @@ import {
   guardDirectory,
   guardFile,
   guardManifest,
+  guardManifestFile,
   guardObject,
   holdsRunManifest,
   isRunManifestName,
   publishDirectory,
+  publishManifest,
   publishObject,
   type ArtifactManifest,
   type Candidate,
@@ -26,6 +29,7 @@ import {
 } from "../src/publish-guard.ts";
 import {
   NAMED_OBJECTS,
+  PUBLISHED_SAMPLE,
   type NamedObject,
 } from "../src/publish-named-objects.ts";
 
@@ -33,6 +37,7 @@ const enc = (s: string) => new TextEncoder().encode(s);
 const json = (v: unknown) => enc(JSON.stringify(v, null, 2) + "\n");
 const parquetBytes = (fill: number) =>
   new Uint8Array([0x50, 0x41, 0x52, 0x31, fill, fill, 0x50, 0x41, 0x52, 0x31]);
+const blob = (b: Uint8Array) => new Blob([new Uint8Array(b)]);
 
 async function entryFor(
   name: string,
@@ -66,55 +71,68 @@ async function namedFixture() {
   return { named, bytes: { "a.parquet": a, "b.parquet": b } };
 }
 
-/** A valid publish folder: coverage.json and an artifact manifest listing it and the named objects. */
+const namedEntries = (named: NamedObject[]): PublishedObject[] =>
+  named.map((n) => ({
+    cid: n.cid,
+    name: n.name,
+    size: n.size,
+    codec: "file" as const,
+    ipld_codec: n.ipld_codec,
+    sha256: n.sha256,
+  }));
+
+/** The manifest as its own published file: bytes, CID and CAR. */
+async function manifestFile(manifest: unknown) {
+  const bytes = json(manifest);
+  const car = await fileCar(blob(bytes));
+  return {
+    name: "artifact-manifest.json",
+    bytes,
+    root: car.root,
+    car: car.car,
+  };
+}
+
+/**
+ * A valid publication of one run: the publish folder (coverage.json only) with its CAR, and the
+ * artifact manifest beside it listing the folder first, then coverage.json and the named objects.
+ */
 async function fixture(
   coverage = json({ run_id: "r", parcels: { total: 3 } }),
 ) {
   const { named, bytes } = await namedFixture();
+  const files: Candidate[] = [{ name: "coverage.json", bytes: coverage }];
+  const car = await directoryCar(files);
   const manifest: ArtifactManifest = {
     objects: [
+      folderEntry(car),
       await entryFor("coverage.json", coverage),
-      ...named.map((n) => ({
-        cid: n.cid,
-        name: n.name,
-        size: n.size,
-        codec: "file" as const,
-        ipld_codec: n.ipld_codec,
-        sha256: n.sha256,
-      })),
+      ...namedEntries(named),
     ],
   };
-  const manifestBytes = json(manifest);
-  const files: Candidate[] = [
-    { name: "artifact-manifest.json", bytes: manifestBytes },
-    { name: "coverage.json", bytes: coverage },
-  ];
-  const car = await directoryCar(files);
+  const mf = await manifestFile(manifest);
   return {
     named,
     objects: bytes,
     manifest,
-    manifestBytes,
+    manifestBytes: mf.bytes,
+    manifestFile: mf,
     files,
     root: car.root,
     car: car.car,
   };
 }
 
-/** A folder with the artifact manifest replaced (and the CAR rebuilt to match). */
-async function withManifest(
+/** A folder with other files, its CAR rebuilt, and a manifest whose directory entry matches it. */
+async function withFolder(
   f: Awaited<ReturnType<typeof fixture>>,
-  manifest: unknown,
-  extra: Candidate[] = [],
+  files: Candidate[],
 ) {
-  const files = [
-    ...f.files.map((c) =>
-      c.name === "artifact-manifest.json" ? { ...c, bytes: json(manifest) } : c,
-    ),
-    ...extra,
-  ];
   const car = await directoryCar(files);
-  return { files, root: car.root, car: car.car };
+  const manifest = {
+    objects: [folderEntry(car), ...f.manifest.objects.slice(1)],
+  };
+  return { files, root: car.root, car: car.car, manifestBytes: json(manifest) };
 }
 
 const reasons = (r: { name: string; reason: string }[]) =>
@@ -133,11 +151,10 @@ const RUN_MANIFEST = {
   rebuild: [],
 };
 
-describe("guardFile", () => {
-  test("accepts coverage.json listed with its bytes and the folder's own artifact manifest", async () => {
+describe("guardFile (a publish-folder file)", () => {
+  test("accepts coverage.json listed in the run's artifact manifest with its bytes", async () => {
     const f = await fixture();
-    for (const c of f.files)
-      expect(guardFile(c, f.manifest, f.manifestBytes)).toEqual([]);
+    expect(guardFile(f.files[0], f.manifest)).toEqual([]);
   });
 
   test("refuses a run manifest by name, whatever its bytes", async () => {
@@ -150,9 +167,7 @@ describe("guardFile", () => {
     ]) {
       expect(isRunManifestName(name)).toBe(true);
       expect(
-        guardFile({ name, bytes: enc("{}") }, f.manifest, f.manifestBytes).map(
-          (r) => r.reason,
-        ),
+        guardFile({ name, bytes: enc("{}") }, f.manifest).map((r) => r.reason),
       ).toContain("a run manifest is never published");
     }
     expect(isRunManifestName("coverage.json")).toBe(false);
@@ -167,21 +182,20 @@ describe("guardFile", () => {
     for (const bytes of [whole, embedded, asText, inArray]) {
       expect(holdsRunManifest(bytes)).toBe(true);
       expect(
-        guardFile(
-          { name: "coverage.json", bytes },
-          f.manifest,
-          f.manifestBytes,
-        ).map((r) => r.reason),
+        guardFile({ name: "coverage.json", bytes }, f.manifest).map(
+          (r) => r.reason,
+        ),
       ).toContain("holds a run manifest; a run manifest is never published");
     }
     // coverage.json and the artifact manifest share run_id or other words, never the run-manifest keys.
-    expect(holdsRunManifest(f.files[1].bytes)).toBe(false);
+    expect(holdsRunManifest(f.files[0].bytes)).toBe(false);
     expect(
       holdsRunManifest(
         json({
           run_id: "r",
           run_kind: "rebuild",
           rebuild_of: "q",
+          sample: { rows: 1 },
           sources: [],
         }),
       ),
@@ -200,11 +214,9 @@ describe("guardFile", () => {
         readFileSync(join("runs", id, "run_manifest.json")),
       );
       expect(
-        guardFile(
-          { name: "coverage.json", bytes },
-          f.manifest,
-          f.manifestBytes,
-        ).map((r) => r.reason),
+        guardFile({ name: "coverage.json", bytes }, f.manifest).map(
+          (r) => r.reason,
+        ),
       ).toContain("holds a run manifest; a run manifest is never published");
     }
   });
@@ -213,29 +225,16 @@ describe("guardFile", () => {
     const f = await fixture();
     const a = f.objects["a.parquet"];
     expect(
-      reasons(
-        guardFile({ name: "a.parquet", bytes: a }, f.manifest, f.manifestBytes),
-      ),
+      reasons(guardFile({ name: "a.parquet", bytes: a }, f.manifest)),
     ).toEqual([
-      "a.parquet: not a publish-folder file (only artifact-manifest.json and coverage.json)",
+      "a.parquet: not a publish-folder file (only coverage.json)",
       "a.parquet: Parquet is never in a publish folder (only as a named object)",
     ]);
-    expect(
-      guardFile(
-        { name: "coverage.json", bytes: a },
-        f.manifest,
-        f.manifestBytes,
-      ).map((r) => r.reason),
-    ).toContain(
-      "Parquet is never in a publish folder (only as a named object)",
-    );
     const trailer = new Uint8Array([123, 125, 0x50, 0x41, 0x52, 0x31]);
     expect(
-      guardFile(
-        { name: "coverage.json", bytes: trailer },
-        f.manifest,
-        f.manifestBytes,
-      ).map((r) => r.reason),
+      guardFile({ name: "coverage.json", bytes: trailer }, f.manifest).map(
+        (r) => r.reason,
+      ),
     ).toContain(
       "Parquet is never in a publish folder (only as a named object)",
     );
@@ -245,68 +244,58 @@ describe("guardFile", () => {
     const big = new Uint8Array(MAX_PUBLISH_BYTES + 1).fill(32);
     const f = await fixture(big);
     expect(
-      reasons(
-        guardFile(
-          { name: "coverage.json", bytes: big },
-          f.manifest,
-          f.manifestBytes,
-        ),
-      ),
+      reasons(guardFile({ name: "coverage.json", bytes: big }, f.manifest)),
     ).toEqual(["coverage.json: over 1 MB (1000001 bytes > 1000000)"]);
     const atLimit = new Uint8Array(MAX_PUBLISH_BYTES).fill(32);
     const g = await fixture(atLimit);
     expect(
-      guardFile(
-        { name: "coverage.json", bytes: atLimit },
-        g.manifest,
-        g.manifestBytes,
-      ),
+      guardFile({ name: "coverage.json", bytes: atLimit }, g.manifest),
     ).toEqual([]);
   });
 
-  test("refuses another file in the folder, coverage not listed or with changed bytes, and a foreign artifact manifest", async () => {
+  test("refuses the artifact manifest or another file in the folder, and coverage not listed or with changed bytes", async () => {
     const f = await fixture();
     expect(
       reasons(
         guardFile(
-          { name: "schema.json", bytes: enc("{}") },
+          { name: "artifact-manifest.json", bytes: f.manifestBytes },
           f.manifest,
-          f.manifestBytes,
         ),
       ),
     ).toEqual([
-      "schema.json: not a publish-folder file (only artifact-manifest.json and coverage.json)",
+      "artifact-manifest.json: not a publish-folder file (only coverage.json)",
     ]);
+    expect(
+      reasons(guardFile({ name: "schema.json", bytes: enc("{}") }, f.manifest)),
+    ).toEqual(["schema.json: not a publish-folder file (only coverage.json)"]);
     expect(
       reasons(
         guardFile(
           { name: "coverage.json", bytes: enc('{"run_id":"s"}\n') },
           f.manifest,
-          f.manifestBytes,
         ),
       ),
     ).toEqual([
       "coverage.json: bytes differ from the artifact manifest's size and sha256",
     ]);
-    expect(
-      reasons(guardFile(f.files[1], { objects: [] }, f.manifestBytes)),
-    ).toEqual(["coverage.json: not listed in the artifact manifest"]);
-    expect(
-      reasons(
-        guardFile(
-          { name: "artifact-manifest.json", bytes: enc('{"objects":[]}\n') },
-          f.manifest,
-          f.manifestBytes,
-        ),
-      ),
-    ).toEqual(["artifact-manifest.json: not the folder's artifact manifest"]);
+    expect(reasons(guardFile(f.files[0], { objects: [] }))).toEqual([
+      "coverage.json: not listed in the artifact manifest",
+    ]);
   });
 });
 
 describe("guardManifest", () => {
-  test("accepts coverage.json and every named object with its exact values", async () => {
+  test("accepts the folder first, then coverage.json and every named object with its exact values", async () => {
     const f = await fixture();
     expect(guardManifest(f.manifest, f.named)).toEqual([]);
+    expect(f.manifest.objects[0]).toEqual({
+      cid: f.root,
+      name: "publish",
+      size: f.car.length,
+      codec: "directory",
+      ipld_codec: "dag-pb",
+      sha256: sha256Hex(f.car),
+    });
   });
 
   test("refuses an entry for a run manifest, for itself, for any other object, and a duplicate", async () => {
@@ -325,14 +314,49 @@ describe("guardManifest", () => {
         extra("run_manifest.json"),
         extra("artifact-manifest.json"),
         extra("schema.json"),
-        f.manifest.objects[0],
+        f.manifest.objects[1],
       ],
     };
     expect(reasons(guardManifest(m, f.named))).toEqual([
-      "artifact-manifest.json objects[3] (run_manifest.json): a run manifest is never published",
-      "artifact-manifest.json objects[4] (artifact-manifest.json): the artifact manifest lists itself",
-      "artifact-manifest.json objects[5] (schema.json): not a publishable object (coverage.json or a named object)",
-      "artifact-manifest.json objects[6] (coverage.json): listed more than once",
+      "artifact-manifest.json objects[4] (run_manifest.json): a run manifest is never published",
+      "artifact-manifest.json objects[5] (artifact-manifest.json): the artifact manifest lists itself",
+      "artifact-manifest.json objects[6] (schema.json): not a publishable object (coverage.json or a named object)",
+      "artifact-manifest.json objects[7] (coverage.json): listed more than once",
+    ]);
+  });
+
+  test("refuses no directory, two directories, a directory not first or not the publish folder", async () => {
+    const f = await fixture();
+    const [dir, ...rest] = f.manifest.objects;
+    expect(reasons(guardManifest({ objects: rest }, f.named))).toEqual([
+      "artifact-manifest.json: must list exactly one directory (the publish folder); lists 0",
+    ]);
+    expect(
+      reasons(guardManifest({ objects: [...rest, dir] }, f.named)),
+    ).toEqual([
+      "artifact-manifest.json objects[3] (publish): the folder must be listed first",
+    ]);
+    expect(
+      reasons(
+        guardManifest(
+          { objects: [dir, ...rest, { ...dir, name: "other" }] },
+          f.named,
+        ),
+      ),
+    ).toEqual([
+      "artifact-manifest.json objects[4] (other): the folder must be listed first",
+      'artifact-manifest.json objects[4] (other): the one directory is the publish folder ("publish", ipld_codec dag-pb)',
+      "artifact-manifest.json: must list exactly one directory (the publish folder); lists 2",
+    ]);
+    expect(
+      reasons(
+        guardManifest(
+          { objects: [{ ...dir, ipld_codec: "raw" }, ...rest] },
+          f.named,
+        ),
+      ),
+    ).toEqual([
+      'artifact-manifest.json objects[0] (publish): the one directory is the publish folder ("publish", ipld_codec dag-pb)',
     ]);
   });
 
@@ -351,20 +375,20 @@ describe("guardManifest", () => {
         ),
       };
       expect(reasons(guardManifest(m, f.named))).toEqual([
-        "artifact-manifest.json objects[1] (a.parquet): not the named object's exact CID, size, IPLD codec and sha256",
+        "artifact-manifest.json objects[2] (a.parquet): not the named object's exact CID, size, IPLD codec and sha256",
       ]);
     }
   });
 
-  test('refuses an object whose codec is not "file"', async () => {
+  test('refuses a file entry whose codec is neither "file" nor "directory"', async () => {
     const f = await fixture();
-    const m: ArtifactManifest = {
+    const m = {
       objects: f.manifest.objects.map((o) =>
-        o.name === "coverage.json" ? { ...o, codec: "directory" } : o,
+        o.name === "coverage.json" ? { ...o, codec: "raw" } : o,
       ),
-    };
+    } as unknown as ArtifactManifest;
     expect(reasons(guardManifest(m, f.named))).toEqual([
-      'artifact-manifest.json objects[0] (coverage.json): codec must be "file"',
+      'artifact-manifest.json objects[1] (coverage.json): codec must be "file" or "directory"',
     ]);
   });
 
@@ -372,7 +396,10 @@ describe("guardManifest", () => {
     const f = await fixture();
     expect(
       reasons(
-        guardManifest({ objects: f.manifest.objects.slice(1, 2) }, f.named),
+        guardManifest(
+          { objects: [f.manifest.objects[0], f.manifest.objects[2]] },
+          f.named,
+        ),
       ),
     ).toEqual([
       "artifact-manifest.json: does not list coverage.json",
@@ -380,22 +407,83 @@ describe("guardManifest", () => {
     ]);
     const withRole = {
       objects: f.manifest.objects.map((o, i) =>
-        i === 0 ? { ...o, role: "x" } : o,
+        i === 1 ? { ...o, role: "x" } : o,
       ),
     } as unknown as ArtifactManifest;
     expect(reasons(guardManifest(withRole, f.named))).toEqual([
-      "artifact-manifest.json objects[0] (coverage.json): keys must be exactly cid, name, size, codec, ipld_codec, sha256",
+      "artifact-manifest.json objects[1] (coverage.json): keys must be exactly cid, name, size, codec, ipld_codec, sha256",
       "artifact-manifest.json: does not list coverage.json",
     ]);
+  });
+});
+
+describe("guardManifestFile and publishManifest (the manifest as its own published file)", () => {
+  test("a valid manifest with its CAR passes and reaches the (fake) uploader once", async () => {
+    const f = await fixture();
+    expect(await guardManifestFile(f.manifestFile, f.named)).toEqual([]);
+    const up = new FakeUploader();
+    expect(await publishManifest(f.manifestFile, up, f.named)).toEqual({
+      root: f.manifestFile.root,
+    });
+    expect(up.imported).toEqual([
+      {
+        root: f.manifestFile.root,
+        car_sha256: sha256Hex(f.manifestFile.car),
+        bytes: f.manifestFile.car.length,
+      },
+    ]);
+  });
+
+  test("refuses another name, a run manifest, malformed JSON, the manifest rules, and a wrong root or CAR", async () => {
+    const f = await fixture();
+    expect(
+      reasons(
+        await guardManifestFile({ ...f.manifestFile, name: "m.json" }, f.named),
+      ),
+    ).toEqual(["m.json: an artifact manifest is named artifact-manifest.json"]);
+    const rm = await manifestFile(RUN_MANIFEST);
+    expect(reasons(await guardManifestFile(rm, f.named))).toEqual([
+      "artifact-manifest.json: holds a run manifest; a run manifest is never published",
+      "artifact-manifest.json: must be { objects: [...] }",
+    ]);
+    const bad = { ...f.manifestFile, bytes: enc("{") };
+    const badCar = await fileCar(blob(bad.bytes));
+    expect(
+      reasons(
+        await guardManifestFile(
+          { ...bad, root: badCar.root, car: badCar.car },
+          f.named,
+        ),
+      ),
+    ).toEqual(["artifact-manifest.json: not valid JSON"]);
+    const noDir = await manifestFile({ objects: f.manifest.objects.slice(1) });
+    expect(reasons(await guardManifestFile(noDir, f.named))).toEqual([
+      "artifact-manifest.json: must list exactly one directory (the publish folder); lists 0",
+    ]);
+    expect(
+      reasons(
+        await guardManifestFile(
+          { ...f.manifestFile, root: noDir.root },
+          f.named,
+        ),
+      ),
+    ).toEqual(["(car): root is not the CID of these bytes"]);
+    const up = new FakeUploader();
+    await expect(
+      publishManifest({ ...f.manifestFile, car: noDir.car }, up, f.named),
+    ).rejects.toBeInstanceOf(PublishRefused);
+    expect(up.imported).toEqual([]);
   });
 });
 
 describe("guardDirectory and publishDirectory", () => {
   test("a valid folder passes and reaches the (fake) uploader once, with the CAR and its root", async () => {
     const f = await fixture();
-    expect(await guardDirectory(f, f.named)).toEqual([]);
+    expect(await guardDirectory(f, f.manifestBytes)).toEqual([]);
     const up = new FakeUploader();
-    expect(await publishDirectory(f, up, f.named)).toEqual({ root: f.root });
+    expect(await publishDirectory(f, f.manifestBytes, up)).toEqual({
+      root: f.root,
+    });
     expect(up.imported).toEqual([
       { root: f.root, car_sha256: sha256Hex(f.car), bytes: f.car.length },
     ]);
@@ -403,70 +491,62 @@ describe("guardDirectory and publishDirectory", () => {
 
   test("refuses a folder holding a run manifest, and the uploader is never called", async () => {
     const f = await fixture();
-    const files = [
+    const d = await withFolder(f, [
       ...f.files,
       { name: "run_manifest.json", bytes: json(RUN_MANIFEST) },
-    ];
-    const car = await directoryCar(files);
+    ]);
     const up = new FakeUploader();
-    const err = await publishDirectory(
-      { files, root: car.root, car: car.car },
-      up,
-      f.named,
-    ).catch((e: unknown) => e);
+    const err = await publishDirectory(d, d.manifestBytes, up).catch(
+      (e: unknown) => e,
+    );
     expect(err).toBeInstanceOf(PublishRefused);
     expect(reasons((err as PublishRefused).refusals)).toEqual([
-      "(directory): files must be exactly artifact-manifest.json, coverage.json; got artifact-manifest.json, coverage.json, run_manifest.json",
+      "(directory): files must be exactly coverage.json; got coverage.json, run_manifest.json",
       "run_manifest.json: a run manifest is never published",
-      "run_manifest.json: not a publish-folder file (only artifact-manifest.json and coverage.json)",
+      "run_manifest.json: not a publish-folder file (only coverage.json)",
     ]);
     expect(up.imported).toEqual([]);
   });
 
-  test("refuses a folder with a run manifest listed in its artifact manifest", async () => {
+  test("refuses the artifact manifest inside the folder (the earlier two-file layout)", async () => {
     const f = await fixture();
-    const rm = json(RUN_MANIFEST);
-    const manifest = {
-      objects: [...f.manifest.objects, await entryFor("run_manifest.json", rm)],
-    };
-    const d = await withManifest(f, manifest);
-    expect(reasons(await guardDirectory(d, f.named))).toEqual([
-      "artifact-manifest.json objects[3] (run_manifest.json): a run manifest is never published",
+    const d = await withFolder(f, [
+      { name: "artifact-manifest.json", bytes: f.manifestBytes },
+      ...f.files,
+    ]);
+    expect(reasons(await guardDirectory(d, d.manifestBytes))).toEqual([
+      "(directory): files must be exactly coverage.json; got artifact-manifest.json, coverage.json",
+      "artifact-manifest.json: not a publish-folder file (only coverage.json)",
     ]);
   });
 
-  test("refuses the earlier four-file folder (run manifest and schema beside coverage and the manifest)", async () => {
+  test("refuses a folder whose manifest's directory entry is another folder or another CAR", async () => {
     const f = await fixture();
-    const d = await withManifest(f, f.manifest, [
-      { name: "run_manifest.json", bytes: json(RUN_MANIFEST) },
-      { name: "schema.json", bytes: json({ tables: [] }) },
+    const other = await directoryCar([
+      { name: "coverage.json", bytes: enc("{}") },
     ]);
-    const r = reasons(await guardDirectory(d, f.named));
-    expect(r[0]).toMatch(/^\(directory\): files must be exactly/);
-    expect(r).toContain("run_manifest.json: a run manifest is never published");
-    expect(r).toContain(
-      "schema.json: not a publish-folder file (only artifact-manifest.json and coverage.json)",
-    );
+    const m = (dir: PublishedObject) =>
+      json({ objects: [dir, ...f.manifest.objects.slice(1)] });
+    const dir = f.manifest.objects[0];
+    for (const changed of [
+      { ...dir, cid: other.root },
+      { ...dir, size: dir.size + 1 },
+      { ...dir, sha256: other.car_sha256 },
+    ])
+      expect(reasons(await guardDirectory(f, m(changed)))).toEqual([
+        "(directory): the artifact manifest's directory is not this folder (CID, CAR size and sha256)",
+      ]);
   });
 
-  test("refuses a folder without its artifact manifest", async () => {
+  test("refuses a malformed manifest and still checks the folder's files", async () => {
     const f = await fixture();
-    const files = [f.files[1]];
-    const car = await directoryCar(files);
-    expect(
-      reasons(
-        await guardDirectory({ files, root: car.root, car: car.car }, f.named),
-      ),
-    ).toEqual([
-      "(directory): files must be exactly artifact-manifest.json, coverage.json; got coverage.json",
+    expect(reasons(await guardDirectory(f, enc("{")))).toEqual([
+      "artifact-manifest.json: not valid JSON",
       "coverage.json: not listed in the artifact manifest",
     ]);
-  });
-
-  test("refuses an artifact manifest that is not { objects: [...] }", async () => {
-    const f = await fixture();
-    const d = await withManifest(f, { ...f.manifest, run_id: "r" });
-    expect(reasons(await guardDirectory(d, f.named))).toEqual([
+    expect(
+      reasons(await guardDirectory(f, json({ ...f.manifest, run_id: "r" }))),
+    ).toEqual([
       "artifact-manifest.json: must be { objects: [...] }",
       "coverage.json: not listed in the artifact manifest",
     ]);
@@ -474,13 +554,12 @@ describe("guardDirectory and publishDirectory", () => {
 
   test("refuses coverage.json listed with the right size and sha256 but another CID", async () => {
     const f = await fixture();
-    const manifest = {
+    const m = json({
       objects: f.manifest.objects.map((o) =>
         o.name === "coverage.json" ? { ...o, cid: f.named[0].cid } : o,
       ),
-    };
-    const d = await withManifest(f, manifest);
-    expect(reasons(await guardDirectory(d, f.named))).toEqual([
+    });
+    expect(reasons(await guardDirectory(f, m))).toEqual([
       "coverage.json: CID or IPLD codec differs from the artifact manifest",
     ]);
   });
@@ -488,25 +567,24 @@ describe("guardDirectory and publishDirectory", () => {
   test("refuses a CAR or root that is not the deterministic CAR of exactly these files", async () => {
     const f = await fixture();
     const other = await directoryCar([
-      f.files[0],
       { name: "coverage.json", bytes: enc("{}") },
     ]);
-    expect(
-      reasons(
-        await guardDirectory(
-          { files: f.files, root: other.root, car: other.car },
-          f.named,
-        ),
+    const r = reasons(
+      await guardDirectory(
+        { files: f.files, root: other.root, car: other.car },
+        f.manifestBytes,
       ),
-    ).toEqual([
+    );
+    expect(r).toEqual([
       "(car): root is not the CID of these files",
       "(car): CAR is not the deterministic CAR of these files",
+      "(directory): the artifact manifest's directory is not this folder (CID, CAR size and sha256)",
     ]);
   });
 
   test("refuses a CAR over 1 MB", async () => {
     const f = await fixture(new Uint8Array(MAX_PUBLISH_BYTES).fill(32));
-    expect(reasons(await guardDirectory(f, f.named))).toEqual([
+    expect(reasons(await guardDirectory(f, f.manifestBytes))).toEqual([
       expect.stringMatching(/^\(car\): over 1 MB \(\d+ bytes > 1000000\)$/),
     ]);
   });
@@ -514,7 +592,7 @@ describe("guardDirectory and publishDirectory", () => {
   test("an uploader that reports another root is an error", async () => {
     const f = await fixture();
     const liar: Uploader = { importCar: async () => ({ root: "bafy-other" }) };
-    await expect(publishDirectory(f, liar, f.named)).rejects.toThrow(
+    await expect(publishDirectory(f, f.manifestBytes, liar)).rejects.toThrow(
       /uploader reported root bafy-other/,
     );
   });
@@ -608,6 +686,17 @@ describe("guardObject and publishObject", () => {
         ipld_codec: "dag-pb",
       },
     ]);
+  });
+
+  test("the published sample is the 5-mile sample object: its recorded center and radius, 151,748 rows", () => {
+    expect(PUBLISHED_SAMPLE).toEqual({
+      object: "los-angeles-roll2026-sample-5mi.parquet",
+      center_latitude: 34.20155,
+      center_longitude: -118.45361,
+      radius_miles: 5,
+      rows: 151748,
+    });
+    expect(NAMED_OBJECTS.map((n) => n.name)).toContain(PUBLISHED_SAMPLE.object);
   });
 
   test("with the default named list, any other Parquet is refused as an object", async () => {

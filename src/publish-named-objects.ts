@@ -36,3 +36,26 @@ export const NAMED_OBJECTS: readonly NamedObject[] = [
     ipld_codec: "dag-pb",
   },
 ];
+
+/** The published sample as coverage.json describes it: its circle and its row count. */
+export type SampleSpec = {
+  /** The named object it describes. */
+  object: string;
+  center_latitude: number;
+  center_longitude: number;
+  radius_miles: number;
+  rows: number;
+};
+
+/**
+ * The 5-mile sample: center and radius as its recorded build bound them (the publication packet's
+ * build/roll-sample.ts: CENTER_LAT 34.20155, CENTER_LON -118.45361, RADIUS_MILES 5, by the data API's
+ * own distance rule), and its row count, which the build checks against the sample Parquet's footer.
+ */
+export const PUBLISHED_SAMPLE: SampleSpec = {
+  object: "los-angeles-roll2026-sample-5mi.parquet",
+  center_latitude: 34.20155,
+  center_longitude: -118.45361,
+  radius_miles: 5,
+  rows: 151_748,
+};
