@@ -327,7 +327,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     expect(w.items).toHaveLength(5);
     expect(w.returned).toBe(5);
     expect(o.gaps).toContain(
-      `Results truncated: the within-window list returned 5 of ${w.count} long-open permits (longest open first).`,
+      `Results truncated: the within-window list returned 5 of ${w.count.toLocaleString("en-US")} long-open permits (longest open first).`,
     );
     expect(w.contractor_source.source_name).toBe(CONTRACTOR_SOURCE);
     const statuses: Record<string, number> = {};
@@ -558,7 +558,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     expect(o.content).not.toHaveProperty("status");
     expect(o.gaps).toEqual([
       outside,
-      "Results truncated: long_open_permits returned 10 of 17 long-open permits (longest open first).",
+      "Results truncated: returned 10 of 17 long-open permits (longest open first).",
     ]);
     const counts = await checkCounts(
       [
@@ -614,8 +614,8 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
     expect(c.within_contractor_window).not.toHaveProperty("status");
     expect(o.gaps).toEqual([
       nearest,
-      "Results truncated: the longest-open list returned 10 of 2309 long-open permits (longest open first).",
-      "Results truncated: the within-window list returned 5 of 2039 long-open permits (longest open first).",
+      "Results truncated: the longest-open list returned 10 of 2,309 long-open permits (longest open first).",
+      "Results truncated: the within-window list returned 5 of 2,039 long-open permits (longest open first).",
     ]);
   });
 
@@ -774,7 +774,7 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
       expect(w.items).toHaveLength(WITHIN_WINDOW_LIMIT);
       expect(w.returned).toBe(WITHIN_WINDOW_LIMIT);
       expect(body.gaps).toContain(
-        `Results truncated: the within-window list returned 5 of ${w.count} long-open permits (longest open first).`,
+        `Results truncated: the within-window list returned 5 of ${w.count.toLocaleString("en-US")} long-open permits (longest open first).`,
       );
     } finally {
       await client.close();
@@ -930,6 +930,10 @@ describe.skipIf(!hasRealData)("the agent on the real latest run", () => {
       },
     });
     expect(o.gaps).toContain(text);
+    // The truncation line: no tool name, the numbers formatted.
+    expect(o.gaps).toContain(
+      "Results truncated: returned 10 of 115,373 matching parcels (nearest first).",
+    );
     expect(o.gaps.some((g) => g.includes("is outside the City"))).toBe(false);
     const counts = await checkCounts(
       [

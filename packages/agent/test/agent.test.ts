@@ -162,7 +162,7 @@ const resolvedCenter = (p: Anthropic.MessageCreateParamsNonStreaming) =>
 const VAN_NUYS_CENTER = "the median center 34.18651, -118.44891 of 467 parcels";
 const VAN_NUYS_STATEMENT = `Resolved 'Van Nuys' (postal city) to ${VAN_NUYS_CENTER}`;
 const VAN_NUYS_NOTE = `${VAN_NUYS_STATEMENT}. Stored postal city names: VAN NUYS | VAN NUYS CALIF | VAN NUYS,.`;
-const VAN_NUYS_ASSUMPTION = `'Van Nuys' means the postal city VAN NUYS / VAN NUYS CALIF / VAN NUYS,; its search center is ${VAN_NUYS_CENTER}.`;
+const VAN_NUYS_ASSUMPTION = `'Van Nuys' means the postal city "VAN NUYS" / "VAN NUYS CALIF" / "VAN NUYS,"; its search center is ${VAN_NUYS_CENTER}.`;
 
 /** The note resolve_place returned in the request at `index`. */
 const resolveNote = (model: ScriptedModel, index: number) =>

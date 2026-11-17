@@ -589,7 +589,7 @@ function explain(
           `resolved ${resolvedPhrase(r.name, r)}${r.also_matched ? ` (it also matched a ${BASIS_LABEL[r.also_matched.basis]} with ${centerPhrase(r.also_matched)})` : ""}`,
         );
         assumptions.push(
-          `'${r.name}' means the ${basis} ${r.raw_values.join(" / ")}; its search center is ${centerPhrase(r)}.`,
+          `'${r.name}' means the ${basis} ${r.raw_values.map((v) => `"${v}"`).join(" / ")}; its search center is ${centerPhrase(r)}.`,
         );
       } else if (r.status === "ambiguous") {
         reasoning.push(

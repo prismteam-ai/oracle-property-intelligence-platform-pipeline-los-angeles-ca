@@ -206,9 +206,7 @@ describe("runTool", () => {
         source_name: "LA County Assessor Roll",
         collected_at: "2026-11-11T16:17:40.932Z",
       });
-    expect(o.gaps.join("\n")).toMatch(
-      /truncated: search_aged_roofs returned 3 of 42/,
-    );
+    expect(o.gaps.join("\n")).toMatch(/truncated: returned 3 of 42 matching/);
     expect(o.gaps.join("\n")).toMatch(/proxy/);
   });
   test("parcel_detail: allowlisted fields only, no owner field at all", async () => {
@@ -360,7 +358,7 @@ describe("runTool", () => {
     // and how many parcels lie outside the City of Los Angeles is known for the nearest 3 only.
     expect(o.gaps).toEqual([
       "The count and the list cover every permit within 5 mi. How many of the 42 parcels within 5 mi that have a roof year lie outside the City of Los Angeles, where there is no permit data, was counted only for the nearest 3 (the data API marks at most 3 parcels): none of those 3 does; for the other 39 it is not known.",
-      "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
+      "Results truncated: returned 2 of 57 long-open permits (longest open first).",
     ]);
     const all = await runTool(
       "long_open_permits",
@@ -1839,7 +1837,7 @@ describe("search_aged_roofs: long_open_permit", () => {
     expect(text).toContain("only the nearest 3 were checked");
     expect(o.gaps).toContain(text);
     expect(o.gaps).toContain(
-      "Results truncated: search_aged_roofs returned 1 of 2 matching parcels (nearest first).",
+      "Results truncated: returned 1 of 2 matching parcels (nearest first).",
     );
   });
 
@@ -2454,7 +2452,7 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
     expect(c).not.toHaveProperty("status");
     expect(o.gaps).toEqual([
       outside,
-      "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
+      "Results truncated: returned 2 of 57 long-open permits (longest open first).",
     ]);
     expect(o.fact).toMatchObject({
       count: 57,
@@ -2476,7 +2474,7 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
       "truncated",
     ]);
     expect(o.gaps).toEqual([
-      "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
+      "Results truncated: returned 2 of 57 long-open permits (longest open first).",
     ]);
     const w = await runTool(
       "long_open_permits",
@@ -2585,7 +2583,7 @@ describe("long_open_permits: permit data of the circle's parcels (the City of Lo
     expect(o.content).not.toHaveProperty("status");
     expect(o.gaps).toEqual([
       nearest,
-      "Results truncated: long_open_permits returned 2 of 57 long-open permits (longest open first).",
+      "Results truncated: returned 2 of 57 long-open permits (longest open first).",
     ]);
     expect(o.fact).toMatchObject({
       count: 57,

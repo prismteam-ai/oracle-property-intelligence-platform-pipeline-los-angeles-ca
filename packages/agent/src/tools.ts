@@ -1174,7 +1174,7 @@ const run = {
       gaps.push(longOpen.stated.text);
     if (truncated)
       gaps.push(
-        `Results truncated: search_aged_roofs returned ${items.length} of ${count} matching parcels (nearest first).`,
+        `Results truncated: returned ${num(items.length)} of ${num(count)} matching parcels (nearest first).`,
       );
     if (proxy > 0)
       gaps.push(
@@ -1338,7 +1338,7 @@ const run = {
         readCoverage(),
       ]);
       const ref = sourceRef(src, "permit");
-      const list = longOpenList(res, ref, "long_open_permits");
+      const list = longOpenList(res, ref, null);
       const na = notAvailable(cov, res.count, input.max_open_days ?? null);
       const area = areaStated(
         cov,
@@ -1666,7 +1666,8 @@ const days = (n: number) => `${n.toLocaleString("en-US")} days`;
 function longOpenList(
   res: LongOpenResult,
   ref: SourceRef | null,
-  what: string,
+  /** Which of two lists (null: the only one). */
+  what: string | null,
 ): {
   items: Record<string, unknown>[];
   truncated: boolean;
@@ -1690,7 +1691,7 @@ function longOpenList(
   const truncated = res.count > items.length;
   if (truncated)
     gaps.push(
-      `Results truncated: ${what} returned ${items.length} of ${res.count} long-open permits (longest open first).`,
+      `Results truncated: ${what === null ? "" : `${what} `}returned ${num(items.length)} of ${num(res.count)} long-open permits (longest open first).`,
     );
   return {
     items,
