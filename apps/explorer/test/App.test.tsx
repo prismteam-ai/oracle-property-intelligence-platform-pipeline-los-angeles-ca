@@ -1628,15 +1628,16 @@ describe("Explorer sources, records and long-open permits", () => {
     expect(table.querySelectorAll("tbody a")).toHaveLength(0);
   });
 
-  test("a run with a line in runs/publications.jsonl shows its folder CID, the date and a link to the folder on ipfs.io", async () => {
+  test("a run with a line in runs/publications.jsonl shows its artifact manifest's CID, the date and a link to the manifest on ipfs.io", async () => {
+    const MANIFEST =
+      "bafkreigqi7vtxtejkcf7y4vgba3lckqusywxy36nogl5o5sktnt52tlyfm";
     const FOLDER =
       "bafybeicphj6b27ssldxbw3idwtgikzocr2xn64xlotukmmhmfjji4rrlpu";
-    const CAR = "bafkreigqi7vtxtejkcf7y4vgba3lckqusywxy36nogl5o5sktnt52tlyfm";
     h.publications = [
       {
         run_id: "r1",
+        manifest_cid: MANIFEST,
         folder_cid: FOLDER,
-        car_cid: CAR,
         published_at: "2026-11-18T09:30:00.000Z",
       },
     ];
@@ -1651,17 +1652,17 @@ describe("Explorer sources, records and long-open permits", () => {
       await screen.findByTestId("run-history");
       expect(tbodyText("run-history").map((r) => [r[0], r[9]])).toEqual([
         ["r0", "not published"],
-        ["r1", `${FOLDER} · 2026-11-18 · ipfs.io`],
+        ["r1", `${MANIFEST} · 2026-11-18 · ipfs.io`],
         ["r2", "not published"],
       ]);
       const links = [
         ...screen.getByTestId("run-history").querySelectorAll("tbody a"),
       ];
       expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual(
-        [["ipfs.io", `https://ipfs.io/ipfs/${FOLDER}/`]],
+        [["ipfs.io", `https://ipfs.io/ipfs/${MANIFEST}`]],
       );
-      // The CAR's CID is recorded, not shown.
-      expect(document.body.textContent).not.toContain(CAR);
+      // The folder's CID is recorded, not shown.
+      expect(document.body.textContent).not.toContain(FOLDER);
     } finally {
       h.publications = [];
     }

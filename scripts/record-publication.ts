@@ -1,10 +1,10 @@
 /**
- * Append one published run to runs/publications.jsonl: {"run_id","folder_cid","car_cid","published_at"}, in that
+ * Append one published run to runs/publications.jsonl: {"run_id","manifest_cid","folder_cid","published_at"}, in that
  * key order. published_at is the UTC date or time given, or now. Refuses (and writes nothing): a run ID not in
  * runs/run_history.jsonl, a run already recorded, a CID that is not a CIDv1 in base32, a malformed existing file.
  * Append only: after writing it checks that the file's earlier bytes are unchanged and that exactly the new line
  * was added. Prints the line; never commits.
- * Usage: node scripts/record-publication.ts <run_id> <folder_cid> <car_cid> [published_at]
+ * Usage: node scripts/record-publication.ts <run_id> <manifest_cid> <folder_cid> [published_at]
  */
 import {
   appendFileSync,
@@ -26,8 +26,10 @@ export const HISTORY_PATH = `${REPO}runs/run_history.jsonl`;
 
 export interface RecordInput {
   run_id: string;
+  /** The CID of the run's artifact-manifest.json. */
+  manifest_cid: string;
+  /** The CID of the run's publish folder. */
   folder_cid: string;
-  car_cid: string;
   /** A UTC date or time; omitted: now (an ISO time). */
   published_at?: string;
 }
@@ -60,8 +62,8 @@ export function recordPublication(
     );
   const p: Publication = {
     run_id: input.run_id,
+    manifest_cid: input.manifest_cid,
     folder_cid: input.folder_cid,
-    car_cid: input.car_cid,
     published_at: input.published_at ?? now().toISOString(),
   };
   const line = publicationLine(p); // throws on a CID or date that is not valid
@@ -85,19 +87,19 @@ export function verifyAppend(path: PathLike, before: Buffer, line: string) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const [run_id, folder_cid, car_cid, published_at, ...rest] =
+  const [run_id, manifest_cid, folder_cid, published_at, ...rest] =
     process.argv.slice(2);
-  if (!run_id || !folder_cid || !car_cid || rest.length) {
+  if (!run_id || !manifest_cid || !folder_cid || rest.length) {
     console.error(
-      "usage: node scripts/record-publication.ts <run_id> <folder_cid> <car_cid> [published_at]",
+      "usage: node scripts/record-publication.ts <run_id> <manifest_cid> <folder_cid> [published_at]",
     );
     process.exit(2);
   }
   try {
     const line = recordPublication({
       run_id,
+      manifest_cid,
       folder_cid,
-      car_cid,
       published_at,
     });
     process.stdout.write(

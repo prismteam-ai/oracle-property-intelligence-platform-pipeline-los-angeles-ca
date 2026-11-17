@@ -307,7 +307,7 @@ test.describe("with credentials", () => {
     expect(linksCol).toBeGreaterThan(-1);
     expect(headers.at(-1)).toBe("Published (identifier)");
     // The last column: the run's line in runs/publications.jsonl (bundled at build from this checkout's file):
-    // folder CID, date and its ipfs.io link; "not published" without one. The API's published flag is not shown.
+    // the artifact manifest's CID, the date and its ipfs.io link; "not published" without one. The API's published flag is not shown.
     const publications = parsePublications(
       readFileSync(
         new URL("../../../runs/publications.jsonl", import.meta.url),
@@ -330,8 +330,8 @@ test.describe("with credentials", () => {
         const p = publications.find((x) => x.run_id === h.run_id);
         return p
           ? [
-              `${p.folder_cid} · ${p.published_at.slice(0, 10)} · ipfs.io`,
-              [gatewayUrl(p.folder_cid)],
+              `${p.manifest_cid} · ${p.published_at.slice(0, 10)} · ipfs.io`,
+              [gatewayUrl(p.manifest_cid)],
             ]
           : ["not published", []];
       }),

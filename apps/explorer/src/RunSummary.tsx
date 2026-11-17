@@ -265,17 +265,17 @@ export function RunSummary({
 }
 
 /**
- * A run's publication as runs/publications.jsonl records it (bundled at build): the publish folder's CID, the
- * date and a link to the folder on one public gateway; "not published" for a run with no line.
+ * A run's publication as runs/publications.jsonl records it (bundled at build): its artifact manifest's CID, the
+ * date and a link to the manifest on one public gateway; "not published" for a run with no line.
  */
 function PublishedCell({ runId }: { runId: string }) {
   const p = PUBLICATIONS.find((x) => x.run_id === runId);
   if (!p) return <>not published</>;
   return (
     <>
-      <span className="mono">{p.folder_cid}</span> ·{" "}
+      <span className="mono">{p.manifest_cid}</span> ·{" "}
       {p.published_at.slice(0, 10)} ·{" "}
-      <a href={gatewayUrl(p.folder_cid)}>ipfs.io</a>
+      <a href={gatewayUrl(p.manifest_cid)}>ipfs.io</a>
     </>
   );
 }

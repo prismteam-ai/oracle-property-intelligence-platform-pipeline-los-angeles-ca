@@ -1,7 +1,8 @@
 /**
  * runs/publications.jsonl: one line per published run, appended by scripts/record-publication.ts and never
- * rewritten. Each line is {"run_id","folder_cid","car_cid","published_at"} in that key order: the run, the CID of
- * its publish folder, the CID of the folder's CAR, and the UTC date (or time) it was published. The file is
+ * rewritten. Each line is {"run_id","manifest_cid","folder_cid","published_at"} in that key order: the run, the CID
+ * of its artifact manifest (a published file of its own, outside the folder), the CID of its publish folder, and the
+ * UTC date (or time) it was published. No CAR identifier is recorded. The file is
  * tracked and starts empty. The Explorer bundles it at build (its run history's "Published (identifier)" column);
  * the agent and the data API never read it.
  *
@@ -10,22 +11,24 @@
 
 export const PUBLICATION_KEYS = [
   "run_id",
+  "manifest_cid",
   "folder_cid",
-  "car_cid",
   "published_at",
 ] as const;
 
 export interface Publication {
   run_id: string;
+  /** The run's artifact manifest (artifact-manifest.json), published as its own file. */
+  manifest_cid: string;
+  /** The run's publish folder (coverage.json). */
   folder_cid: string;
-  car_cid: string;
   /** A UTC date (YYYY-MM-DD) or time (YYYY-MM-DDTHH:MM:SS[.sss]Z). */
   published_at: string;
 }
 
-/** The public gateway the Explorer links a published folder to (path form, one gateway). */
-export const gatewayUrl = (folderCid: string) =>
-  `https://ipfs.io/ipfs/${folderCid}/`;
+/** The public gateway the Explorer links a run's artifact manifest to (path form, one gateway). */
+export const gatewayUrl = (manifestCid: string) =>
+  `https://ipfs.io/ipfs/${manifestCid}`;
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 
@@ -106,13 +109,13 @@ export function publicationProblem(value: unknown): string | null {
   const p = value as Record<string, unknown>;
   for (const k of PUBLICATION_KEYS)
     if (typeof p[k] !== "string") return `${k} is not a string`;
-  const { run_id, folder_cid, car_cid, published_at } =
+  const { run_id, manifest_cid, folder_cid, published_at } =
     p as unknown as Publication;
   if (!RUN_ID.test(run_id)) return `run_id "${run_id}" is not a run ID`;
+  if (!isCidV1Base32(manifest_cid))
+    return `manifest_cid "${manifest_cid}" is not a CIDv1 in base32 (sha2-256)`;
   if (!isCidV1Base32(folder_cid))
     return `folder_cid "${folder_cid}" is not a CIDv1 in base32 (sha2-256)`;
-  if (!isCidV1Base32(car_cid))
-    return `car_cid "${car_cid}" is not a CIDv1 in base32 (sha2-256)`;
   if (!isUtcDateOrTime(published_at))
     return `published_at "${published_at}" is not a UTC date (YYYY-MM-DD) or time (YYYY-MM-DDTHH:MM:SS[.sss]Z)`;
   return null;
@@ -122,8 +125,8 @@ export function publicationProblem(value: unknown): string | null {
 export function publicationLine(p: Publication): string {
   const line = JSON.stringify({
     run_id: p.run_id,
+    manifest_cid: p.manifest_cid,
     folder_cid: p.folder_cid,
-    car_cid: p.car_cid,
     published_at: p.published_at,
   });
   const problem = publicationProblem(JSON.parse(line));

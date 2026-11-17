@@ -28,12 +28,12 @@ import {
 } from "../scripts/record-publication.ts";
 
 let FOLDER = ""; // a dag-pb UnixFS directory CID, as a publish folder has
-let CAR = ""; // a raw-leaf file CID, as a small CAR file's bytes have
+let MANIFEST = ""; // a raw-leaf file CID, as a small artifact-manifest.json has
 beforeAll(async () => {
   FOLDER = await directoryCid([
     { name: "coverage.json", bytes: new TextEncoder().encode("{}") },
   ]);
-  CAR = await bytesCid(new TextEncoder().encode("car bytes"));
+  MANIFEST = await bytesCid(new TextEncoder().encode('{"artifacts":[]}'));
 });
 
 const RUN_A = "2026-11-14T10-00-00-000Z-bc7f18f2e9cf2";
@@ -59,9 +59,9 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 describe("publication lines", () => {
   test("CIDv1 base32 with a sha2-256 multihash only", () => {
     expect(FOLDER).toMatch(/^bafy/);
-    expect(CAR).toMatch(/^bafk/);
+    expect(MANIFEST).toMatch(/^bafk/);
     expect(isCidV1Base32(FOLDER)).toBe(true);
-    expect(isCidV1Base32(CAR)).toBe(true);
+    expect(isCidV1Base32(MANIFEST)).toBe(true);
     for (const bad of [
       "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG", // CIDv0 (base58)
       FOLDER.toUpperCase(), // base32 upper (multibase "B")
@@ -96,21 +96,21 @@ describe("publication lines", () => {
   test("the line has the fixed key order; parsing refuses anything malformed", () => {
     const p = {
       run_id: RUN_A,
+      manifest_cid: MANIFEST,
       folder_cid: FOLDER,
-      car_cid: CAR,
       published_at: "2026-11-18",
     };
     const line = publicationLine(p);
     expect(line).toBe(
-      `{"run_id":"${RUN_A}","folder_cid":"${FOLDER}","car_cid":"${CAR}","published_at":"2026-11-18"}\n`,
+      `{"run_id":"${RUN_A}","manifest_cid":"${MANIFEST}","folder_cid":"${FOLDER}","published_at":"2026-11-18"}\n`,
     );
     expect(parsePublications("")).toEqual([]);
     expect(parsePublications(line)).toEqual([p]);
-    expect(gatewayUrl(FOLDER)).toBe(`https://ipfs.io/ipfs/${FOLDER}/`);
+    expect(gatewayUrl(MANIFEST)).toBe(`https://ipfs.io/ipfs/${MANIFEST}`);
     const reordered = JSON.stringify({
       folder_cid: FOLDER,
       run_id: RUN_A,
-      car_cid: CAR,
+      manifest_cid: MANIFEST,
       published_at: "2026-11-18",
     });
     for (const [text, message] of [
@@ -121,10 +121,15 @@ describe("publication lines", () => {
       [`${reordered}\n`, "keys must be exactly"],
       [`${line.slice(0, -2)},"x":"y"}\n`, "keys must be exactly"],
       [line.replace(FOLDER, "bafyx"), "folder_cid"],
-      [line.replace(CAR, FOLDER.toUpperCase()), "car_cid"],
+      [line.replace(MANIFEST, FOLDER.toUpperCase()), "manifest_cid"],
       [line.replace("2026-11-18", "2026-11-31"), "published_at"],
       [line.replace(`"run_id"`, ` "run_id"`), "written form"],
       [line + line, "line 2: run"],
+      // The earlier layout (folder and CAR identifiers) is refused.
+      [
+        `${JSON.stringify({ run_id: RUN_A, folder_cid: FOLDER, car_cid: MANIFEST, published_at: "2026-11-18" })}\n`,
+        "keys must be exactly run_id, manifest_cid, folder_cid, published_at",
+      ],
     ] as const)
       expect(() => parsePublications(text), message).toThrow(message);
   });
@@ -141,8 +146,8 @@ describe("scripts/record-publication.ts", () => {
     const first = recordPublication(
       {
         run_id: RUN_A,
+        manifest_cid: MANIFEST,
         folder_cid: FOLDER,
-        car_cid: CAR,
         published_at: "2026-11-18",
       },
       paths,
@@ -150,12 +155,12 @@ describe("scripts/record-publication.ts", () => {
     const afterFirst = readFileSync(paths.publications, "utf8");
     expect(afterFirst).toBe(first);
     const second = recordPublication(
-      { run_id: RUN_B, folder_cid: FOLDER, car_cid: CAR },
+      { run_id: RUN_B, manifest_cid: MANIFEST, folder_cid: FOLDER },
       paths,
       () => new Date("2026-11-19T08:00:00.000Z"),
     );
     expect(second).toBe(
-      `{"run_id":"${RUN_B}","folder_cid":"${FOLDER}","car_cid":"${CAR}","published_at":"2026-11-19T08:00:00.000Z"}\n`,
+      `{"run_id":"${RUN_B}","manifest_cid":"${MANIFEST}","folder_cid":"${FOLDER}","published_at":"2026-11-19T08:00:00.000Z"}\n`,
     );
     expect(readFileSync(paths.publications, "utf8")).toBe(afterFirst + second);
     expect(
@@ -166,7 +171,7 @@ describe("scripts/record-publication.ts", () => {
   });
 
   test("refuses, writing nothing: a run not in the history, a run already recorded, an invalid CID or date, a malformed file", () => {
-    const ok = { run_id: RUN_A, folder_cid: FOLDER, car_cid: CAR };
+    const ok = { run_id: RUN_A, manifest_cid: MANIFEST, folder_cid: FOLDER };
     recordPublication(ok, paths);
     const bytes = readFileSync(paths.publications);
     for (const [input, message] of [
@@ -180,7 +185,10 @@ describe("scripts/record-publication.ts", () => {
         },
         "folder_cid",
       ],
-      [{ ...ok, run_id: RUN_B, car_cid: CAR.slice(0, -2) }, "car_cid"],
+      [
+        { ...ok, run_id: RUN_B, manifest_cid: MANIFEST.slice(0, -2) },
+        "manifest_cid",
+      ],
       [{ ...ok, run_id: RUN_B, published_at: "yesterday" }, "published_at"],
     ] as const) {
       expect(() => recordPublication(input, paths), message).toThrow(message);
@@ -214,7 +222,7 @@ describe("scripts/record-publication.ts", () => {
     });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain(
-      "usage: node scripts/record-publication.ts <run_id> <folder_cid> <car_cid> [published_at]",
+      "usage: node scripts/record-publication.ts <run_id> <manifest_cid> <folder_cid> [published_at]",
     );
     expect(r.stdout).toBe("");
   });
