@@ -6,9 +6,9 @@
  * it. The gateway check counts a match only on gateways whose operator does not pin the content (--pinned-by), and
  * needs two counted operators.
  *
- * Default list (measured 18 Nov 2026, approvals §3e.132): ipfs.aleph.cloud and ipfs.filebase.io returned the
- * rehearsal file, the file inside the rehearsal folder and the folder as a CAR, root block first; gateway.pinata.cloud
- * returned the file, and in the night's gateway check also the file inside the folder and the folder CAR. The two
+ * Default list (measured 18 Nov 2026): ipfs.aleph.cloud and ipfs.filebase.io returned a small test file uploaded for
+ * the measurement, a file inside a test folder and that folder as a CAR, root block first; gateway.pinata.cloud
+ * returned the test file, and in a later run of this check also the file inside the folder and the folder CAR. The two
  * gateways the assignment gives as examples answer non-browser requests with HTTP 429 (retired 21 Sep 2026) and are
  * not listed.
  *

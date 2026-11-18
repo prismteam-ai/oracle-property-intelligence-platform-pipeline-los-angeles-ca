@@ -42,8 +42,8 @@
  * 5), waiting retryWaitMs (default 15 s) doubled after each attempt up to retryWaitMaxMs (default 120 s): 15, 30, 60
  * and 120 s, because a gateway can take minutes to find newly uploaded content.
  *
- * Boundary (kit rules/external-dependency-boundaries.md; assessment in the night-18nov notes, p2/boundary.md): an
- * operator-run, synchronous check of a handful of read-only GETs, one at a time, with bounded time and attempts;
+ * Boundary (kit rules/external-dependency-boundaries.md), assessed as: an operator-run, synchronous check of a
+ * handful of read-only GETs, one at a time, with bounded time and attempts;
  * the gateways are an injectable list and the HTTP client an injectable Fetch.
  *
  * Usage: node src/gateway-verify.ts <publication dir> <proof dir> --pinned-by <Operator> [--pinned-by <Operator>]
