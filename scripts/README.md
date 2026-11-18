@@ -13,12 +13,18 @@ The build never downloads anything: it reads a cache folder and checks every pag
 node scripts/ladbs-permits/fetch.mjs <permit-cache-dir>              # pages + manifest.json
 node scripts/ladbs-permits/fetch.mjs summarize <permit-cache-dir>    # summary.json + roofing_flagged.jsonl.gz
 
-node scripts/ladbs-contractors/fetch.mjs <contractor-cache-dir>                              # pages + manifest.json
+node scripts/ladbs-contractors/fetch.mjs <contractor-cache-dir> --license-read-at <time>      # pages + manifest.json
 node scripts/ladbs-contractors/fetch.mjs summarize <contractor-cache-dir> <permit-cache-dir>  # summary.json
 ```
 
-- The cache folder is required; both scripts refuse to run without it, or with their own folder. Nothing is
-  written beside the scripts.
+- The cache folder is required and must not exist yet: both scripts create it and refuse an existing one, empty
+  or not, so a recorded run's cache is never overwritten. They also refuse their own folder. Nothing is written
+  beside the scripts.
+- `--license-read-at` is when the view page's license was last read, as an ISO time in UTC (for example
+  `2026-11-12T13:19:00Z`). The script does not read the page; it records the time as given in the manifest's
+  `license_evidence`, and the build copies that into the run manifest.
+- The build hashes each cache's `fetch.mjs`: copy the script into its cache after the download, or use
+  `node scripts/permit-run.ts`, which does it (docs/runbook.md section 4b).
 - The contractor `summarize` also needs the permit cache folder: it reads the permit script's
   `roofing_flagged.jsonl.gz` to count how many contractor rows join a permit.
 - Requests: 1 s apart, a 120 s timeout each, up to 2 retries, then the script stops. User-Agent
@@ -45,9 +51,12 @@ node scripts/ladbs-contractors/fetch.mjs summarize <contractor-cache-dir> <permi
 pipeline's roofing rule: the build computes its own flags from the pages (src/roof-flags.ts) and never reads
 `roofing_flagged.jsonl.gz`.
 
-## The caches in use were made by earlier versions
+## The 12 Nov caches were made by earlier versions
 
-The permit and contractor caches of the recorded permit runs were made by earlier versions of these scripts:
+The permit and contractor caches of the two 12 Nov runs (the permits run and its rebuild) were made by earlier
+versions of these scripts; the caches of the two 17 Nov runs, the served one included, were made by the versions
+here, and their run manifests record these files' sha256 (`170eec40…` for permits, `1912fb7d…` for contractors).
+The earlier versions:
 
 | Script | sha256 of the version that made the cache | Recorded in |
 | --- | --- | --- |
@@ -57,10 +66,11 @@ The permit and contractor caches of the recorded permit runs were made by earlie
 The versions here differ from those:
 
 1. The cache folder (and, for the contractor `summarize`, the permit cache folder) is a required argument.
-2. Contractor manifest: `license_evidence` keeps the view page URL and the retrieval date only. Contractor
+2. Contractor manifest: `license_evidence` keeps the view page URL, the time given with `--license-read-at` and a
+   note that the script did not read the page. Contractor
    `summary.json`: `permit_cache` is a file name, not an absolute path.
 3. Contractor manifest and summary keys in American spelling (`license_stated`, `license_evidence`, `license`,
-   `license_class_counts`). The existing cache keeps the earlier `licence_*` keys; the build reads none of them.
+   `license_class_counts`). The 12 Nov contractor cache keeps the earlier `licence_*` keys; the build reads none of them.
 4. The permit script's header states what `work_desc` is and what it is used for.
 5. The permit script checks every row's columns before writing a page and pages by `permit_nbr, :id`; both
    scripts have a 120 s request timeout.
@@ -68,5 +78,5 @@ The versions here differ from those:
    `summary.json`); the flag code is unchanged.
 7. The User-Agent is `oracle-la-pipeline-fetch`.
 
-The build reads permit caches paged either way: `ORDER BY permit_nbr` (the existing cache) or
-`ORDER BY permit_nbr, :id`, the same order on every page of a dataset (src/stage-permits.ts `PERMIT_PAGE_ORDERS`).
+The build reads permit caches paged either way: `ORDER BY permit_nbr` (the 12 Nov cache) or
+`ORDER BY permit_nbr, :id` (the 17 Nov cache), the same order on every page of a dataset (src/stage-permits.ts `PERMIT_PAGE_ORDERS`).
