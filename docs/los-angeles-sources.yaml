@@ -6,7 +6,7 @@ slug: los-angeles
 fips: "06037"
 snapshot_time: "2026-11-11T15:52:13Z"
 verified_time: "2026-11-11T15:52:13Z"
-scope: county-wide parcels (increment 4) plus City of Los Angeles permits from the LADBS caches (increment 5); no Query DB writes, no publication
+scope: county-wide parcels (increment 4) plus City of Los Angeles permits from the LADBS caches (increment 5); no Query DB writes; IPFS publication (2026-11-18) of a roll-only parcel extract, a 5-mile sample of it, and per run a coverage summary and an artifact manifest; no permit or contractor rows
 parcel:
   canonical_source: tax_roll
   canonical_source_name: LA County Assessor - Assessor Parcel Data Roll 2026
