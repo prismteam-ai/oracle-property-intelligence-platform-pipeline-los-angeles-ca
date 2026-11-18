@@ -28,7 +28,7 @@ const h = vi.hoisted(() => ({
   longOpen: vi.fn(),
   forParcel: vi.fn(),
   detail: vi.fn(),
-  /** runs/publications.jsonl as bundled (empty, as tracked, unless a test records a line). */
+  /** A stand-in for runs/publications.jsonl as bundled (the module is mocked): empty unless a test records a line. */
   publications: [] as Publication[],
 }));
 vi.mock("../src/publications.ts", () => ({
