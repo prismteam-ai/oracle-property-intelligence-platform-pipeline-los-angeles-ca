@@ -1,12 +1,12 @@
 /** Features the pipeline story lists that are not in this increment (shown disabled, with the reason). */
 const FUTURE = [
   [
-    "IPFS artifact manifest and CIDs",
-    "Publication is blocked until republication rights under the LA County eGIS terms are confirmed.",
+    "Permit and contractor rows on IPFS",
+    "Not published: the City permit sets state no license. Only County roll data is eligible.",
   ],
   [
-    "Retrieval from two public IPFS gateways",
-    "Follows the manifest; nothing is published yet.",
+    "A publish step in the app",
+    "Publication to IPFS is run by hand, after a person reviews the files. A step in the app with review and approval is not built.",
   ],
   [
     "Permits outside the City of Los Angeles",

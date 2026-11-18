@@ -1470,6 +1470,27 @@ describe("Explorer sources, records and long-open permits", () => {
     expect(text).toContain("Permits outside the City of Los Angeles");
     expect(text).toContain("BBB");
     expect(text).not.toMatch(/Agent query|MCP interface/);
+    // The two IPFS cards: what is not published and why, and the publish step that is not built.
+    expect(
+      cards
+        .slice(0, 2)
+        .map((c) => [
+          c.querySelector("b")!.textContent,
+          c.querySelector("p")!.textContent,
+        ]),
+    ).toEqual([
+      [
+        "Permit and contractor rows on IPFS",
+        "Not published: the City permit sets state no license. Only County roll data is eligible.",
+      ],
+      [
+        "A publish step in the app",
+        "Publication to IPFS is run by hand, after a person reviews the files. A step in the app with review and approval is not built.",
+      ],
+    ]);
+    expect(text).not.toMatch(
+      /IPFS artifact manifest and CIDs|Retrieval from two public IPFS gateways/,
+    );
   });
 
   test("the run summary shows the permit run's permit counts", async () => {

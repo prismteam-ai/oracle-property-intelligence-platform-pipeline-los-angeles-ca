@@ -797,6 +797,23 @@ test.describe("with credentials", () => {
     await expect(
       page.getByRole("tab", { name: "Long-open permits" }),
     ).toBeVisible();
+    // The two IPFS cards: what is not published and why, and the publish step that is not built.
+    await expect(cards.nth(0).locator("b")).toHaveText(
+      "Permit and contractor rows on IPFS",
+    );
+    await expect(cards.nth(0).locator("p")).toHaveText(
+      "Not published: the City permit sets state no license. Only County roll data is eligible.",
+    );
+    await expect(cards.nth(1).locator("b")).toHaveText(
+      "A publish step in the app",
+    );
+    await expect(cards.nth(1).locator("p")).toHaveText(
+      "Publication to IPFS is run by hand, after a person reviews the files. A step in the app with review and approval is not built.",
+    );
+    for (const t of await cards.allInnerTexts())
+      expect(t).not.toMatch(
+        /IPFS artifact manifest and CIDs|Retrieval from two public IPFS gateways/,
+      );
   });
 
   test("9. long-open roofing permits: count and rule equal permits.longOpen at the default and a changed window, BBB not available, contractors from forParcel, the source cited, no description", async ({
