@@ -1,7 +1,7 @@
 # @oracle-la/agent-mcp
 
 The local stdio MCP server that exposes the `@oracle-la/agent` tools over the data API, and the eval that runs the
-agent against a real model on the seventeen prompts in `eval/prompts.json`.
+agent against a real model on the twenty-five prompts in `eval/prompts.json`.
 
 Both read the **latest run** of a repository checkout: `runs/run_history.jsonl`, its last row's `parquet_path`,
 `manifest_path` and every `permit_files` path (the property Parquet, the run manifest and the three permit Parquet
@@ -27,7 +27,8 @@ Usage line:
 usage: node scripts/eval-demo.ts --provider <anthropic|bedrock> --model <haiku-5.5|sonnet-5.5> --out <dir> [--key-file <path>, required for --provider anthropic] [--runs 3] [--max-usd 5] [--prompts <file>] [--repo <checkout with the run's data/; default $ORACLE_REPO_DIR, else this checkout>]
 ```
 
-Through pnpm (`pnpm --filter @oracle-la/agent-mcp eval -- ...`) the command runs in `apps/agent-mcp`, so relative
+Through pnpm (`pnpm --filter @oracle-la/agent-mcp eval --provider ...`, with no `--` before the options: pnpm passes
+a `--` on to the script, which refuses it with exit 2) the command runs in `apps/agent-mcp`, so relative
 `--out`, `--repo`, `--key-file` and `--prompts` paths resolve from there; use absolute paths.
 
 ### Options
@@ -54,7 +55,7 @@ Before any model call, before the model client is built and before anything is c
 that the latest run's files exist under `--repo`. If any is missing it exits 2 and names the first one:
 
 ```text
-eval: the run's data files are missing under <checkout> (first missing: data/out/<run_id>/<name>.parquet; 5 missing). Point the eval at a checkout that has them: --repo <checkout> (or ORACLE_REPO_DIR=<checkout>).
+eval: the run's data files are missing under <checkout> (first missing: data/out/<run_id>/<name>.parquet; 4 missing). Point the eval at a checkout that has them: --repo <checkout> (or ORACLE_REPO_DIR=<checkout>).
 ```
 
 A missing `runs/run_history.jsonl` is reported the same way (`first missing: runs/run_history.jsonl; 1 missing`); a
@@ -73,7 +74,8 @@ history with no run, or a line that is not JSON, also exits 2.
   `--key-file` is refused (exit 2).
 
 With no credentials for the provider (no file at the `--key-file` path, or none of the AWS variables), the eval
-prints `skipped: no key` and exits 0 without creating anything. This check comes first, before the data-file check.
+prints `skipped: no key` and exits 0 without creating anything. This check comes after the argument, `--out` and
+prompts-file checks and before the data-file check.
 
 ### `--out` rules
 
@@ -100,7 +102,8 @@ In `--out`:
 - `run-<n>-<prompt id>.json`: one transcript per answer: run, prompt ID, question, history, markdown, records, gaps,
   usage (per model call), spend, the checks with their details, elapsed time, and `stopped_by`.
 - `results.tsv` and `results.md`: one row per answer with run, prompt, status, each check (counts, cited, gaps,
-  gaps_text, elapsed, tools, refusal, place, ownership, license_status, contractors), token counts, USD and milliseconds. `results.md` also states the
+  gaps_text, elapsed, tools, refusal, place, ownership, license_status, contractors, stated_counts, screen,
+  value_sources, place_unknown), token counts, USD, milliseconds and the listed warnings. `results.md` also states the
   provider, model, data run, spend, the worst-case formula and whether the budget stopped the eval.
 
 stdout carries only the short summary: one line per run (passed, failed, spend), a total line with the limit, a
@@ -108,7 +111,8 @@ budget-stop line when it applies, and the output folder. Errors go to stderr.
 
 ### Exit codes
 
-- `0`: every answer passed, or `skipped: no key`.
+- `0`: every answer passed, or `skipped: no key`. Check warnings (wording or placement only) are listed in both
+  results files and counted in the summary; they never fail an answer.
 - `1`: a check failed, the budget stopped the eval, or the Anthropic key file was refused.
 - `2`: a usage error, an `--out` inside a checkout, an invalid prompts file, or the run's data files missing under
   `--repo`.
@@ -124,8 +128,8 @@ pnpm --filter @oracle-la/agent-mcp mcp --api-url <data API URL> --token-file <ke
 `--token-file` is required with `--api-url` and has no default: a JSON file `{ "apiToken": "<token>" }` with mode
 `0600` exactly (`chmod 600 <key-file>`); the token is never an argument or an environment variable. Another mode, a
 missing file, invalid JSON or no `apiToken` refuses to start (exit 1) with the path, the mode and the reason, never
-the content; a missing option exits 2. The tools read the data API as the hosted agent does: at most 2 calls in
-flight, each attempt at most 5 s, one retry (after 0–500 ms) when the data API is busy (HTTP 429 or 503), another
+the content; a missing option exits 2. The tools read the data API as the hosted agent does: one call in flight, each attempt at most 5 s (the process's first
+call 10 s), one retry (after 0–500 ms) when the data API is busy (HTTP 429 or 503), another
 transient status or a timeout, then the tool reports the gap (e.g. `data API busy: permits.longOpen not read`).
 
 Over the latest run of a checkout, in process:
