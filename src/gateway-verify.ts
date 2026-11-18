@@ -1,43 +1,54 @@
 /**
  * Gateway check after an approved publication (run by the operator, never by a build or a test against the network):
- * fetch every published object of a run by GET from public gateways this environment does not operate, and compare
- * the bytes by size and SHA-256.
+ * fetch every published object of a run by GET from public gateways, and compare the bytes by size and SHA-256.
  *
  * Input: a run's publication folder, runs/<run_id>/publication/ (or the packet's runs/<run_id>/), holding
  * artifact-manifest.json, directory.json (its build record) and publish/ (the folder's files).
  *
+ * Who pins the content is given with --pinned-by <Operator> (required, repeatable for a second pinning service). A
+ * pinning operator's gateways are fetched and reported, never counted: they read from the pinning service's own
+ * storage and show only that the vendor holds the bytes. Every other gateway is counted.
+ *
  * Fetched from every gateway of the list (src/gateways.ts; path form https://<host>/ipfs/<cid>):
- * - the artifact manifest itself, by its CID, against the local file (unless --skip-manifest-fetch: then it is
- *   read locally only, for a rehearsal whose manifest was never uploaded; the proof says manifest_fetched false);
+ * - the artifact manifest itself, by its CID, against the local file (unless --skip-manifest-fetch, for a rehearsal
+ *   whose manifest was never uploaded: then the verdict is never PASS; see below);
  * - every file the manifest lists, by its CID, against its entry;
  * - the folder (the manifest's one directory entry), proven twice per gateway:
  *   (a) the gateway's own CAR of the folder (?format=car, Accept: application/vnd.ipld.car), its size and SHA-256
- *       compared with the entry's. A mismatch is reported, not fatal: a gateway may write blocks in another order
- *       or framing.
+ *       compared with the entry's;
  *   (b) each of the folder's files fetched by path (/ipfs/<folder CID>/<name>, names from directory.json), the CAR
  *       rebuilt from those bytes with the pipeline's own directoryCar (root block first), and its root CID, length
- *       and SHA-256 compared with the entry's. When a gateway answers every file and the rebuilt CAR differs, that
- *       is fatal for the run.
+ *       and SHA-256 compared with the entry's. When a gateway answers every file and the rebuilt CAR differs, that is
+ *       fatal for the run, on any gateway.
+ * A match counts only when the answer came from the gateway's own host or a subdomain of it (a redirect elsewhere is
+ * recorded and not counted).
  *
- * A run passes when every listed object (the manifest, unless skipped, and every file) matches on at least two
- * gateways of different operators, the folder's (b) passes on at least two gateways of different operators, and no
- * (b) is fatal. The proof (gateway-check-<run_id>.json and .txt) records every gateway's result for every object,
- * failures included: status, bytes, SHA-256, every attempt and its time.
+ * Verdict:
+ * - PASS (exit 0): the manifest and every listed file match on at least two counted operators; the folder's (a) and
+ *   (b) each match on at least two counted operators; nothing fatal.
+ * - INCOMPLETE (exit 3): all of that holds for what was fetched, but the manifest was not fetched
+ *   (--skip-manifest-fetch). Never a pass.
+ * - FAIL (exit 1): anything else. Exit 2: usage or refused settings.
+ * The verdict line and the proof say when the default gateway list was replaced (--gateway or IPFS_GATEWAYS).
+ *
+ * A real run accepts https gateways only, with no loopback, private-range or link-local address in the host
+ * (localGatewayProblem); every gateway must declare its operator. Tests use local http gateways through the
+ * test-only switch --test-only-allow-local-gateways, which is announced on stderr and marked in the verdict line and
+ * the proof (test_only_local_gateways: true); the record tool refuses such a proof.
  *
  * Time limits and retries (all configurable): each answer may take timeoutMs (default 60 s) plus one second per
  * timeoutBytesPerS (default 131,072 B, 128 KiB) of the expected size: about 60 s for the small files, 310 s for the
  * 32,775,616-byte county Parquet. A failed or mismatching answer is fetched again, up to `attempts` in all (default
  * 5), waiting retryWaitMs (default 15 s) doubled after each attempt up to retryWaitMaxMs (default 120 s): 15, 30, 60
- * and 120 s, because a gateway can take minutes to find newly uploaded content. The folder CAR (a) is fetched again
- * only when the request fails, not when its bytes differ.
+ * and 120 s, because a gateway can take minutes to find newly uploaded content.
  *
  * Boundary (kit rules/external-dependency-boundaries.md; assessment in the night-18nov notes, p2/boundary.md): an
  * operator-run, synchronous check of a handful of read-only GETs, one at a time, with bounded time and attempts;
  * the gateways are an injectable list and the HTTP client an injectable Fetch.
  *
- * Usage: node src/gateway-verify.ts <publication dir> <proof dir> [--gateway host=Operator ...]
- *        [--attempts 5] [--retry-wait-ms 15000] [--retry-wait-max-ms 120000] [--timeout-ms 60000]
- *        [--timeout-bytes-per-s 131072] [--skip-manifest-fetch]
+ * Usage: node src/gateway-verify.ts <publication dir> <proof dir> --pinned-by <Operator> [--pinned-by <Operator>]
+ *        [--gateway host=Operator ...] [--attempts 5] [--retry-wait-ms 15000] [--retry-wait-max-ms 120000]
+ *        [--timeout-ms 60000] [--timeout-bytes-per-s 131072] [--skip-manifest-fetch]
  *        The list can also come from IPFS_GATEWAYS ("host=Operator,host=Operator"); --gateway wins.
  */
 import { createHash } from "node:crypto";
@@ -50,6 +61,8 @@ import type { ArtifactManifest } from "./artifact-manifest.ts";
 import {
   GATEWAYS,
   gatewayPathUrl,
+  localGatewayProblem,
+  onGatewayHost,
   parseGatewayList,
   type Gateway,
 } from "./gateways.ts";
@@ -62,6 +75,8 @@ export type Fetch = (
 ) => Promise<{
   ok: boolean;
   status: number;
+  /** The URL that answered, after redirects (fetch's Response.url); absent or empty: the URL asked. */
+  url?: string;
   arrayBuffer(): Promise<ArrayBuffer>;
 }>;
 
@@ -81,6 +96,19 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
   timeoutBytesPerS: 131_072,
 });
 
+/** The name of the switch that lets local http gateways in: tests only. */
+export const TEST_ONLY_SWITCH = "--test-only-allow-local-gateways";
+
+export type Verdict = "PASS" | "INCOMPLETE" | "FAIL";
+export const EXIT_CODES: Readonly<Record<Verdict, number>> = Object.freeze({
+  PASS: 0,
+  FAIL: 1,
+  INCOMPLETE: 3,
+});
+
+/** Where the gateway list came from. */
+export type ListSource = "default" | "--gateway" | "IPFS_GATEWAYS";
+
 /** The time one answer may take: timeoutMs plus one second per timeoutBytesPerS of the expected size. */
 export function timeoutFor(size: number, s: Settings): number {
   return s.timeoutMs + Math.ceil((size / s.timeoutBytesPerS) * 1000);
@@ -96,19 +124,25 @@ export interface Attempt {
   size: number | null;
   sha256: string | null;
   ms: number;
+  /** Present when the answer came from another URL than the one asked (a redirect). */
+  final_url?: string;
   error?: string;
 }
 
 export interface GatewayResult {
   host: string;
   operator: string;
+  /** false: a pinning operator's gateway, reported and never counted. */
+  counted: boolean;
   url: string;
   timeout_ms: number;
   /** The last attempt's answer. */
   status: number | null;
   size: number | null;
   sha256: string | null;
-  /** Size and SHA-256 equal the expected ones (on a 2xx answer). */
+  /** The last answer's URL after redirects, when it differs from url. */
+  final_url?: string;
+  /** Size and SHA-256 equal the expected ones, on a 2xx answer from the gateway's own host. */
   ok: boolean;
   attempts: Attempt[];
 }
@@ -124,15 +158,18 @@ export interface ObjectProof {
   cid: string;
   expected: Expected;
   gateways: GatewayResult[];
-  /** The operators of the gateways it matched on. */
+  /** The counted operators it matched on. */
   operators_matched: string[];
+  /** The pinning operators it matched on (reported only). */
+  pinning_operators_matched: string[];
   passes: boolean;
 }
 
 export interface FolderGatewayProof {
   host: string;
   operator: string;
-  /** (a) The gateway's own CAR of the folder; a mismatch is not fatal. */
+  counted: boolean;
+  /** (a) The gateway's own CAR of the folder. */
   car: GatewayResult;
   /** (b) The folder's files by path, and the CAR rebuilt from them with directoryCar. */
   by_path: {
@@ -148,24 +185,29 @@ export interface FolderProof {
   cid: string;
   expected: Expected;
   gateways: FolderGatewayProof[];
-  /** The operators of the gateways where (a) matched (reported only). */
+  /** The counted operators where (a) matched. */
   car_operators_matched: string[];
-  /** The operators of the gateways where (b) passed. */
+  /** The counted operators where (b) passed. */
   operators_matched: string[];
   passes: boolean;
 }
 
 export interface Proof {
+  verdict: Verdict;
+  /** true only for PASS. */
+  passes: boolean;
   run_id: string;
   manifest_cid: string;
   directory_cid: string;
   manifest_fetched: boolean;
-  gateways: Gateway[];
+  pinned_by: string[];
+  gateway_list: ListSource;
+  test_only_local_gateways: boolean;
+  gateways: (Gateway & { counted: boolean })[];
   settings: Settings;
   objects: ObjectProof[];
   folder: FolderProof;
   fatal: string[];
-  passes: boolean;
 }
 
 /** A run's publication folder, read and checked locally before anything is fetched. */
@@ -266,22 +308,83 @@ export async function loadPublication(dir: string): Promise<Publication> {
   };
 }
 
-const operatorsOf = (rs: { ok: boolean; operator: string }[]) =>
-  [...new Set(rs.filter((r) => r.ok).map((r) => r.operator))].sort();
+/** The counted operators among results that matched. */
+const countedMatches = (
+  rs: { ok: boolean; operator: string; counted: boolean }[],
+) =>
+  [
+    ...new Set(rs.filter((r) => r.ok && r.counted).map((r) => r.operator)),
+  ].sort();
+const pinningMatches = (
+  rs: { ok: boolean; operator: string; counted: boolean }[],
+) =>
+  [
+    ...new Set(rs.filter((r) => r.ok && !r.counted).map((r) => r.operator)),
+  ].sort();
+
+const sameOperator = (a: string, b: string) =>
+  a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * Checks the gateway list and the pinning operators before anything is fetched; throws on a refusal. Every gateway
+ * declares an operator; each --pinned-by operator has a gateway in the list (so a misspelt operator cannot leave
+ * its gateway counted); at least two operators remain counted; without the test-only switch, every gateway is https
+ * with no local or private address in its host.
+ */
+export function checkGatewaySetup(
+  gateways: readonly Gateway[],
+  pinnedBy: readonly string[],
+  allowLocal: boolean,
+): (Gateway & { counted: boolean })[] {
+  if (!pinnedBy.length || pinnedBy.some((p) => !p.trim()))
+    throw new Error(
+      "--pinned-by <Operator> is required: the operator that pins the content (its gateways are reported, not counted)",
+    );
+  for (const g of gateways)
+    if (!g.operator?.trim())
+      throw new Error(`gateway ${g.host} has no declared operator`);
+  if (!allowLocal)
+    for (const g of gateways) {
+      const problem = localGatewayProblem(g);
+      if (problem) throw new Error(`gateway refused: ${problem}`);
+    }
+  for (const p of pinnedBy)
+    if (!gateways.some((g) => sameOperator(g.operator, p)))
+      throw new Error(
+        `--pinned-by ${p}: no gateway in the list has that operator (operators: ${[...new Set(gateways.map((g) => g.operator))].join(", ")})`,
+      );
+  const marked = gateways.map((g) => ({
+    host: g.host,
+    operator: g.operator,
+    counted: !pinnedBy.some((p) => sameOperator(g.operator, p)),
+  }));
+  if (new Set(marked.filter((g) => g.counted).map((g) => g.operator)).size < 2)
+    throw new Error(
+      "the gateways must include at least two operators that do not pin the content",
+    );
+  return marked;
+}
 
 export async function verifyOnGateways(args: {
   publication: Publication;
   gateways: readonly Gateway[];
+  /** The operators that pin the content: their gateways are fetched and reported, never counted. */
+  pinnedBy: readonly string[];
   fetchImpl: Fetch;
   settings?: Partial<Settings>;
-  /** false: the manifest is not fetched (it was never uploaded, e.g. a rehearsal). */
+  /** false: the manifest is not fetched (it was never uploaded, e.g. a rehearsal); the verdict is then never PASS. */
   fetchManifest?: boolean;
+  /** Where the gateway list came from (stated in the verdict line and the proof). */
+  listSource?: ListSource;
+  /** Tests only: lets http and local gateways in. */
+  testOnlyAllowLocalGateways?: boolean;
   wait?: (ms: number) => Promise<unknown>;
   clock?: () => number;
 }): Promise<Proof> {
   const s: Settings = { ...DEFAULT_SETTINGS, ...args.settings };
   const { publication: p, fetchImpl } = args;
   const fetchManifest = args.fetchManifest ?? true;
+  const allowLocal = args.testOnlyAllowLocalGateways ?? false;
   const wait = args.wait ?? ((ms: number) => sleep(ms));
   const clock = args.clock ?? (() => performance.now());
   if (!Number.isInteger(s.attempts) || s.attempts < 1)
@@ -294,8 +397,7 @@ export async function verifyOnGateways(args: {
   ] as const)
     if (!(s[k] >= 0) || (k === "timeoutBytesPerS" && s[k] === 0))
       throw new Error(`${k} must be a positive number`);
-  if (new Set(args.gateways.map((g) => g.operator)).size < 2)
-    throw new Error("the gateways must belong to at least two operators");
+  const gateways = checkGatewaySetup(args.gateways, args.pinnedBy, allowLocal);
 
   /** One GET; the bytes are kept for the caller. */
   const get = async (url: string, timeout: number, accept?: string) => {
@@ -306,20 +408,24 @@ export async function verifyOnGateways(args: {
         headers: accept ? { accept } : {},
       });
       const bytes = new Uint8Array(await r.arrayBuffer());
+      const finalUrl = r.url && r.url !== url ? r.url : undefined;
       return {
         okStatus: r.ok,
         bytes,
+        finalUrl,
         attempt: {
           status: r.status,
           size: bytes.length,
           sha256: createHash("sha256").update(bytes).digest("hex"),
           ms: Math.round(clock() - t0),
+          ...(finalUrl ? { final_url: finalUrl } : {}),
         } as Attempt,
       };
     } catch (e) {
       return {
         okStatus: false,
         bytes: null,
+        finalUrl: undefined,
         attempt: {
           status: null,
           size: null,
@@ -331,12 +437,12 @@ export async function verifyOnGateways(args: {
     }
   };
 
-  /** GETs until the answer matches or the attempts are spent (retryOnMismatch false: only on a failed request). */
+  /** GETs until the answer matches or the attempts are spent. */
   const check = async (
-    g: Gateway,
+    g: Gateway & { counted: boolean },
     url: string,
     expected: Expected,
-    opts: { accept?: string; retryOnMismatch?: boolean } = {},
+    accept?: string,
   ): Promise<{
     result: GatewayResult;
     bytes: Uint8Array | null;
@@ -344,17 +450,18 @@ export async function verifyOnGateways(args: {
   }> => {
     const timeout = timeoutFor(expected.size, s);
     const attempts: Attempt[] = [];
-    const matches = (a: Attempt, okStatus: boolean) =>
-      okStatus && a.size === expected.size && a.sha256 === expected.sha256;
-    let last = await get(url, timeout, opts.accept);
+    const ownHost = (x: { finalUrl?: string }) =>
+      !x.finalUrl || onGatewayHost(g, x.finalUrl);
+    const matches = (x: Awaited<ReturnType<typeof get>>) =>
+      x.okStatus &&
+      ownHost(x) &&
+      x.attempt.size === expected.size &&
+      x.attempt.sha256 === expected.sha256;
+    let last = await get(url, timeout, accept);
     attempts.push(last.attempt);
-    while (
-      !matches(last.attempt, last.okStatus) &&
-      (opts.retryOnMismatch !== false || !last.okStatus) &&
-      attempts.length < s.attempts
-    ) {
+    while (!matches(last) && attempts.length < s.attempts) {
       await wait(waitBefore(attempts.length, s));
-      last = await get(url, timeout, opts.accept);
+      last = await get(url, timeout, accept);
       attempts.push(last.attempt);
     }
     const a = last.attempt;
@@ -362,16 +469,18 @@ export async function verifyOnGateways(args: {
       result: {
         host: g.host,
         operator: g.operator,
+        counted: g.counted,
         url,
         timeout_ms: timeout,
         status: a.status,
         size: a.size,
         sha256: a.sha256,
-        ok: matches(a, last.okStatus),
+        ...(last.finalUrl ? { final_url: last.finalUrl } : {}),
+        ok: matches(last),
         attempts,
       },
-      bytes: last.okStatus ? last.bytes : null,
-      answered: last.okStatus,
+      bytes: last.okStatus && ownHost(last) ? last.bytes : null,
+      answered: last.okStatus && ownHost(last),
     };
   };
 
@@ -405,29 +514,30 @@ export async function verifyOnGateways(args: {
   ];
   const objects: ObjectProof[] = [];
   for (const o of listed) {
-    const gateways: GatewayResult[] = [];
-    for (const g of args.gateways)
-      gateways.push(
+    const results: GatewayResult[] = [];
+    for (const g of gateways)
+      results.push(
         (await check(g, gatewayPathUrl(g, o.cid), o.expected)).result,
       );
-    const operators_matched = operatorsOf(gateways);
+    const operators_matched = countedMatches(results);
     objects.push({
       ...o,
-      gateways,
+      gateways: results,
       operators_matched,
+      pinning_operators_matched: pinningMatches(results),
       passes: operators_matched.length >= 2,
     });
   }
 
   const fatal: string[] = [];
   const folderGateways: FolderGatewayProof[] = [];
-  for (const g of args.gateways) {
+  for (const g of gateways) {
     const car = (
       await check(
         g,
         `${gatewayPathUrl(g, p.folder.cid)}?format=car`,
         p.folder.expected,
-        { accept: "application/vnd.ipld.car", retryOnMismatch: false },
+        "application/vnd.ipld.car",
       )
     ).result;
     const files: (GatewayResult & { name: string })[] = [];
@@ -459,64 +569,100 @@ export async function verifyOnGateways(args: {
     folderGateways.push({
       host: g.host,
       operator: g.operator,
+      counted: g.counted,
       car,
       by_path: { files, rebuilt, ok, fatal: isFatal },
     });
   }
-  const operators_matched = operatorsOf(
-    folderGateways.map((f) => ({ ok: f.by_path.ok, operator: f.operator })),
+  const operators_matched = countedMatches(
+    folderGateways.map((f) => ({
+      ok: f.by_path.ok,
+      operator: f.operator,
+      counted: f.counted,
+    })),
+  );
+  const car_operators_matched = countedMatches(
+    folderGateways.map((f) => f.car),
   );
   const folder: FolderProof = {
     name: p.folder.name,
     cid: p.folder.cid,
     expected: p.folder.expected,
     gateways: folderGateways,
-    car_operators_matched: operatorsOf(folderGateways.map((f) => f.car)),
+    car_operators_matched,
     operators_matched,
-    passes: operators_matched.length >= 2 && fatal.length === 0,
+    passes:
+      operators_matched.length >= 2 &&
+      car_operators_matched.length >= 2 &&
+      fatal.length === 0,
   };
+  const allMet = objects.every((o) => o.passes) && folder.passes;
+  const verdict: Verdict = !allMet
+    ? "FAIL"
+    : fetchManifest
+      ? "PASS"
+      : "INCOMPLETE";
   return {
+    verdict,
+    passes: verdict === "PASS",
     run_id: p.run_id,
     manifest_cid: p.manifestFile.cid,
     directory_cid: p.folder.cid,
     manifest_fetched: fetchManifest,
-    gateways: args.gateways.map((g) => ({
-      host: g.host,
-      operator: g.operator,
-    })),
+    pinned_by: [...args.pinnedBy],
+    gateway_list: args.listSource ?? "default",
+    test_only_local_gateways: allowLocal,
+    gateways,
     settings: s,
     objects,
     folder,
     fatal,
-    passes: objects.every((o) => o.passes) && folder.passes,
   };
 }
 
 const answer = (r: GatewayResult) =>
-  `${r.ok ? "match" : "NO MATCH"}: status ${r.status ?? "none"}, ${r.size ?? "-"} bytes, sha256 ${r.sha256 ?? "-"}, ` +
+  `${r.ok ? "match" : "NO MATCH"}${r.counted ? "" : " (pinning operator: reported, not counted)"}: status ${r.status ?? "none"}, ${r.size ?? "-"} bytes, sha256 ${r.sha256 ?? "-"}, ` +
   `${r.attempts.length} attempt(s), ${r.attempts.reduce((t, a) => t + a.ms, 0)} ms` +
+  (r.final_url ? `, answered by ${r.final_url}` : "") +
   (r.attempts.at(-1)?.error ? ` (${r.attempts.at(-1)?.error})` : "");
 
-/** The proof's short text: one line per object and gateway, then the verdict. */
+/** The verdict line: the verdict, the run, and every condition that qualifies it. */
+export function verdictLine(p: Proof): string {
+  const notes = [
+    `pinned by ${p.pinned_by.join(", ")}, not counted`,
+    ...(p.manifest_fetched
+      ? []
+      : ["manifest not fetched (--skip-manifest-fetch)"]),
+    ...(p.gateway_list === "default"
+      ? []
+      : [`default gateway list replaced by ${p.gateway_list}`]),
+    ...(p.test_only_local_gateways
+      ? [`TEST ONLY: local gateways allowed (${TEST_ONLY_SWITCH})`]
+      : []),
+  ];
+  return `${p.verdict}: gateway check of run ${p.run_id} (${notes.join("; ")})`;
+}
+
+/** The proof's short text: the verdict line, one line per object and gateway, then the reasons. */
 export function proofText(p: Proof): string {
   const lines = [
-    `Gateway check of run ${p.run_id}: ${p.passes ? "PASS" : "FAIL"}`,
-    `manifest ${p.manifest_cid}${p.manifest_fetched ? "" : " (read locally, not fetched: --skip-manifest-fetch)"}; folder ${p.directory_cid}`,
-    `gateways: ${p.gateways.map((g) => `${g.host} (${g.operator})`).join(", ")}`,
+    verdictLine(p),
+    `manifest ${p.manifest_cid}${p.manifest_fetched ? "" : " (read locally, not fetched)"}; folder ${p.directory_cid}`,
+    `gateways (${p.gateway_list}): ${p.gateways.map((g) => `${g.host} (${g.operator}${g.counted ? "" : ", pinning, not counted"})`).join(", ")}`,
     `attempts ${p.settings.attempts}, waits ${p.settings.retryWaitMs}-${p.settings.retryWaitMaxMs} ms doubling, timeout ${p.settings.timeoutMs} ms + 1 s per ${p.settings.timeoutBytesPerS} B`,
   ];
   for (const o of p.objects) {
     lines.push(
-      `${o.passes ? "PASS" : "FAIL"} ${o.kind} ${o.name} ${o.cid} (${o.expected.size} bytes, sha256 ${o.expected.sha256}): matched by ${o.operators_matched.join(", ") || "none"}`,
+      `${o.passes ? "MET" : "NOT MET"} ${o.kind} ${o.name} ${o.cid} (${o.expected.size} bytes, sha256 ${o.expected.sha256}): counted operators matched: ${o.operators_matched.join(", ") || "none"}; pinning operators matched (not counted): ${o.pinning_operators_matched.join(", ") || "none"}`,
     );
     for (const r of o.gateways) lines.push(`  ${r.host}: ${answer(r)}`);
   }
   const f = p.folder;
   lines.push(
-    `${f.passes ? "PASS" : "FAIL"} folder ${f.name} ${f.cid} (CAR ${f.expected.size} bytes, sha256 ${f.expected.sha256}): (b) passed on ${f.operators_matched.join(", ") || "none"}; (a) matched on ${f.car_operators_matched.join(", ") || "none"}`,
+    `${f.passes ? "MET" : "NOT MET"} folder ${f.name} ${f.cid} (CAR ${f.expected.size} bytes, sha256 ${f.expected.sha256}): (a) gateway CAR matched on counted ${f.car_operators_matched.join(", ") || "none"}; (b) rebuilt CAR matched on counted ${f.operators_matched.join(", ") || "none"}`,
   );
   for (const g of f.gateways) {
-    lines.push(`  ${g.host} (a) gateway CAR, not fatal: ${answer(g.car)}`);
+    lines.push(`  ${g.host} (a) gateway CAR: ${answer(g.car)}`);
     for (const x of g.by_path.files)
       lines.push(`  ${g.host} (b) ${x.name} by path: ${answer(x)}`);
     lines.push(
@@ -524,40 +670,67 @@ export function proofText(p: Proof): string {
         g.by_path.rebuilt
           ? `root ${g.by_path.rebuilt.root}, ${g.by_path.rebuilt.size} bytes, sha256 ${g.by_path.rebuilt.sha256}: ${g.by_path.ok ? "match" : "MISMATCH (fatal)"}`
           : "not built (a file was not answered)"
-      }`,
+      }${g.counted ? "" : " (pinning operator: reported, not counted)"}`,
     );
   }
   for (const x of p.fatal) lines.push(`FATAL ${x}`);
+  if (p.verdict === "INCOMPLETE")
+    lines.push(
+      "INCOMPLETE: everything fetched met the rule, but the manifest was not fetched; this is not a pass.",
+    );
   return lines.join("\n") + "\n";
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      gateway: { type: "string", multiple: true },
-      attempts: { type: "string" },
-      "retry-wait-ms": { type: "string" },
-      "retry-wait-max-ms": { type: "string" },
-      "timeout-ms": { type: "string" },
-      "timeout-bytes-per-s": { type: "string" },
-      "skip-manifest-fetch": { type: "boolean" },
-    },
-  });
-  const [pubDir, proofDir] = positionals;
-  if (!pubDir || !proofDir || positionals.length > 2) {
-    console.error(
-      "usage: node src/gateway-verify.ts <publication dir> <proof dir> [--gateway host=Operator ...] [--attempts 5] [--retry-wait-ms 15000] [--retry-wait-max-ms 120000] [--timeout-ms 60000] [--timeout-bytes-per-s 131072] [--skip-manifest-fetch]",
-    );
+  const usage =
+    "usage: node src/gateway-verify.ts <publication dir> <proof dir> --pinned-by <Operator> [--pinned-by <Operator>] [--gateway host=Operator ...] [--attempts 5] [--retry-wait-ms 15000] [--retry-wait-max-ms 120000] [--timeout-ms 60000] [--timeout-bytes-per-s 131072] [--skip-manifest-fetch]";
+  let values, positionals;
+  try {
+    ({ values, positionals } = parseArgs({
+      allowPositionals: true,
+      options: {
+        "pinned-by": { type: "string", multiple: true },
+        gateway: { type: "string", multiple: true },
+        attempts: { type: "string" },
+        "retry-wait-ms": { type: "string" },
+        "retry-wait-max-ms": { type: "string" },
+        "timeout-ms": { type: "string" },
+        "timeout-bytes-per-s": { type: "string" },
+        "skip-manifest-fetch": { type: "boolean" },
+        [TEST_ONLY_SWITCH.slice(2)]: { type: "boolean" },
+      },
+    }));
+  } catch (e) {
+    console.error(`${(e as Error).message}\n${usage}`);
     process.exit(2);
   }
+  const [pubDir, proofDir] = positionals;
+  if (!pubDir || !proofDir || positionals.length > 2) {
+    console.error(usage);
+    process.exit(2);
+  }
+  const allowLocal = values[TEST_ONLY_SWITCH.slice(2)] === true;
+  if (allowLocal)
+    console.error(
+      `WARNING: ${TEST_ONLY_SWITCH} is for tests only: local and http gateways are allowed; the proof is marked and the record tool refuses it.`,
+    );
   const num = (v: string | undefined) =>
     v === undefined ? undefined : Number(v);
-  const gateways = values.gateway?.length
-    ? parseGatewayList(values.gateway)
-    : process.env.IPFS_GATEWAYS
-      ? parseGatewayList(process.env.IPFS_GATEWAYS)
-      : GATEWAYS;
+  let gateways: readonly Gateway[] = GATEWAYS;
+  let listSource: ListSource = "default";
+  try {
+    if (values.gateway?.length) {
+      gateways = parseGatewayList(values.gateway);
+      listSource = "--gateway";
+    } else if (process.env.IPFS_GATEWAYS !== undefined) {
+      gateways = parseGatewayList(process.env.IPFS_GATEWAYS);
+      listSource = "IPFS_GATEWAYS";
+    }
+    checkGatewaySetup(gateways, values["pinned-by"] ?? [], allowLocal);
+  } catch (e) {
+    console.error(`${(e as Error).message}\n${usage}`);
+    process.exit(2);
+  }
   const settings = Object.fromEntries(
     Object.entries({
       attempts: num(values.attempts),
@@ -572,9 +745,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const proof = await verifyOnGateways({
     publication,
     gateways,
+    pinnedBy: values["pinned-by"] ?? [],
     fetchImpl: fetch,
     settings,
     fetchManifest: !values["skip-manifest-fetch"],
+    listSource,
+    testOnlyAllowLocalGateways: allowLocal,
   });
   const finished_at = new Date().toISOString();
   mkdirSync(proofDir, { recursive: true });
@@ -587,5 +763,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     proofText(proof) + `started ${started_at}, finished ${finished_at}\n`;
   writeFileSync(`${base}.txt`, text);
   process.stdout.write(text);
-  process.exitCode = proof.passes ? 0 : 1;
+  process.exitCode = EXIT_CODES[proof.verdict];
 }
