@@ -1,0 +1,36 @@
+{
+  "objects": [
+    {
+      "cid": "bafybeiguzzsf5t36d2ib7szxm5l4cl6kmqsymtnr6xyqdidir7yncxshny",
+      "name": "publish",
+      "size": 1319,
+      "codec": "directory",
+      "ipld_codec": "dag-pb",
+      "sha256": "db4ffedfcd972815381be6aedce2df1b1c3aa3137cb4d5a43017a1c51415728a"
+    },
+    {
+      "cid": "bafkreidtyzwvnoxhbhwpy4egjenslgbh2i7eep6us77hiupnbuljuua7ee",
+      "name": "coverage.json",
+      "size": 1123,
+      "codec": "file",
+      "ipld_codec": "raw",
+      "sha256": "73c66d56bae709ecfc7086491b259827d23e423fd497fe7451ed0d169a501f21"
+    },
+    {
+      "cid": "bafybeifky42ojoid4c6tm54jpqw5ctwdsmuemtbrs6ebkmesz73knnd3de",
+      "name": "los-angeles-roll2026-county.parquet",
+      "size": 32775616,
+      "codec": "file",
+      "ipld_codec": "dag-pb",
+      "sha256": "e73fb85e87ddeba3dbb973f04a2f97b85749b686b291db5078066575fdade987"
+    },
+    {
+      "cid": "bafybeidsmehgjsc5f4pzhgrbn6gtihv22cz2wjou46ajqfgt6tg4dwzx5a",
+      "name": "los-angeles-roll2026-sample-5mi.parquet",
+      "size": 1878244,
+      "codec": "file",
+      "ipld_codec": "dag-pb",
+      "sha256": "861f7f5e79332e86d5bb6d4960561d648cd9955d2ae890c100317c6918201bbc"
+    }
+  ]
+}

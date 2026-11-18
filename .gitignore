@@ -4,6 +4,9 @@ data/
 *.duckdb
 *.duckdb.wal
 *.car
+# A published run's two small CARs (its folder and its artifact manifest) are tracked with them (runs/<run_id>/publication/).
+!runs/*/publication/directory.car
+!runs/*/publication/artifact-manifest.car
 *.csv
 node_modules/
 .env
