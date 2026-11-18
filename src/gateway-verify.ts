@@ -2,8 +2,8 @@
  * Gateway check after an approved publication (run by the operator, never by a build or a test against the network):
  * fetch every published object of a run by GET from public gateways, and compare the bytes by size and SHA-256.
  *
- * Input: a run's publication folder, runs/<run_id>/publication/ (or the packet's runs/<run_id>/), holding
- * artifact-manifest.json, directory.json (its build record) and publish/ (the folder's files).
+ * Input: a run's publication folder, given as the first argument (runs/<run_id>/publication/ in the repository),
+ * holding artifact-manifest.json, directory.json (its build record) and publish/ (the folder's files).
  *
  * Who pins the content is given with --pinned-by <Operator> (required, repeatable for a second pinning service). A
  * pinning operator's gateways are fetched and reported, never counted: they read from the pinning service's own
