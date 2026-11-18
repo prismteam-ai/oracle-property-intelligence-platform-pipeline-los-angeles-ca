@@ -1481,7 +1481,7 @@ describe("Explorer sources, records and long-open permits", () => {
     ).toEqual([
       [
         "Permit and contractor rows on IPFS",
-        "Not published: the City permit sets state no license. Only County roll data is eligible.",
+        "Not published. The City building-permit sets state no license. The contractor view is CC BY 4.0 but is held back: some of its business names may be personal names, and a publication cannot be withdrawn. Only a County roll extract is eligible for publication.",
       ],
       [
         "A publish step in the app",

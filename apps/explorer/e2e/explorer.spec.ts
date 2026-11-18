@@ -802,7 +802,7 @@ test.describe("with credentials", () => {
       "Permit and contractor rows on IPFS",
     );
     await expect(cards.nth(0).locator("p")).toHaveText(
-      "Not published: the City permit sets state no license. Only County roll data is eligible.",
+      "Not published. The City building-permit sets state no license. The contractor view is CC BY 4.0 but is held back: some of its business names may be personal names, and a publication cannot be withdrawn. Only a County roll extract is eligible for publication.",
     );
     await expect(cards.nth(1).locator("b")).toHaveText(
       "A publish step in the app",
