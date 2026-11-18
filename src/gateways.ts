@@ -7,7 +7,8 @@
  *
  * Default list (measured 18 Nov 2026, approvals §3e.132): ipfs.aleph.cloud and ipfs.filebase.io returned the
  * rehearsal file, the file inside the rehearsal folder and the folder as a CAR, root block first; gateway.pinata.cloud
- * returned the file. ipfs.io and dweb.link answer non-browser requests with HTTP 429 and are not listed.
+ * returned the file. The two gateways the assignment gives as examples answer non-browser requests with HTTP 429
+ * (retired 21 Sep 2026) and are not listed.
  *
  * The check takes another list through --gateway or IPFS_GATEWAYS (parseGatewayList): "host=Operator" items,
  * comma-separated in the variable.

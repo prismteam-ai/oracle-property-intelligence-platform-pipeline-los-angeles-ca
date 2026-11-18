@@ -36,6 +36,7 @@ export const EXPLORER_SOURCE_PATHS = [
   "packages/views/src/sql.ts",
   "pnpm-lock.yaml",
   "runs/publications.jsonl",
+  "src/gateways.ts",
   "src/publications.ts",
 ] as const;
 

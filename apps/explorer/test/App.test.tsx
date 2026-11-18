@@ -1628,7 +1628,7 @@ describe("Explorer sources, records and long-open permits", () => {
     expect(table.querySelectorAll("tbody a")).toHaveLength(0);
   });
 
-  test("a run with a line in runs/publications.jsonl shows its artifact manifest's CID, the date and a link to the manifest on ipfs.io", async () => {
+  test("a run with a line in runs/publications.jsonl shows its artifact manifest's CID, the date and links to the manifest on the first two gateways of the shared list", async () => {
     const MANIFEST =
       "bafkreigqi7vtxtejkcf7y4vgba3lckqusywxy36nogl5o5sktnt52tlyfm";
     const FOLDER =
@@ -1652,14 +1652,23 @@ describe("Explorer sources, records and long-open permits", () => {
       await screen.findByTestId("run-history");
       expect(tbodyText("run-history").map((r) => [r[0], r[9]])).toEqual([
         ["r0", "not published"],
-        ["r1", `${MANIFEST} · 2026-11-18 · ipfs.io`],
+        [
+          "r1",
+          `${MANIFEST} · 2026-11-18 · ipfs.aleph.cloud · gateway.pinata.cloud`,
+        ],
         ["r2", "not published"],
       ]);
       const links = [
         ...screen.getByTestId("run-history").querySelectorAll("tbody a"),
       ];
       expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual(
-        [["ipfs.io", `https://ipfs.io/ipfs/${MANIFEST}`]],
+        [
+          ["ipfs.aleph.cloud", `https://ipfs.aleph.cloud/ipfs/${MANIFEST}`],
+          [
+            "gateway.pinata.cloud",
+            `https://gateway.pinata.cloud/ipfs/${MANIFEST}`,
+          ],
+        ],
       );
       // The folder's CID is recorded, not shown.
       expect(document.body.textContent).not.toContain(FOLDER);

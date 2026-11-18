@@ -22,7 +22,7 @@ import {
 } from "vitest";
 import { bytesCid, directoryCid } from "../src/ipfs-unixfs.ts";
 import {
-  gatewayUrl,
+  manifestLinks,
   isCidV1Base32,
   isUtcDateOrTime,
   parsePublications,
@@ -133,7 +133,17 @@ describe("publication lines", () => {
     );
     expect(parsePublications("")).toEqual([]);
     expect(parsePublications(line)).toEqual([p]);
-    expect(gatewayUrl(MANIFEST)).toBe(`https://ipfs.io/ipfs/${MANIFEST}`);
+    // The manifest's links: the first two gateways of the shared list, path form, labelled by host.
+    expect(manifestLinks(MANIFEST)).toEqual([
+      {
+        host: "ipfs.aleph.cloud",
+        url: `https://ipfs.aleph.cloud/ipfs/${MANIFEST}`,
+      },
+      {
+        host: "gateway.pinata.cloud",
+        url: `https://gateway.pinata.cloud/ipfs/${MANIFEST}`,
+      },
+    ]);
     const reordered = JSON.stringify({
       folder_cid: FOLDER,
       run_id: RUN_A,

@@ -1,5 +1,6 @@
+import { Fragment } from "react";
 import type { ApiClient, RunRelation } from "@oracle-la/api-client";
-import { gatewayUrl } from "../../../src/publications.ts";
+import { manifestLinks } from "../../../src/publications.ts";
 import { PUBLICATIONS } from "./publications.ts";
 import { coverageText, type LoadSources } from "./sources.ts";
 import { useQuery } from "./useQuery.ts";
@@ -266,7 +267,8 @@ export function RunSummary({
 
 /**
  * A run's publication as runs/publications.jsonl records it (bundled at build): its artifact manifest's CID, the
- * date and a link to the manifest on one public gateway; "not published" for a run with no line.
+ * date and links to the manifest on the first two gateways of the shared list (src/gateways.ts), each labelled by
+ * its host; "not published" for a run with no line.
  */
 function PublishedCell({ runId }: { runId: string }) {
   const p = PUBLICATIONS.find((x) => x.run_id === runId);
@@ -274,8 +276,13 @@ function PublishedCell({ runId }: { runId: string }) {
   return (
     <>
       <span className="mono">{p.manifest_cid}</span> ·{" "}
-      {p.published_at.slice(0, 10)} ·{" "}
-      <a href={gatewayUrl(p.manifest_cid)}>ipfs.io</a>
+      {p.published_at.slice(0, 10)}
+      {manifestLinks(p.manifest_cid).map((l) => (
+        <Fragment key={l.host}>
+          {" · "}
+          <a href={l.url}>{l.host}</a>
+        </Fragment>
+      ))}
     </>
   );
 }

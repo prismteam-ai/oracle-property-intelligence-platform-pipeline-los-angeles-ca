@@ -8,6 +8,7 @@
  *
  * Pure (no Node imports): the record tool, the Explorer's build check and the Explorer page share it.
  */
+import { GATEWAYS, gatewayPathUrl } from "./gateways.ts";
 
 export const PUBLICATION_KEYS = [
   "run_id",
@@ -26,9 +27,21 @@ export interface Publication {
   published_at: string;
 }
 
-/** The public gateway the Explorer links a run's artifact manifest to (path form, one gateway). */
-export const gatewayUrl = (manifestCid: string) =>
-  `https://ipfs.io/ipfs/${manifestCid}`;
+/** A link to a published file on one gateway: the gateway's host (the link's label) and the path-form URL. */
+export interface GatewayLink {
+  host: string;
+  url: string;
+}
+
+/**
+ * The links the Explorer gives a run's artifact manifest: one per gateway, on the first two gateways of the shared
+ * list (src/gateways.ts), in path form, each labelled by its host.
+ */
+export const manifestLinks = (manifestCid: string): GatewayLink[] =>
+  GATEWAYS.slice(0, 2).map((g) => ({
+    host: g.host,
+    url: gatewayPathUrl(g, manifestCid),
+  }));
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 
