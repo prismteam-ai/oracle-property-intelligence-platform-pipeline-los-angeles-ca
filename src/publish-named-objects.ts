@@ -48,9 +48,10 @@ export type SampleSpec = {
 };
 
 /**
- * The 5-mile sample: center and radius as its recorded build bound them (the publication packet's
- * build/roll-sample.ts: CENTER_LAT 34.20155, CENTER_LON -118.45361, RADIUS_MILES 5, by the data API's
- * own distance rule), and its row count, which the build checks against the sample Parquet's footer.
+ * The 5-mile sample: center and radius as the build that made it bound them (CENTER_LAT 34.20155,
+ * CENTER_LON -118.45361, RADIUS_MILES 5, by the data API's own distance rule; that build is not in this
+ * repository), and its row count, which `src/build-ipfs-artifacts.ts` checks against the sample Parquet's
+ * footer.
  */
 export const PUBLISHED_SAMPLE: SampleSpec = {
   object: "los-angeles-roll2026-sample-5mi.parquet",
