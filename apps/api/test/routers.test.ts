@@ -279,6 +279,29 @@ describe.skipIf(!hasRealData)("routers on the real latest run", () => {
     });
     expect(b.items[0]!.parcel_id! > a.items.at(-1)!.parcel_id!).toBe(true);
   });
+  test("explorer.records with match: a full parcel ID finds that parcel alone; a prefix returns only parcels starting with it, counted", async () => {
+    const a = await caller.explorer.records({ source_name: SOURCE, limit: 50 });
+    const id = a.items[1]!.record_key;
+    const one = await caller.explorer.records({
+      source_name: SOURCE,
+      match: id,
+    });
+    expect(one).toMatchObject({ total: ROWS, match: id, match_total: 1 });
+    expect(one.items.map((i) => i.record_key)).toEqual([id]);
+    const prefix = id.slice(0, 7);
+    const r = await caller.explorer.records({
+      source_name: SOURCE,
+      match: prefix,
+      limit: 100,
+    });
+    expect(r.match_total).toBeGreaterThanOrEqual(r.items.length);
+    expect(r.match_total).toBeLessThan(ROWS);
+    expect(r.items.length).toBeGreaterThan(0);
+    for (const i of r.items) expect(i.record_key.startsWith(prefix)).toBe(true);
+    const sorted = r.items.map((i) => i.record_key);
+    expect(sorted).toEqual([...sorted].sort());
+    if (r.next_after === null) expect(r.items).toHaveLength(r.match_total!);
+  });
   test("parcels.search on the effective roof year: the plain scan's count at 5 mi / 15 y (113,632 measured); every item inside the radius; rule text", async () => {
     const r = await caller.parcels.search({
       ...VAN_NUYS,

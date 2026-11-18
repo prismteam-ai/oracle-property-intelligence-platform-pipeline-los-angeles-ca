@@ -13,6 +13,7 @@ import {
   type Sources,
 } from "../contract.ts";
 import { procedure, router } from "../trpc.ts";
+import { guardSize } from "./permits.ts";
 
 /**
  * Page file names as the sources record them: the pilot's page-0000.json, the county roll's
@@ -26,6 +27,40 @@ const CURSOR: Record<SourceKind, RegExp> = {
   permit: /^\d{5}-\d{5}-\d{5}$/,
   contractor: /^\d{5}-\d{5}-\d{5}:\d{1,3}$/,
 };
+/** Digits in a full key: a parcel ID (AIN) on the roll, a permit number on the permit and contractor sources. */
+const KEY_DIGITS: Record<SourceKind, number> = {
+  parcel: 10,
+  permit: 15,
+  contractor: 15,
+};
+/** What `match` may be typed as: digits, dashes and spaces only, with at least one digit (checked per kind below). */
+const MATCH_TEXT = /^[\d\s-]*\d[\d\s-]*$/;
+/**
+ * The key prefix a `match` stands for, and the bound just above every key with it: the keys starting with the prefix
+ * are exactly prefix <= key < upper (the prefix's last character, a digit, raised by one), a range on the key
+ * column, not a pattern on user input. Parcel IDs are 10 digits; permit numbers are 5-5-5 digits with dashes, so the
+ * typed digits are dashed the same way (a prefix of a contractor row's key is a prefix of its permit number).
+ * A string is the reason the match is refused.
+ */
+export function matchRange(
+  kind: SourceKind,
+  text: string,
+): { prefix: string; upper: string } | string {
+  const n = KEY_DIGITS[kind];
+  const digits = text.replace(/[\s-]/g, "");
+  if (!/^\d+$/.test(digits) || digits.length > n)
+    return `match: a ${kind === "parcel" ? "parcel" : "permit"} number is up to ${n} digits (dashes and spaces allowed)`;
+  const prefix =
+    kind === "parcel"
+      ? digits
+      : [digits.slice(0, 5), digits.slice(5, 10), digits.slice(10)]
+          .filter(Boolean)
+          .join("-");
+  const upper =
+    prefix.slice(0, -1) +
+    String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+  return { prefix, upper };
+}
 const PROVENANCE =
   "pr.source_name, pr.source_request_url, pr.source_retrieved_at, pr.source_page_sha256, pr.source_page_file";
 
@@ -106,7 +141,9 @@ export const explorerRouter = router({
     }),
   /**
    * One source's records in key order, with their provenance: parcels by parcel ID, permits by permit
-   * number, contractor rows by (permit number, contractor row). Optionally one page file only.
+   * number, contractor rows by (permit number, contractor row). Optionally one page file only. With `match`, only
+   * the records whose parcel ID (roll) or permit number (permit and contractor sources) starts with it, paged with
+   * the same cursor, plus their count (match_total) and the prefix matched (match); without it, as before.
    */
   records: procedure
     .input(
@@ -124,6 +161,7 @@ export const explorerRouter = router({
           )
           .optional(),
         limit: z.number().int().min(1).max(100).default(50),
+        match: z.string().max(40).regex(MATCH_TEXT).optional(),
       }),
     )
     .query(async ({ ctx, input }): Promise<Records> => {
@@ -147,6 +185,10 @@ export const explorerRouter = router({
           code: "BAD_REQUEST",
           message: `after must be a ${kind} cursor`,
         });
+      const range =
+        input.match === undefined ? null : matchRange(kind, input.match);
+      if (typeof range === "string")
+        throw new TRPCError({ code: "BAD_REQUEST", message: range });
       const where =
         "pr.source_name = $1 and ($2::varchar is null or pr.source_page_file = $2)";
       const n = input.limit + 1;
@@ -156,8 +198,13 @@ export const explorerRouter = router({
           await db.rows(
             `select v.parcel_id, v.address, v.year_built, ${PROVENANCE}
              from oracle.v_property_provenance pr join oracle.v_property v using (parcel_id)
-             where ${where} and ($3::varchar is null or pr.parcel_id > $3) order by pr.parcel_id limit ${n}`,
-            [input.source_name, page, input.after ?? null],
+             where ${where} and ($3::varchar is null or pr.parcel_id > $3)${range ? " and pr.parcel_id >= $4 and pr.parcel_id < $5" : ""} order by pr.parcel_id limit ${n}`,
+            [
+              input.source_name,
+              page,
+              input.after ?? null,
+              ...(range ? [range.prefix, range.upper] : []),
+            ],
           )
         ).map((r) => ({ kind, record_key: r.parcel_id, ...r }));
       else if (kind === "permit")
@@ -168,9 +215,14 @@ export const explorerRouter = router({
              from oracle.v_permit_provenance pr join oracle.v_permit p using (permit_number)
              left join (select permit_number, count(*) as parcel_count from oracle.v_permit_parcel group by 1) c
                using (permit_number)
-             where pr.source_kind = 'permit' and ${where} and ($3::varchar is null or pr.permit_number > $3)
+             where pr.source_kind = 'permit' and ${where} and ($3::varchar is null or pr.permit_number > $3)${range ? " and pr.permit_number >= $4 and pr.permit_number < $5" : ""}
              order by pr.permit_number limit ${n}`,
-            [input.source_name, page, input.after ?? null],
+            [
+              input.source_name,
+              page,
+              input.after ?? null,
+              ...(range ? [range.prefix, range.upper] : []),
+            ],
           )
         ).map((r) => ({
           kind,
@@ -190,9 +242,15 @@ export const explorerRouter = router({
              from oracle.v_permit_provenance pr
              join oracle.v_permit_contractor c using (permit_number, contractor_row)
              where pr.source_kind = 'contractor' and ${where}
-               and ($3::varchar is null or pr.permit_number > $3 or (pr.permit_number = $3 and pr.contractor_row > $4::integer))
+               and ($3::varchar is null or pr.permit_number > $3 or (pr.permit_number = $3 and pr.contractor_row > $4::integer))${range ? " and pr.permit_number >= $5 and pr.permit_number < $6" : ""}
              order by pr.permit_number, pr.contractor_row limit ${n}`,
-            [input.source_name, page, afterPermit ?? null, afterRow ?? null],
+            [
+              input.source_name,
+              page,
+              afterPermit ?? null,
+              afterRow ?? null,
+              ...(range ? [range.prefix, range.upper] : []),
+            ],
           )
         ).map((r) => ({
           kind,
@@ -204,11 +262,31 @@ export const explorerRouter = router({
         }));
       }
       const items = rows.slice(0, input.limit) as unknown as RecordRow[];
-      return {
+      const out: Records = {
         source_kind: kind,
         total: Number(found.n),
         items,
         next_after: rows.length > input.limit ? items.at(-1)!.record_key : null,
       };
+      // Without `match`, exactly as before; with it, the response is size-guarded like the other list routes.
+      if (!range) return out;
+      // The matches' count, on the same key range (and page file) as the rows.
+      const [counted] =
+        kind === "parcel"
+          ? await db.rows(
+              `select count(*)::integer as n from oracle.v_property_provenance pr
+               where ${where} and pr.parcel_id >= $3 and pr.parcel_id < $4`,
+              [input.source_name, page, range.prefix, range.upper],
+            )
+          : await db.rows(
+              `select count(*)::integer as n from oracle.v_permit_provenance pr
+               where pr.source_kind = $3 and ${where} and pr.permit_number >= $4 and pr.permit_number < $5`,
+              [input.source_name, page, kind, range.prefix, range.upper],
+            );
+      return guardSize("explorer.records", {
+        ...out,
+        match: range.prefix,
+        match_total: Number(counted?.n ?? 0),
+      });
     }),
 });

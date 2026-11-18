@@ -250,10 +250,18 @@ export type RecordRow = ParcelRecordRow | PermitRecordRow | ContractorRecordRow;
 export interface Records {
   /** The kind of the requested source; null when no source has that name. */
   source_kind: SourceKind | null;
+  /** The source's record count (in the page file, if one), with or without `match`. */
   total: number;
   items: RecordRow[];
   /** The record_key to pass as `after` for the next page; null on the last page. */
   next_after: string | null;
+  /**
+   * Only with a `match` input: the number prefix searched, as matched (digits for a parcel number, dashed after 5
+   * and 10 digits for a permit number). Absent without `match` (the response is then as before).
+   */
+  match?: string;
+  /** Only with a `match` input: how many of the source's records (in the page file, if one) start with `match`. */
+  match_total?: number;
 }
 
 /**

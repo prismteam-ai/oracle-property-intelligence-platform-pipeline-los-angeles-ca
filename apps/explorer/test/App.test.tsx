@@ -65,7 +65,7 @@ vi.mock("@oracle-la/api-client", () => ({
 
 import type { Publication } from "../../../src/publications.ts";
 import { App } from "../src/App.tsx";
-import { seekFor, seekText } from "../src/Records.tsx";
+import { matchFor, matchText, noMatchText } from "../src/Records.tsx";
 
 const wait = (ms: number) =>
   act(async () => {
@@ -875,174 +875,163 @@ describe("Explorer sources, records and long-open permits", () => {
     expect(h.sources).toHaveBeenCalledTimes(1);
   });
 
-  test("a records search is a seek with explorer.records' own cursor: parcel numbers on the roll, permit numbers on the permit and contractor sources", () => {
-    expect(seekFor("parcel", "5101 001-001")).toEqual({
-      label: "5101001001",
-      full: true,
-      after: "5101001000",
+  test("a records search is a filter (explorer.records' match): parcel numbers on the roll, permit numbers on the permit and contractor sources; plain count and no-match lines", () => {
+    expect(matchFor("parcel", "5101 001-001")).toEqual({
+      match: "5101001001",
     });
-    // A prefix is padded with zeros: the page starts at the first number with it; all zeros: the first page.
-    expect(seekFor("parcel", "5101")).toEqual({
-      label: "5101",
-      full: false,
-      after: "5100999999",
-    });
-    expect(seekFor("parcel", "000")).toEqual({ label: "000", full: false });
-    expect(seekFor("permit", "1000020")).toEqual({
-      label: "10000-20",
-      full: false,
-      after: "10000-19999-99999",
-    });
-    expect(seekFor("contractor", "10000-20000-00001")).toEqual({
-      label: "10000-20000-00001",
-      full: true,
-      after: "10000-20000-00001:0",
+    expect(matchFor("parcel", "5101")).toEqual({ match: "5101" });
+    expect(matchFor("permit", "1000020")).toEqual({ match: "10000-20" });
+    expect(matchFor("contractor", "10000 20000 00001")).toEqual({
+      match: "10000-20000-00001",
     });
     for (const bad of ["12345678901", "12ab", "-", "5101.0"])
-      expect(seekFor("parcel", bad)).toBe(
+      expect(matchFor("parcel", bad)).toBe(
         "A parcel number is up to 10 digits (dashes and spaces allowed).",
       );
-    expect(seekFor("permit", "1".repeat(16))).toBe(
+    expect(matchFor("permit", "1".repeat(16))).toBe(
       "A permit number is up to 15 digits (dashes and spaces allowed).",
     );
-    const full = { label: "0000000002", full: true };
-    expect(seekText("parcel", full, "0000000002")).toBe(
-      "Parcel number 0000000002 found, from the first row below.",
+    expect(matchText(1, 4, "0000000002")).toBe(
+      "1 of 4 records matches 0000000002",
     );
-    expect(seekText("parcel", full, "0000000003")).toBe(
-      "No parcel number 0000000002 in this source; the page starts at the next one.",
+    expect(matchText(1234, 805901, "5101")).toBe(
+      "1,234 of 805,901 records match 5101",
     );
-    expect(seekText("parcel", full, undefined)).toBe(
-      "No parcel number 0000000002 in this source, and none comes after it.",
+    expect(matchText(0, 3, "10000-2")).toBe("0 of 3 records match 10000-2");
+    expect(noMatchText("parcel", "9")).toBe(
+      "No parcel number in this source starts with 9.",
     );
-    const prefix = { label: "10000-2", full: false };
-    expect(seekText("permit", prefix, "10000-20000-00001")).toBe(
-      "Permit numbers starting with 10000-2, from the first row below.",
-    );
-    expect(seekText("contractor", prefix, "10000-30000-00001")).toBe(
-      "No permit number in this source starts with 10000-2; the page starts at the next one.",
-    );
-    expect(seekText("permit", prefix, undefined)).toBe(
-      "No permit number in this source starts with 10000-2, and none comes after it.",
+    expect(noMatchText("contractor", "10000-3")).toBe(
+      "No permit number in this source starts with 10000-3.",
     );
   });
 
-  test("the records tab searches the chosen source: the page starts at the number, paging goes on from it, Clear search returns to page 1", async () => {
-    // The stand-in serves each source's keys greater than `after`, as explorer.records does.
+  test("the records tab search shows only the matches and their count, pages inside them, says when none matches, and Show all records returns to the whole source", async () => {
+    // The stand-in filters as explorer.records does with `match` (keys starting with it, after the cursor), one
+    // row per page so paging inside the matches shows; without `match` it serves the fixture as before.
     h.records.mockImplementation(
-      async (i: { source_name: string; after?: string }) => {
+      async (i: { source_name: string; after?: string; match?: string }) => {
         const r = RECORDS[i.source_name] as {
+          total: number;
           items: Array<{ record_key: string }>;
         };
+        if (i.match === undefined) return r;
+        const matches = r.items.filter((x) =>
+          x.record_key.startsWith(i.match!),
+        );
+        const rest = matches.filter(
+          (x) => i.after === undefined || x.record_key > i.after,
+        );
         return {
           ...r,
-          items: r.items.filter(
-            (x) => i.after === undefined || x.record_key > i.after,
-          ),
+          items: rest.slice(0, 1),
+          next_after: rest.length > 1 ? rest[0]!.record_key : null,
+          match: i.match,
+          match_total: matches.length,
         };
       },
     );
     render(<App />);
     fireEvent.click(await screen.findByRole("tab", { name: "Records" }));
-    await screen.findByText("4 records", { exact: false });
-    const input = () =>
-      screen.getByRole("textbox", { name: "Go to parcel number" });
-    const go = (text: string) => {
-      fireEvent.change(input(), { target: { value: text } });
-      fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    await screen.findByText("4 records · page 1");
+    const find = (label: string, text: string) => {
+      fireEvent.change(screen.getByRole("textbox", { name: label }), {
+        target: { value: text },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Find" }));
     };
-    const result = () =>
-      screen.getByTestId("records-search-result").textContent;
+    const total = () => screen.getByTestId("records-total").textContent;
+    const parcel = "Parcel number starts with";
 
-    go("0000000002");
-    expect(
-      (await screen.findByTestId("records-search-result")).textContent,
-    ).toBe("Parcel number 0000000002 found, from the first row below.");
+    find(parcel, "0000000002");
+    await screen.findByText("1 of 4 records matches 0000000002 · page 1");
     expect(h.records).toHaveBeenLastCalledWith({
       source_name: ROLL,
-      after: "0000000001",
+      after: undefined,
       limit: 50,
+      match: "0000000002",
     });
     expect(tbodyText("records").map((r) => r[0])).toEqual(["0000000002"]);
-    expect(screen.getByTestId("records-total").textContent).toBe(
-      "4 records · page 1 from 0000000002",
-    );
-    // Next pages on from the search (the stand-in's next_after); Previous returns to the search's first page.
+    expect(screen.queryByTestId("records-search-none")).toBeNull();
+
+    // Dashes and spaces allowed; paging inside the matches with the same cursor.
+    find(parcel, "0000-000 0");
+    await screen.findByText("2 of 4 records match 00000000 · page 1");
+    expect(tbodyText("records").map((r) => r[0])).toEqual(["0000000001"]);
     fireEvent.click(screen.getByTestId("records-next"));
-    await screen.findByText("page 2 from 0000000002", { exact: false });
-    expect(screen.queryByTestId("records-search-result")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
-    await screen.findByTestId("records-search-result");
+    await screen.findByText("2 of 4 records match 00000000 · page 2");
     expect(h.records).toHaveBeenLastCalledWith({
       source_name: ROLL,
       after: "0000000001",
       limit: 50,
+      match: "00000000",
     });
+    expect(tbodyText("records").map((r) => r[0])).toEqual(["0000000002"]);
+    expect(screen.getByTestId("records-next")).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    await screen.findByText("2 of 4 records match 00000000 · page 1");
 
-    // Dashes allowed; a number past the last: no rows, and the page says so.
-    go("0000-000-005");
-    await screen.findByText("page 1 from 0000000005", { exact: false });
-    expect(result()).toBe(
-      "No parcel number 0000000005 in this source, and none comes after it.",
+    // Nothing matches: a plain line, no table.
+    find(parcel, "9");
+    expect((await screen.findByTestId("records-search-none")).textContent).toBe(
+      "No parcel number in this source starts with 9.",
     );
-    expect(tbodyText("records")).toEqual([]);
+    expect(total()).toBe("0 of 4 records match 9 · page 1");
+    expect(screen.getByTestId("records").hidden).toBe(true);
 
     // Not a number: nothing is sent, and the box says why.
     const calls = h.records.mock.calls.length;
-    go("12ab");
+    find(parcel, "12ab");
     expect(
       (await screen.findByTestId("records-search-invalid")).textContent,
     ).toBe(" A parcel number is up to 10 digits (dashes and spaces allowed).");
     expect(h.records.mock.calls.length).toBe(calls);
 
-    // A prefix of zeros: the first page, every row matching it.
-    go("000000000");
-    expect(
-      (await screen.findByTestId("records-search-result")).textContent,
-    ).toBe("Parcel numbers starting with 000000000, from the first row below.");
-    expect(screen.queryByTestId("records-search-invalid")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    // Show all records: the whole source again, the request as without a search (no match sent).
+    fireEvent.click(screen.getByRole("button", { name: "Show all records" }));
     await screen.findByText("4 records · page 1");
-    expect(screen.getByTestId("records-total").textContent).toBe(
-      "4 records · page 1",
-    );
-    expect(screen.queryByTestId("records-search-result")).toBeNull();
-    expect((input() as HTMLInputElement).value).toBe("");
-
-    // The permit source searches permit numbers; the contractor source seeks to the permit's first row.
-    const select = screen.getByTestId("records-source");
-    fireEvent.change(select, { target: { value: PERMITS } });
-    await screen.findByText("3 records", { exact: false });
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Go to permit number" }),
-      { target: { value: "100002000000002" } },
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Go" }));
-    expect(
-      (await screen.findByTestId("records-search-result")).textContent,
-    ).toBe("Permit number 10000-20000-00002 found, from the first row below.");
-    expect(h.records).toHaveBeenLastCalledWith({
-      source_name: PERMITS,
-      after: "10000-20000-00001",
+    expect(h.records.mock.lastCall![0]).toEqual({
+      source_name: ROLL,
+      after: undefined,
       limit: 50,
     });
-    // Another source starts with no search.
+    expect("match" in h.records.mock.lastCall![0]).toBe(false);
+    expect(screen.queryByTestId("records-search-none")).toBeNull();
+    expect(screen.getByTestId("records").hidden).toBe(false);
+    expect(tbodyText("records").map((r) => r[0])).toEqual([
+      "0000000001",
+      "0000000002",
+    ]);
+    expect(
+      (screen.getByRole("textbox", { name: parcel }) as HTMLInputElement).value,
+    ).toBe("");
+    expect(
+      screen.queryByRole("button", { name: "Show all records" }),
+    ).toBeNull();
+
+    // The permit source matches permit numbers, typed digits dashed 5-5-5; another source starts with no search.
+    const select = screen.getByTestId("records-source");
+    fireEvent.change(select, { target: { value: PERMITS } });
+    await screen.findByText("3 records · page 1");
+    find("Permit number starts with", "100002000000002");
+    await screen.findByText(
+      "1 of 3 records matches 10000-20000-00002 · page 1",
+    );
+    expect(h.records).toHaveBeenLastCalledWith({
+      source_name: PERMITS,
+      after: undefined,
+      limit: 50,
+      match: "10000-20000-00002",
+    });
     fireEvent.change(select, { target: { value: CONTRACTORS } });
     await screen.findByText("5 records · page 1");
-    expect(screen.queryByTestId("records-search-result")).toBeNull();
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Go to permit number" }),
-      { target: { value: "10000-20000-00001" } },
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Go" }));
-    expect(
-      (await screen.findByTestId("records-search-result")).textContent,
-    ).toBe("Permit number 10000-20000-00001 found, from the first row below.");
+    find("Permit number starts with", "10000 20000 00001");
+    await screen.findByText("2 of 5 records match 10000-20000-00001 · page 1");
     expect(h.records).toHaveBeenLastCalledWith({
       source_name: CONTRACTORS,
-      after: "10000-20000-00001:0",
+      after: undefined,
       limit: 50,
+      match: "10000-20000-00001",
     });
   });
 

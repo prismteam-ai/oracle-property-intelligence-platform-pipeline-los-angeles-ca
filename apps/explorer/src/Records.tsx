@@ -11,17 +11,11 @@ import { useQuery } from "./useQuery.ts";
 const yesNo = (b: boolean | null) => (b === null ? "—" : b ? "yes" : "no");
 
 /**
- * A search in a source's record keys, as a seek with explorer.records' own `after` cursor (keys greater than it):
- * parcel numbers (10 digits) on the roll, permit numbers (15 digits, 5-5-5) on the permit and contractor sources.
- * `label` is the number as typed, digits only for a parcel, dashed after 5 and 10 digits for a permit; a shorter
- * number is a prefix (padded with zeros to the full length, so the page starts at the first key with it).
+ * A search in a source's record keys, as a filter (explorer.records' `match`): only the records whose parcel number
+ * (10 digits, on the roll) or permit number (15 digits, 5-5-5, on the permit and contractor sources) starts with the
+ * number typed. The match is the number as typed, digits only for a parcel, dashed after 5 and 10 digits for a
+ * permit (as the API matches and echoes it).
  */
-export interface Seek {
-  label: string;
-  full: boolean;
-  after?: string;
-}
-
 const KEY_DIGITS: Record<SourceKind, number> = {
   parcel: 10,
   permit: 15,
@@ -34,46 +28,32 @@ const dashed = (digits: string) =>
     .filter(Boolean)
     .join("-");
 
-/** The seek for what was typed, or why it cannot be one (nothing is sent then). */
-export function seekFor(kind: SourceKind, text: string): Seek | string {
+/** The match for what was typed, or why it cannot be one (nothing is sent then). */
+export function matchFor(
+  kind: SourceKind,
+  text: string,
+): { match: string } | string {
   const n = KEY_DIGITS[kind];
   const digits = text.replace(/[\s-]/g, "");
   if (!/^\d+$/.test(digits) || digits.length > n)
     return `A ${noun(kind)} is up to ${n} digits (dashes and spaces allowed).`;
-  const target = digits.padEnd(n, "0");
-  const label = kind === "parcel" ? digits : dashed(digits);
-  const full = digits.length === n;
-  // Contractor rows: the cursor is (permit number, row) and rows are numbered from 1, so row 0 starts at the permit.
-  if (kind === "contractor")
-    return { label, full, after: `${dashed(target)}:0` };
-  // Parcels and permits: the key just below the target (none below all zeros: the first page).
-  const below = BigInt(target) - 1n;
-  if (below < 0n) return { label, full };
-  const prev = below.toString().padStart(n, "0");
-  return { label, full, after: kind === "parcel" ? prev : dashed(prev) };
+  return { match: kind === "parcel" ? digits : dashed(digits) };
 }
 
-/** What the search's first page shows about the number searched, from its first row's key. */
-export function seekText(
-  kind: SourceKind,
-  seek: Seek,
-  firstKey: string | undefined,
+const fmt = (n: number) => n.toLocaleString("en-US");
+
+/** The count line of a search: how many of the source's records start with the match. */
+export function matchText(
+  matchTotal: number,
+  total: number,
+  match: string,
 ): string {
-  const what = noun(kind);
-  const { label, full } = seek;
-  const matches =
-    firstKey !== undefined &&
-    (full ? firstKey === label : firstKey.startsWith(label));
-  if (matches)
-    return full
-      ? `${what[0]!.toUpperCase()}${what.slice(1)} ${label} found, from the first row below.`
-      : `${what[0]!.toUpperCase()}${what.slice(1)}s starting with ${label}, from the first row below.`;
-  const none = full
-    ? `No ${what} ${label} in this source`
-    : `No ${what} in this source starts with ${label}`;
-  return firstKey === undefined
-    ? `${none}, and none comes after it.`
-    : `${none}; the page starts at the next one.`;
+  return `${fmt(matchTotal)} of ${fmt(total)} records ${matchTotal === 1 ? "matches" : "match"} ${match}`;
+}
+
+/** The line shown when no record starts with the match. */
+export function noMatchText(kind: SourceKind, match: string): string {
+  return `No ${noun(kind)} in this source starts with ${match}.`;
 }
 
 /** The columns for one kind of record (the provenance columns follow for every kind). */
@@ -157,11 +137,11 @@ export function Records({
 }) {
   const sources = useQuery(loadSources, "sources");
   // The cursor stack belongs to one source: choosing another source starts again at its first page.
-  // A search (seek) also belongs to its source; the cursors then page on from the search's first page.
+  // A search (match) also belongs to its source; the cursors then page inside the matches.
   const [sel, setSel] = useState<{
     name?: string;
     cursors: string[];
-    seek?: Seek;
+    match?: string;
   }>({
     cursors: [],
   });
@@ -193,12 +173,12 @@ export function Records({
         api={api}
         source={source}
         cursors={sel.cursors}
-        seek={sel.seek}
+        match={sel.match}
         setCursors={(cursors) =>
-          setSel({ name: source.source_name, cursors, seek: sel.seek })
+          setSel({ name: source.source_name, cursors, match: sel.match })
         }
-        setSeek={(seek) =>
-          setSel({ name: source.source_name, cursors: [], seek })
+        setMatch={(match) =>
+          setSel({ name: source.source_name, cursors: [], match })
         }
       />
     </section>
@@ -209,27 +189,30 @@ function SourceRecords({
   api,
   source,
   cursors,
-  seek,
+  match,
   setCursors,
-  setSeek,
+  setMatch,
 }: {
   api: ApiClient;
   source: SourceRow;
   cursors: string[];
-  seek?: Seek;
+  match?: string;
   setCursors: (c: string[]) => void;
-  setSeek: (s?: Seek) => void;
+  setMatch: (m?: string) => void;
 }) {
-  const after = cursors.at(-1) ?? seek?.after;
+  const after = cursors.at(-1);
   const { data, error, loading } = useQuery(
     () =>
       api.explorer.records.query({
         source_name: source.source_name,
         after,
         limit: 50,
+        // Only with a search: without one the request is as before.
+        ...(match === undefined ? {} : { match }),
       }),
-    `records:${source.source_name}:${after ?? ""}`,
+    `records:${source.source_name}:${after ?? ""}:${match ?? ""}`,
   );
+  const none = match !== undefined && data?.match_total === 0;
   if (error) return <p className="error">{error}</p>;
   const columns = COLUMNS[source.source_kind];
   return (
@@ -245,23 +228,19 @@ function SourceRecords({
           Attribution: {source.attribution}. License: {source.license}.
         </p>
       )}
-      <SearchForm kind={source.source_kind} seek={seek} setSeek={setSeek} />
-      {seek && data && !cursors.length && (
-        <p data-testid="records-search-result">
-          {seekText(
-            source.source_kind,
-            seek,
-            data.items[0] &&
-              (data.items[0].kind === "parcel"
-                ? (data.items[0].parcel_id ?? undefined)
-                : data.items[0].permit_number),
-          )}
+      <SearchForm kind={source.source_kind} match={match} setMatch={setMatch} />
+      {none && match !== undefined && (
+        <p data-testid="records-search-none">
+          {noMatchText(source.source_kind, match)}
         </p>
       )}
       <p data-testid="records-total">
-        {data ? `${data.total.toLocaleString("en-US")} records` : "…"} · page{" "}
-        {cursors.length + 1}
-        {seek && ` from ${seek.label}`}
+        {!data
+          ? "…"
+          : match === undefined
+            ? `${fmt(data.total)} records`
+            : matchText(data.match_total ?? 0, data.total, match)}{" "}
+        · page {cursors.length + 1}
       </p>
       <p>
         <button
@@ -278,7 +257,7 @@ function SourceRecords({
           Next
         </button>
       </p>
-      <table data-testid="records" data-kind={source.source_kind}>
+      <table data-testid="records" data-kind={source.source_kind} hidden={none}>
         <thead>
           <tr>
             {columns.map(([h]) => (
@@ -311,14 +290,14 @@ function SourceRecords({
 /** The search box: a parcel number on the roll, a permit number on the permit and contractor sources. */
 function SearchForm({
   kind,
-  seek,
-  setSeek,
+  match,
+  setMatch,
 }: {
   kind: SourceKind;
-  seek?: Seek;
-  setSeek: (s?: Seek) => void;
+  match?: string;
+  setMatch: (m?: string) => void;
 }) {
-  const [text, setText] = useState(seek?.label ?? "");
+  const [text, setText] = useState(match ?? "");
   const [invalid, setInvalid] = useState<string>();
   const what = noun(kind);
   return (
@@ -328,17 +307,17 @@ function SearchForm({
         e.preventDefault();
         if (!text.trim()) {
           setInvalid(undefined);
-          setSeek(undefined);
+          setMatch(undefined);
           return;
         }
-        const s = seekFor(kind, text);
-        if (typeof s === "string") return setInvalid(s);
+        const m = matchFor(kind, text);
+        if (typeof m === "string") return setInvalid(m);
         setInvalid(undefined);
-        setSeek(s);
+        setMatch(m.match);
       }}
     >
       <label>
-        Go to {what}{" "}
+        {`${what[0]!.toUpperCase()}${what.slice(1)} starts with`}{" "}
         <input
           data-testid="records-search-input"
           value={text}
@@ -346,17 +325,17 @@ function SearchForm({
           onChange={(e) => setText(e.target.value)}
         />
       </label>{" "}
-      <button type="submit">Go</button>{" "}
-      {seek && (
+      <button type="submit">Find</button>{" "}
+      {match !== undefined && (
         <button
           type="button"
           onClick={() => {
             setText("");
             setInvalid(undefined);
-            setSeek(undefined);
+            setMatch(undefined);
           }}
         >
-          Clear search
+          Show all records
         </button>
       )}
       {invalid && (

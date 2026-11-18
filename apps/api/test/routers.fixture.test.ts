@@ -189,6 +189,94 @@ describe("routers on the synthetic fixture", () => {
     ]);
     expect(b.next_after).toBeNull();
   });
+  test("records with match: only the parcel IDs starting with it, in order, paged inside the matches, with their count; without match as before", async () => {
+    const all = await caller.explorer.records({ source_name: FIXTURE.source });
+    // Without match: the four fields as before, no match fields.
+    expect(Object.keys(all).sort()).toEqual([
+      "items",
+      "next_after",
+      "source_kind",
+      "total",
+    ]);
+    const keys = (r: { items: Array<{ record_key: string }> }) =>
+      r.items.map((i) => i.record_key);
+    // Spaces and dashes are allowed and dropped; the echoed match is the digits.
+    const a = await caller.explorer.records({
+      source_name: FIXTURE.source,
+      match: "0000-000 00",
+      limit: 3,
+    });
+    expect(a).toMatchObject({
+      source_kind: "parcel",
+      total: 7,
+      match: "000000000",
+      match_total: 7,
+      next_after: "0000000003",
+    });
+    expect(keys(a)).toEqual(["0000000001", "0000000002", "0000000003"]);
+    const b = await caller.explorer.records({
+      source_name: FIXTURE.source,
+      match: "000000000",
+      after: a.next_after!,
+      limit: 3,
+    });
+    expect(keys(b)).toEqual(["0000000004", "0000000005", "0000000006"]);
+    expect(b.match_total).toBe(7);
+    // A full parcel ID: that record only.
+    const one = await caller.explorer.records({
+      source_name: FIXTURE.source,
+      match: "0000000002",
+    });
+    expect(one).toMatchObject({
+      total: 7,
+      match: "0000000002",
+      match_total: 1,
+      next_after: null,
+    });
+    expect(keys(one)).toEqual(["0000000002"]);
+    // No match: no rows, a zero count, the source total unchanged.
+    expect(
+      await caller.explorer.records({
+        source_name: FIXTURE.source,
+        match: "9",
+      }),
+    ).toEqual({
+      source_kind: "parcel",
+      total: 7,
+      items: [],
+      next_after: null,
+      match: "9",
+      match_total: 0,
+    });
+    // With a page file: the matches inside it, counted inside it.
+    const pf = await caller.explorer.records({
+      source_name: FIXTURE.source,
+      page_file: "page-0001.json",
+      match: "00000000",
+    });
+    expect(pf).toMatchObject({ total: 3, match_total: 3 });
+    expect(keys(pf)).toEqual(["0000000005", "0000000006", "0000000007"]);
+    // Refused: more than 10 digits, letters, no digit, longer than 40 characters.
+    for (const match of [
+      "12345678901",
+      "12ab",
+      "-",
+      " ",
+      "",
+      `1${" ".repeat(40)}`,
+    ])
+      await expect(
+        caller.explorer.records({ source_name: FIXTURE.source, match }),
+        JSON.stringify(match),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    // An unknown source answers as before.
+    expect(
+      await caller.explorer.records({
+        source_name: "no such source",
+        match: "1",
+      }),
+    ).toEqual({ source_kind: null, total: 0, items: [], next_after: null });
+  });
   test("search: inside vs outside the radius, threshold rule, missing data excluded", async () => {
     const r5 = await caller.parcels.search({
       ...P,
@@ -1124,6 +1212,100 @@ describe("permit routes on the synthetic permit run", () => {
     expect(
       await caller.explorer.records({ source_name: "no such source" }),
     ).toEqual({ source_kind: null, total: 0, items: [], next_after: null });
+  });
+  test("records with match on permit numbers: typed digits dashed 5-5-5, prefix of the permit number, paged inside the matches; contractor rows by their permit number", async () => {
+    const keys = (r: { items: Array<{ record_key: string }> }) =>
+      r.items.map((i) => i.record_key);
+    const p = await caller.explorer.records({
+      source_name: PERMIT_FIXTURE.permitSource,
+      match: "16016",
+    });
+    expect(p).toMatchObject({
+      source_kind: "permit",
+      total: PERMIT_FIXTURE.permits,
+      match: "16016",
+      match_total: 2,
+      next_after: null,
+    });
+    expect(keys(p)).toEqual([N.P1, N.P2]);
+    // "1" covers 10016… to 19016…; paged one at a time inside the matches.
+    const ones = await caller.explorer.records({
+      source_name: PERMIT_FIXTURE.permitSource,
+      match: "1",
+      limit: 100,
+    });
+    expect(keys(ones)).toEqual([
+      N.P9,
+      N.P7,
+      N.P1,
+      N.P2,
+      N.P3,
+      N.P4,
+      N.P5,
+      N.P6,
+    ]);
+    expect(ones.match_total).toBe(8);
+    const first = await caller.explorer.records({
+      source_name: PERMIT_FIXTURE.permitSource,
+      match: "1901610000",
+      limit: 1,
+    });
+    expect(first).toMatchObject({
+      match: "19016-10000",
+      match_total: 2,
+      next_after: N.P5,
+    });
+    const second = await caller.explorer.records({
+      source_name: PERMIT_FIXTURE.permitSource,
+      match: "1901610000",
+      after: first.next_after!,
+      limit: 1,
+    });
+    expect(keys(second)).toEqual([N.P6]);
+    expect(second.next_after).toBeNull();
+    // Digits after 10 are dashed too; a prefix ending in 9 (its upper bound is the character after "9").
+    const full = await caller.explorer.records({
+      source_name: PERMIT_FIXTURE.permitSource,
+      match: "10016 10000 00009",
+    });
+    expect(full).toMatchObject({
+      match: "10016-10000-00009",
+      match_total: 1,
+    });
+    expect(keys(full)).toEqual([N.P9]);
+    // Contractor rows: every row of the permits matched, by (permit number, row).
+    const c = await caller.explorer.records({
+      source_name: PERMIT_FIXTURE.contractorSource,
+      match: N.P1,
+      limit: 1,
+    });
+    expect(c).toMatchObject({
+      source_kind: "contractor",
+      total: PERMIT_FIXTURE.contractorRows,
+      match: N.P1,
+      match_total: 2,
+      next_after: `${N.P1}:1`,
+    });
+    const c2 = await caller.explorer.records({
+      source_name: PERMIT_FIXTURE.contractorSource,
+      match: N.P1,
+      after: c.next_after!,
+      limit: 1,
+    });
+    expect(keys(c2)).toEqual([`${N.P1}:2`]);
+    expect(c2.next_after).toBeNull();
+    const none = await caller.explorer.records({
+      source_name: PERMIT_FIXTURE.contractorSource,
+      match: "99",
+    });
+    expect(none).toMatchObject({ items: [], match_total: 0, next_after: null });
+    // More than 15 digits: refused.
+    await expect(
+      caller.explorer.records({
+        source_name: PERMIT_FIXTURE.permitSource,
+        match: "1".repeat(16),
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
   test("records.page_file accepts the three page-file shapes the sources record, and nothing else", async () => {
     for (const ok of [

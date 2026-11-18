@@ -595,8 +595,9 @@ test.describe("with credentials", () => {
           : next.items[0].record_key,
       );
     }
-    // Search: the roll's second parcel number, typed in the box, starts the page at it (explorer.records with
-    // the parcel number just below it as `after`), and the page says it was found.
+    // Search: a prefix of the roll's second parcel number, typed in the box, shows only the parcels starting with
+    // it and their count, both as explorer.records serves them with that match; a full number shows that parcel
+    // alone; a number no parcel starts with says so; Show all records returns to the whole roll.
     const roll = byKind.get("parcel")!;
     await page.getByTestId("records-source").selectOption(roll.source_name);
     const rollFirst = await apiGet("explorer.records", {
@@ -604,19 +605,52 @@ test.describe("with credentials", () => {
       limit: 50,
     });
     const target: string = rollFirst.items[1].record_key;
-    await page
-      .getByRole("textbox", { name: "Go to parcel number" })
-      .fill(target);
-    await page.getByRole("button", { name: "Go" }).click();
-    await expect(page.getByTestId("records-search-result")).toHaveText(
-      `Parcel number ${target} found, from the first row below.`,
-    );
-    await expect(
-      page.getByTestId("records").locator("tbody tr td").first(),
-    ).toHaveText(target);
+    const box = page.getByRole("textbox", {
+      name: "Parcel number starts with",
+    });
+    const prefix = target.slice(0, 7);
+    const matched = await apiGet("explorer.records", {
+      source_name: roll.source_name,
+      limit: 50,
+      match: prefix,
+    });
+    expect(matched.match_total).toBeGreaterThan(0);
+    await box.fill(prefix);
+    await page.getByRole("button", { name: "Find" }).click();
     await expect(page.getByTestId("records-total")).toHaveText(
-      `${fmt(rollFirst.total)} records · page 1 from ${target}`,
+      `${fmt(matched.match_total)} of ${fmt(rollFirst.total)} records ${matched.match_total === 1 ? "matches" : "match"} ${prefix} · page 1`,
     );
+    const firstCells = page
+      .getByTestId("records")
+      .locator("tbody tr td:first-child");
+    await expect(firstCells).toHaveText(
+      matched.items.map((i: { record_key: string }) => i.record_key),
+    );
+    for (const key of await firstCells.allInnerTexts())
+      expect(key.startsWith(prefix)).toBe(true);
+    await box.fill(target);
+    await page.getByRole("button", { name: "Find" }).click();
+    await expect(page.getByTestId("records-total")).toHaveText(
+      `1 of ${fmt(rollFirst.total)} records matches ${target} · page 1`,
+    );
+    await expect(firstCells).toHaveText([target]);
+    // LA County AINs start with their map book (2004 to 8765 on the roll): none starts with 0 (checked on the API).
+    const none = await apiGet("explorer.records", {
+      source_name: roll.source_name,
+      limit: 50,
+      match: "0",
+    });
+    expect(none.match_total).toBe(0);
+    await box.fill("0");
+    await page.getByRole("button", { name: "Find" }).click();
+    await expect(page.getByTestId("records-search-none")).toHaveText(
+      "No parcel number in this source starts with 0.",
+    );
+    await page.getByRole("button", { name: "Show all records" }).click();
+    await expect(page.getByTestId("records-total")).toHaveText(
+      `${fmt(rollFirst.total)} records · page 1`,
+    );
+    await expect(firstCells.first()).toHaveText(rollFirst.items[0].record_key);
   });
 
   test("7. radius form: count equals the API at 15 and 80 years, rule stated, every result inside the radius", async ({
