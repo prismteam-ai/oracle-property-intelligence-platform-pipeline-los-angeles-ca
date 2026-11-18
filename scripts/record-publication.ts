@@ -3,10 +3,15 @@
  * key order. published_at is the UTC date or time given, or now. Refuses (and writes nothing): a run ID not in
  * runs/run_history.jsonl, a run already recorded, a CID that is not a CIDv1 in base32, a malformed existing file,
  * and identifiers that are not the run's publication record: runs/<run_id>/publication/directory.json must exist,
- * name the run, and hold the manifest CID as artifact_manifest.cid and the folder CID as directory_cid.
+ * name the run, and hold the manifest CID as artifact_manifest.cid and the folder CID as directory_cid. It also
+ * requires --proof <path>: the gateway check's proof (src/gateway-verify.ts, gateway-check-<run_id>.json) for the
+ * same run, and refuses a missing or unreadable proof, a proof that is not a PASS (or did not fetch the manifest, or
+ * was made with the test-only local gateways, or names no pinning operator), or one naming another run ID,
+ * manifest CID or folder CID (publicationProofProblem).
  * Append only: after writing it checks that the file's earlier bytes are unchanged and that exactly the new line
  * was added. Prints the line; never commits.
- * Usage: node scripts/record-publication.ts <run_id> <manifest_cid> <folder_cid> [published_at]
+ * Usage: node scripts/record-publication.ts --proof <gateway-check-<run_id>.json> <run_id> <manifest_cid> <folder_cid>
+ *        [published_at]
  */
 import {
   appendFileSync,
@@ -15,10 +20,12 @@ import {
   type PathLike,
 } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseArgs } from "node:util";
 import { readHistory } from "../src/run-history.ts";
 import {
   parsePublications,
   publicationLine,
+  publicationProofProblem,
   publicationRecordPath,
   publicationRecordProblem,
   type Publication,
@@ -38,7 +45,12 @@ export interface RecordInput {
   folder_cid: string;
   /** A UTC date or time; omitted: now (an ISO time). */
   published_at?: string;
+  /** Path of the gateway check's passing proof for this run (gateway-check-<run_id>.json). */
+  proof: string;
 }
+
+const USAGE =
+  "usage: node scripts/record-publication.ts --proof <gateway-check-<run_id>.json> <run_id> <manifest_cid> <folder_cid> [published_at]";
 
 /** Appends the publication's line and returns it; throws, writing nothing, on any refusal. */
 export function recordPublication(
@@ -87,6 +99,21 @@ export function recordPublication(
   }
   const problem = publicationRecordProblem(p, record);
   if (problem) throw new Error(`${recordPath}: ${problem}; nothing appended`);
+  if (!input.proof)
+    throw new Error(
+      "--proof <path> is required: the gateway check's passing proof for this run; nothing appended",
+    );
+  if (!existsSync(input.proof))
+    throw new Error(`${input.proof} does not exist; nothing appended`);
+  let proof: unknown;
+  try {
+    proof = JSON.parse(readFileSync(input.proof, "utf8"));
+  } catch {
+    throw new Error(`${input.proof}: not JSON; nothing appended`);
+  }
+  const proofProblem = publicationProofProblem(p, proof);
+  if (proofProblem)
+    throw new Error(`${input.proof}: ${proofProblem}; nothing appended`);
   appendFileSync(paths.publications, line);
   verifyAppend(paths.publications, before, line);
   return line;
@@ -107,12 +134,20 @@ export function verifyAppend(path: PathLike, before: Buffer, line: string) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      allowPositionals: true,
+      options: { proof: { type: "string" } },
+    });
+  } catch (err) {
+    console.error(`${(err as Error).message}\n${USAGE}`);
+    process.exit(2);
+  }
   const [run_id, manifest_cid, folder_cid, published_at, ...rest] =
-    process.argv.slice(2);
+    parsed.positionals;
   if (!run_id || !manifest_cid || !folder_cid || rest.length) {
-    console.error(
-      "usage: node scripts/record-publication.ts <run_id> <manifest_cid> <folder_cid> [published_at]",
-    );
+    console.error(USAGE);
     process.exit(2);
   }
   try {
@@ -121,6 +156,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       manifest_cid,
       folder_cid,
       published_at,
+      proof: parsed.values.proof ?? "",
     });
     process.stdout.write(
       `appended to runs/publications.jsonl (not committed):\n${line}`,

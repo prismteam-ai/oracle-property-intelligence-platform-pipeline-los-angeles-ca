@@ -27,6 +27,7 @@ import {
   isUtcDateOrTime,
   parsePublications,
   publicationLine,
+  publicationProofProblem,
   publicationRecordPath,
   publicationRecordProblem,
 } from "../src/publications.ts";
@@ -65,6 +66,24 @@ const record = (run_id: string) => ({
   car: { file: "directory.car", size: 1, sha256: "0".repeat(64) },
   artifact_manifest: { cid: MANIFEST, name: "artifact-manifest.json" },
 });
+/** A passing gateway-check proof for a run, as src/gateway-verify.ts writes it (the fields the tool reads). */
+const passingProof = (run_id: string) => ({
+  verdict: "PASS",
+  passes: true,
+  run_id,
+  manifest_cid: MANIFEST,
+  directory_cid: FOLDER,
+  manifest_fetched: true,
+  pinned_by: ["Filebase"],
+  gateway_list: "default",
+  test_only_local_gateways: false,
+});
+const proofPath = (run_id: string) => join(dir, `gateway-check-${run_id}.json`);
+const writeProof = (run_id: string, proof: unknown) =>
+  writeFileSync(
+    proofPath(run_id),
+    typeof proof === "string" ? proof : JSON.stringify(proof, null, 2),
+  );
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "publications-"));
   paths = {
@@ -74,6 +93,8 @@ beforeEach(() => {
   };
   writeRecord(RUN_A, record(RUN_A));
   writeRecord(RUN_B, record(RUN_B));
+  writeProof(RUN_A, passingProof(RUN_A));
+  writeProof(RUN_B, passingProof(RUN_B));
   writeFileSync(paths.publications, "");
   writeFileSync(
     paths.history,
@@ -186,13 +207,19 @@ describe("scripts/record-publication.ts", () => {
         manifest_cid: MANIFEST,
         folder_cid: FOLDER,
         published_at: "2026-11-18",
+        proof: proofPath(RUN_A),
       },
       paths,
     );
     const afterFirst = readFileSync(paths.publications, "utf8");
     expect(afterFirst).toBe(first);
     const second = recordPublication(
-      { run_id: RUN_B, manifest_cid: MANIFEST, folder_cid: FOLDER },
+      {
+        run_id: RUN_B,
+        manifest_cid: MANIFEST,
+        folder_cid: FOLDER,
+        proof: proofPath(RUN_B),
+      },
       paths,
       () => new Date("2026-11-19T08:00:00.000Z"),
     );
@@ -208,7 +235,12 @@ describe("scripts/record-publication.ts", () => {
   });
 
   test("refuses, writing nothing: a run not in the history, a run already recorded, an invalid CID or date, a malformed file", () => {
-    const ok = { run_id: RUN_A, manifest_cid: MANIFEST, folder_cid: FOLDER };
+    const ok = {
+      run_id: RUN_A,
+      manifest_cid: MANIFEST,
+      folder_cid: FOLDER,
+      proof: proofPath(RUN_A),
+    };
     recordPublication(ok, paths);
     const bytes = readFileSync(paths.publications);
     for (const [input, message] of [
@@ -241,7 +273,12 @@ describe("scripts/record-publication.ts", () => {
   });
 
   test("refuses, writing nothing, identifiers that are not the run's runs/<run_id>/publication/directory.json, or no such file", () => {
-    const ok = { run_id: RUN_A, manifest_cid: MANIFEST, folder_cid: FOLDER };
+    const ok = {
+      run_id: RUN_A,
+      manifest_cid: MANIFEST,
+      folder_cid: FOLDER,
+      proof: proofPath(RUN_A),
+    };
     const empty = readFileSync(paths.publications);
     for (const [input, message] of [
       [
@@ -277,6 +314,76 @@ describe("scripts/record-publication.ts", () => {
     expect(readFileSync(paths.publications).equals(empty)).toBe(true);
     writeRecord(RUN_A, record(RUN_A));
     expect(recordPublication(ok, paths)).toContain(`"run_id":"${RUN_A}"`);
+  });
+
+  test("requires --proof: refuses, writing nothing, no proof, a missing or malformed one, a non-PASS, and other identifiers", () => {
+    const ok = {
+      run_id: RUN_A,
+      manifest_cid: MANIFEST,
+      folder_cid: FOLDER,
+      proof: proofPath(RUN_A),
+    };
+    const empty = readFileSync(paths.publications);
+    const refuses = (input: typeof ok, message: string) => {
+      expect(() => recordPublication(input, paths), message).toThrow(message);
+      expect(readFileSync(paths.publications).equals(empty)).toBe(true);
+    };
+    refuses({ ...ok, proof: "" }, "--proof <path> is required");
+    refuses(
+      { ...ok, proof: join(dir, "none.json") },
+      "none.json does not exist",
+    );
+    for (const [proof, message] of [
+      ["{", "not JSON"],
+      ["[]", "the proof is not a JSON object"],
+      [
+        { ...passingProof(RUN_A), verdict: "FAIL", passes: false },
+        'not a PASS (verdict "FAIL")',
+      ],
+      [
+        {
+          ...passingProof(RUN_A),
+          verdict: "INCOMPLETE",
+          passes: false,
+          manifest_fetched: false,
+        },
+        'not a PASS (verdict "INCOMPLETE")',
+      ],
+      [{ ...passingProof(RUN_A), passes: false }, "not a PASS"],
+      [
+        { ...passingProof(RUN_A), manifest_fetched: false },
+        "did not fetch the manifest",
+      ],
+      [
+        { ...passingProof(RUN_A), test_only_local_gateways: true },
+        "test-only local gateways",
+      ],
+      [
+        { ...passingProof(RUN_A), test_only_local_gateways: undefined },
+        "test-only local gateways",
+      ],
+      [{ ...passingProof(RUN_A), pinned_by: [] }, "pinned_by"],
+      [passingProof(RUN_B), `the proof's run_id is "${RUN_B}", not ${RUN_A}`],
+      [
+        { ...passingProof(RUN_A), manifest_cid: FOLDER },
+        `the proof's manifest_cid is "${FOLDER}", not ${MANIFEST}`,
+      ],
+      [
+        { ...passingProof(RUN_A), directory_cid: MANIFEST },
+        `the proof's directory_cid is "${MANIFEST}", not the folder_cid ${FOLDER}`,
+      ],
+    ] as const) {
+      writeProof(RUN_A, proof);
+      refuses(ok, message);
+    }
+    // Another run's passing proof for the same identifiers is refused too.
+    refuses(
+      { ...ok, proof: proofPath(RUN_B) },
+      `the proof's run_id is "${RUN_B}"`,
+    );
+    writeProof(RUN_A, passingProof(RUN_A));
+    expect(recordPublication(ok, paths)).toContain(`"run_id":"${RUN_A}"`);
+    expect(publicationProofProblem(ok, passingProof(RUN_A))).toBeNull();
   });
 
   test("publicationRecordProblem names the fields as directory.json has them", () => {
@@ -315,7 +422,7 @@ describe("scripts/record-publication.ts", () => {
     });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain(
-      "usage: node scripts/record-publication.ts <run_id> <manifest_cid> <folder_cid> [published_at]",
+      "usage: node scripts/record-publication.ts --proof <gateway-check-<run_id>.json> <run_id> <manifest_cid> <folder_cid> [published_at]",
     );
     expect(r.stdout).toBe("");
   });

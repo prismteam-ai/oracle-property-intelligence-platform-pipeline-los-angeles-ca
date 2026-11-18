@@ -168,6 +168,40 @@ export function publicationRecordProblem(
   return null;
 }
 
+/**
+ * Why a gateway-check proof (src/gateway-verify.ts, gateway-check-<run_id>.json) does not allow recording this
+ * publication, or null when it does: it must be a PASS (verdict "PASS", passes true) with the manifest fetched, not
+ * made with the test-only local-gateway flag, name who pinned the content, and name the same run_id, manifest_cid and
+ * directory_cid (the folder CID) as the publication.
+ */
+export function publicationProofProblem(
+  p: Pick<Publication, "run_id" | "manifest_cid" | "folder_cid">,
+  proof: unknown,
+): string | null {
+  if (typeof proof !== "object" || proof === null || Array.isArray(proof))
+    return "the proof is not a JSON object";
+  const r = proof as Record<string, unknown>;
+  if (r.verdict !== "PASS" || r.passes !== true)
+    return `the proof is not a PASS (verdict ${JSON.stringify(r.verdict)})`;
+  if (r.manifest_fetched !== true)
+    return "the proof did not fetch the manifest";
+  if (r.test_only_local_gateways !== false)
+    return "the proof was made with the test-only local gateways";
+  if (
+    !Array.isArray(r.pinned_by) ||
+    !r.pinned_by.length ||
+    !r.pinned_by.every((x) => typeof x === "string" && x.trim())
+  )
+    return "the proof does not name who pins the content (pinned_by)";
+  if (r.run_id !== p.run_id)
+    return `the proof's run_id is ${JSON.stringify(r.run_id)}, not ${p.run_id}`;
+  if (r.manifest_cid !== p.manifest_cid)
+    return `the proof's manifest_cid is ${JSON.stringify(r.manifest_cid)}, not ${p.manifest_cid}`;
+  if (r.directory_cid !== p.folder_cid)
+    return `the proof's directory_cid is ${JSON.stringify(r.directory_cid)}, not the folder_cid ${p.folder_cid}`;
+  return null;
+}
+
 /** The line for a publication: fixed key order, one JSON object, a newline. */
 export function publicationLine(p: Publication): string {
   const line = JSON.stringify({
