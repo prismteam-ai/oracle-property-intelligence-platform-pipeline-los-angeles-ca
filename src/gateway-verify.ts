@@ -308,22 +308,34 @@ export async function loadPublication(dir: string): Promise<Publication> {
   };
 }
 
+/** An operator as counted: its label trimmed and lower-cased, so "Pinata" and "pinata " are one operator. */
+const operatorKey = (operator: string) => operator.trim().toLowerCase();
+
+/**
+ * The distinct operators (by operatorKey) among results that matched, each shown under the label of its first
+ * matching gateway in list order, as declared.
+ */
+function distinctOperators(operators: readonly string[]): string[] {
+  const first = new Map<string, string>();
+  for (const o of operators)
+    if (!first.has(operatorKey(o))) first.set(operatorKey(o), o);
+  return [...first.values()].sort();
+}
+
 /** The counted operators among results that matched. */
 const countedMatches = (
   rs: { ok: boolean; operator: string; counted: boolean }[],
 ) =>
-  [
-    ...new Set(rs.filter((r) => r.ok && r.counted).map((r) => r.operator)),
-  ].sort();
+  distinctOperators(rs.filter((r) => r.ok && r.counted).map((r) => r.operator));
 const pinningMatches = (
   rs: { ok: boolean; operator: string; counted: boolean }[],
 ) =>
-  [
-    ...new Set(rs.filter((r) => r.ok && !r.counted).map((r) => r.operator)),
-  ].sort();
+  distinctOperators(
+    rs.filter((r) => r.ok && !r.counted).map((r) => r.operator),
+  );
 
 const sameOperator = (a: string, b: string) =>
-  a.trim().toLowerCase() === b.trim().toLowerCase();
+  operatorKey(a) === operatorKey(b);
 
 /**
  * Checks the gateway list and the pinning operators before anything is fetched; throws on a refusal. Every gateway
@@ -358,7 +370,10 @@ export function checkGatewaySetup(
     operator: g.operator,
     counted: !pinnedBy.some((p) => sameOperator(g.operator, p)),
   }));
-  if (new Set(marked.filter((g) => g.counted).map((g) => g.operator)).size < 2)
+  if (
+    new Set(marked.filter((g) => g.counted).map((g) => operatorKey(g.operator)))
+      .size < 2
+  )
     throw new Error(
       "the gateways must include at least two operators that do not pin the content",
     );

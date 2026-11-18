@@ -59,30 +59,49 @@ function ipv4(name: string): number[] | null {
   return o.every((x) => x <= 255) ? o : null;
 }
 
+/** The host name as the URL parser (and so fetch) reads it, or null when the parser refuses it. */
+function urlHostname(name: string): string | null {
+  try {
+    return new URL(`https://${name}`).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** The IPv4 address inside an IPv4-mapped IPv6 address, dotted ([::ffff:1.2.3.4]) or as the parser writes it ([::ffff:102:304]). */
+function mappedIpv4(name: string): number[] | null {
+  const dotted = /^\[::ffff:([\d.]+)\]$/i.exec(name);
+  if (dotted) return ipv4(dotted[1]);
+  const hex = /^\[::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})\]$/i.exec(name);
+  if (!hex) return null;
+  const [hi, lo] = [parseInt(hex[1], 16), parseInt(hex[2], 16)];
+  return [hi >> 8, hi & 255, lo >> 8, lo & 255];
+}
+
 /**
- * Why a gateway is not acceptable in a real run, or null: not https, or a local or private address written in the
- * host: localhost, IPv4 0.0.0.0/8, loopback 127/8, RFC 1918 (10/8, 172.16/12, 192.168/16), link-local 169.254/16;
- * IPv6 unspecified (::), loopback (::1), link-local (fe80::/10), unique-local (fc00::/7), and IPv4-mapped forms of
- * the IPv4 ranges. Host names are not resolved (no DNS lookup here).
+ * Why a gateway is not acceptable in a real run, or null: not https, or a local or private address in the host:
+ * localhost, IPv4 0.0.0.0/8, loopback 127/8, RFC 1918 (10/8, 172.16/12, 192.168/16), carrier-grade NAT 100.64/10,
+ * link-local 169.254/16; IPv6 unspecified (::), loopback (::1), link-local (fe80::/10), unique-local (fc00::/7), and
+ * IPv4-mapped forms of the IPv4 ranges. The host is tested as the URL parser reads it, new URL("https://" + host)
+ * .hostname, which is the address fetch uses: so 127.1, 2130706433, 0x7f.0.0.1, 0177.0.0.1 or [::ffff:7f00:1] are
+ * tested as 127.0.0.1, and a host the parser refuses is refused. Host names are not resolved (no DNS lookup here).
  */
 export function localGatewayProblem(g: Gateway): string | null {
   const p = gatewayParts(g.host);
   if (!p) return `not a gateway host: "${g.host}"`;
   if (p.scheme !== "https") return `${g.host}: not https`;
-  const name = p.name;
+  const name = urlHostname(p.name);
+  if (name === null) return `not a gateway host: "${g.host}"`;
   if (name === "localhost" || name.endsWith(".localhost"))
     return `${g.host}: a local host name`;
-  const v4 =
-    ipv4(name) ??
-    (/^\[::ffff:([\d.]+)\]$/i.exec(name)
-      ? ipv4(/^\[::ffff:([\d.]+)\]$/i.exec(name)![1])
-      : null);
+  const v4 = ipv4(name) ?? mappedIpv4(name);
   if (v4) {
     const [a, b] = v4;
     if (
       a === 0 ||
       a === 127 ||
       a === 10 ||
+      (a === 100 && b >= 64 && b <= 127) ||
       (a === 172 && b >= 16 && b <= 31) ||
       (a === 192 && b === 168) ||
       (a === 169 && b === 254)
@@ -127,9 +146,18 @@ export function onGatewayHost(g: Gateway, url: string): boolean {
   return q.name === p.name || q.name.endsWith(`.${p.name}`);
 }
 
+/** The origin as the URL parser writes it, default port removed (host and host:443 are one gateway). */
+function comparableOrigin(g: Gateway): string {
+  try {
+    return new URL(gatewayOrigin(g)).origin;
+  } catch {
+    throw new Error(`not a gateway host: "${g.host}"`);
+  }
+}
+
 /**
  * A gateway list from "host=Operator" items (comma-separated, or as separate items). Throws on an empty list, an
- * item without its operator, a bad host or a host given twice.
+ * item without its operator, a bad host or a host given twice (origins compared with the default port removed).
  */
 export function parseGatewayList(items: string | readonly string[]): Gateway[] {
   const parts = (
@@ -152,7 +180,7 @@ export function parseGatewayList(items: string | readonly string[]): Gateway[] {
     if (!operator) throw new Error(`gateway ${host} has no declared operator`);
     return { host, operator };
   });
-  if (new Set(out.map((g) => gatewayOrigin(g))).size !== out.length)
+  if (new Set(out.map(comparableOrigin)).size !== out.length)
     throw new Error("a gateway host is listed twice");
   return out;
 }

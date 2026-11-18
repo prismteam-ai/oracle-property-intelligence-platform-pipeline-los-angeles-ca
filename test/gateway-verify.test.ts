@@ -241,6 +241,45 @@ describe("the shared gateway list (src/gateways.ts)", () => {
       expect(localGatewayProblem({ host, operator: "X" }), host).toBeNull();
   });
 
+  test("a real run tests the host as the URL parser reads it: other loopback forms and carrier-grade NAT refused", () => {
+    for (const host of [
+      "127.1",
+      "2130706433",
+      "0x7f.0.0.1",
+      "0177.0.0.1",
+      "017700000001",
+      "0",
+      "[::ffff:7f00:1]",
+      "[0:0:0:0:0:ffff:127.0.0.1]",
+      "https://127.1:8443",
+      "[::ffff:c0a8:1]",
+      "100.64.0.1",
+      "100.127.255.255",
+      "999.1.1.1",
+    ])
+      expect(localGatewayProblem({ host, operator: "X" }), host).not.toBeNull();
+    for (const host of ["100.63.255.255", "100.128.0.1", "[::ffff:808:808]"])
+      expect(localGatewayProblem({ host, operator: "X" }), host).toBeNull();
+  });
+
+  test("host and host:443 are one gateway; so are http host and host:80", () => {
+    expect(() =>
+      parseGatewayList(
+        "gateway.pinata.cloud=Pinata,gateway.pinata.cloud:443=Pinata Ltd",
+      ),
+    ).toThrow("twice");
+    expect(() =>
+      parseGatewayList("https://a.example=X,a.example:443=Y"),
+    ).toThrow("twice");
+    expect(() =>
+      parseGatewayList("http://a.example=X,http://a.example:80=Y"),
+    ).toThrow("twice");
+    expect(parseGatewayList("a.example=X,a.example:8443=Y")).toHaveLength(2);
+    expect(() => parseGatewayList("a.example:99999=X")).toThrow(
+      "not a gateway host",
+    );
+  });
+
   test("an answer counts for a gateway only from its own host or a subdomain", () => {
     expect(onGatewayHost(A, "https://gw-a.test/ipfs/x")).toBe(true);
     expect(onGatewayHost(A, "https://bafyx.ipfs.gw-a.test/")).toBe(true);
@@ -311,6 +350,26 @@ describe("checkGatewaySetup", () => {
         false,
       ),
     ).toThrow("no declared operator");
+  });
+
+  test("operators are counted on a trimmed, lower-cased label: Pinata and pinata on two hosts are one operator", () => {
+    const list = parseGatewayList(
+      "gateway.pinata.cloud=Pinata,other.mypinata.cloud=pinata,ipfs.filebase.io=Filebase",
+    );
+    expect(() => checkGatewaySetup(list, ["Filebase"], false)).toThrow(
+      "at least two operators that do not pin",
+    );
+    expect(() =>
+      checkGatewaySetup(
+        [
+          { host: "gw-a.test", operator: "Pinata" },
+          { host: "gw-b.test", operator: " PINATA " },
+          P,
+        ],
+        ["Pinner"],
+        false,
+      ),
+    ).toThrow("at least two operators that do not pin");
   });
 
   test("local gateways only with the test-only switch", () => {
@@ -438,6 +497,40 @@ describe("verifyOnGateways", () => {
     });
     expect(proof.verdict).toBe("FAIL");
     expect(proof.objects[1].operators_matched).toEqual(["Operator B"]);
+  });
+
+  test("two gateways of one operator under two spellings count once, shown under the first one's label", async () => {
+    const b2 = { host: "gw-b2.test", operator: " operator b" };
+    const proof = await verifyOnGateways({
+      publication,
+      gateways: [A, B, b2, P],
+      pinnedBy: ["Pinner"],
+      fetchImpl: fakeFetch((_u, path, host) =>
+        host === "gw-a.test" ? 504 : content(pub, path),
+      ),
+      settings: { attempts: 1 },
+      wait: noWait,
+    });
+    expect(proof.verdict).toBe("FAIL");
+    expect(proof.objects[1].operators_matched).toEqual(["Operator B"]);
+    expect(proof.folder.operators_matched).toEqual(["Operator B"]);
+    expect(proof.folder.car_operators_matched).toEqual(["Operator B"]);
+    expect(proof.objects[1].gateways.map((g) => g.operator)).toEqual([
+      "Operator A",
+      "Operator B",
+      " operator b",
+      "Pinner",
+    ]);
+    const pinned = await verifyOnGateways({
+      publication,
+      gateways: [A, B, { host: "gw-pin2.test", operator: "PINNER" }, P],
+      pinnedBy: ["pinner"],
+      fetchImpl: correct(pub),
+      settings: { attempts: 1 },
+      wait: noWait,
+    });
+    expect(pinned.objects[1].pinning_operators_matched).toEqual(["PINNER"]);
+    expect(pinned.verdict).toBe("PASS");
   });
 
   test("(a) is required: a folder CAR matching on only one counted operator fails the run; it is fetched again like any answer", async () => {
