@@ -199,6 +199,7 @@ describe("files on disk and determinism", () => {
       { name: "coverage.json", bytes: enc('{"counts":1}\n') },
       { name: "big.bin", bytes: pattern(1048576 * 2 + 3) },
       { name: "empty.json", bytes: new Uint8Array() },
+      { name: "same-as-coverage.json", bytes: enc('{"counts":1}\n') },
     ];
     const { root, car } = await directoryCar(files);
     writeFileSync(join(dir, "d.car"), car);
@@ -223,5 +224,103 @@ describe("files on disk and determinism", () => {
       expect(
         sha256Hex(new Uint8Array(readFileSync(join(dir, "out", f.name)))),
       ).toBe(sha256Hex(f.bytes));
+  });
+});
+
+/** A CARv1 split into its header section and its block sections (each: varint length, CID, data). */
+function carSections(car: Uint8Array): {
+  header: Uint8Array;
+  blocks: { section: Uint8Array; cid: string }[];
+} {
+  const read = (at: number): [number, number] => {
+    let n = 0;
+    for (let shift = 1; ; at++, shift *= 128) {
+      n += (car[at] & 0x7f) * shift;
+      if (car[at] < 0x80) return [n, at + 1];
+    }
+  };
+  const [hlen, hstart] = read(0);
+  const header = car.subarray(0, hstart + hlen);
+  const blocks: { section: Uint8Array; cid: string }[] = [];
+  for (let at = hstart + hlen; at < car.length;) {
+    const [len, start] = read(at);
+    // CIDv1, a one-byte codec varint (0x55 or 0x70), sha2-256: 36 bytes.
+    blocks.push({
+      section: car.subarray(at, start + len),
+      cid: "b" + base32(car.subarray(start, start + 36)),
+    });
+    at = start + len;
+  }
+  return { header, blocks };
+}
+
+describe("directory CAR block order: root first, depth-first, as a gateway writes it", () => {
+  // The 93 bytes of the gateway rehearsal's test.json (meaningless content, copied as a literal).
+  const TEST_JSON = enc(
+    '{\n  "purpose": "gateway rehearsal, no data",\n  "nonce": "20579772a2ebde069852b49d2737d541"\n}\n',
+  );
+  const ROOT = "bafybeiap2zpv7ki2kdxrbumdzbvl22ukgaeblrprrt5srclhi5ilufqnj4";
+  // sha256 of the folder's CAR as two public gateways returned it (root block first), 284 bytes.
+  const GATEWAY_CAR_SHA256 =
+    "c3f08d3a697447ae7ad8e6d52ffe89bcafff770467f9092fc15aaddba234a3fd";
+  // sha256 of the same blocks leaf first, the order this writer used before.
+  const LEAF_FIRST_SHA256 =
+    "32460d977025b72282623834adefe1c0d6878f05c284af5a08a5e007df32700b";
+
+  test("the rehearsal folder's CAR is byte for byte the gateways' root-first CAR (284 B, sha256 c3f08d3a…)", async () => {
+    expect(TEST_JSON.length).toBe(93);
+    expect(sha256Hex(TEST_JSON)).toBe(
+      "15ebb58851fd946d3b405eb57a73aa72a417e1acac94e01101baed09faa2e469",
+    );
+    expect(await bytesCid(TEST_JSON)).toBe(
+      "bafkreiav5o2yqup5srwtwqc6wv5hhktsuql6dlfmstqbcan25ue7vixene",
+    );
+    const { root, car, car_sha256 } = await directoryCar([
+      { name: "test.json", bytes: TEST_JSON },
+    ]);
+    expect(root).toBe(ROOT);
+    expect(car.length).toBe(284);
+    expect(car_sha256).toBe(GATEWAY_CAR_SHA256);
+    expect(sha256Hex(car)).toBe(GATEWAY_CAR_SHA256);
+    const { blocks } = carSections(car);
+    expect(blocks.map((b) => b.cid)).toEqual([
+      ROOT,
+      "bafkreiav5o2yqup5srwtwqc6wv5hhktsuql6dlfmstqbcan25ue7vixene",
+    ]);
+  });
+
+  test("the old leaf-first order of the same blocks is refused: other bytes, not the gateways' CAR", async () => {
+    const { car } = await directoryCar([
+      { name: "test.json", bytes: TEST_JSON },
+    ]);
+    const { header, blocks } = carSections(car);
+    const leafFirst = cat(header, blocks[1].section, blocks[0].section);
+    expect(leafFirst.length).toBe(284);
+    expect(sha256Hex(leafFirst)).toBe(LEAF_FIRST_SHA256);
+    expect(sha256Hex(leafFirst)).not.toBe(GATEWAY_CAR_SHA256);
+    expect(sha256Hex(car)).not.toBe(LEAF_FIRST_SHA256);
+    expect(carSections(leafFirst).blocks[0].cid).not.toBe(ROOT);
+  });
+
+  test("a chunked file and two files with the same bytes: root, then each entry's subtree in name order, each block once", async () => {
+    const same = enc('{"same":true}\n');
+    const big = pattern(1048576 + 10);
+    const { root, car } = await directoryCar([
+      { name: "c.bin", bytes: big },
+      { name: "b.json", bytes: same },
+      { name: "a.json", bytes: same },
+    ]);
+    expect(carSections(car).blocks.map((b) => b.cid)).toEqual([
+      root,
+      cidString(RAW, same),
+      twoLevelFileRoot([big.subarray(0, 1048576), big.subarray(1048576)]),
+      cidString(RAW, big.subarray(0, 1048576)),
+      cidString(RAW, big.subarray(1048576)),
+    ]);
+  });
+
+  test("an empty directory's CAR is its root block alone", async () => {
+    const { root, car } = await directoryCar([]);
+    expect(carSections(car).blocks.map((b) => b.cid)).toEqual([root]);
   });
 });

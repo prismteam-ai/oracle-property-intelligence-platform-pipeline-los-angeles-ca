@@ -582,6 +582,45 @@ describe("guardDirectory and publishDirectory", () => {
     ]);
   });
 
+  test("refuses the folder's blocks written leaf first (the order before the gateways' root-first CAR), even when the manifest lists that CAR", async () => {
+    const f = await fixture();
+    // The folder CAR is a header, the root block, then coverage.json's one raw block.
+    const section = (at: number) => {
+      let len = 0;
+      let i = at;
+      for (let shift = 1; ; i++, shift *= 128) {
+        len += (f.car[i] & 0x7f) * shift;
+        if (f.car[i] < 0x80) break;
+      }
+      return i + 1 + len;
+    };
+    const rootAt = section(0);
+    const leafAt = section(rootAt);
+    expect(section(leafAt)).toBe(f.car.length);
+    const leafFirst = new Uint8Array(
+      Buffer.concat([
+        f.car.subarray(0, rootAt),
+        f.car.subarray(leafAt),
+        f.car.subarray(rootAt, leafAt),
+      ]),
+    );
+    expect(leafFirst.length).toBe(f.car.length);
+    const candidate = { files: f.files, root: f.root, car: leafFirst };
+    expect(reasons(await guardDirectory(candidate, f.manifestBytes))).toEqual([
+      "(car): CAR is not the deterministic CAR of these files",
+      "(directory): the artifact manifest's directory is not this folder (CID, CAR size and sha256)",
+    ]);
+    const listsLeafFirst = json({
+      objects: [
+        { ...f.manifest.objects[0], sha256: sha256Hex(leafFirst) },
+        ...f.manifest.objects.slice(1),
+      ],
+    });
+    expect(reasons(await guardDirectory(candidate, listsLeafFirst))).toEqual([
+      "(car): CAR is not the deterministic CAR of these files",
+    ]);
+  });
+
   test("refuses a CAR over 1 MB", async () => {
     const f = await fixture(new Uint8Array(MAX_PUBLISH_BYTES).fill(32));
     expect(reasons(await guardDirectory(f, f.manifestBytes))).toEqual([
