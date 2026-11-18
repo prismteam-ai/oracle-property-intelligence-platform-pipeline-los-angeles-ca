@@ -121,6 +121,40 @@ export function publicationProblem(value: unknown): string | null {
   return null;
 }
 
+/** Where a run's publication record is, relative to runs/: <run_id>/publication/directory.json. */
+export const publicationRecordPath = (runId: string) =>
+  `${runId}/publication/directory.json`;
+
+/**
+ * Why a publication's identifiers do not match the run's publication record (runs/<run_id>/publication/
+ * directory.json, as src/build-ipfs-artifacts.ts writes it), or null when they match: its run_id, its
+ * artifact_manifest.cid (the manifest_cid) and its directory_cid (the folder_cid).
+ */
+export function publicationRecordProblem(
+  p: Pick<Publication, "run_id" | "manifest_cid" | "folder_cid">,
+  record: unknown,
+): string | null {
+  if (typeof record !== "object" || record === null || Array.isArray(record))
+    return "directory.json is not a JSON object";
+  const r = record as {
+    run_id?: unknown;
+    directory_cid?: unknown;
+    artifact_manifest?: { cid?: unknown } | null;
+  };
+  if (r.run_id !== p.run_id)
+    return `directory.json's run_id is ${JSON.stringify(r.run_id)}, not ${p.run_id}`;
+  const manifestCid = r.artifact_manifest?.cid;
+  if (typeof manifestCid !== "string")
+    return "directory.json has no artifact_manifest.cid";
+  if (typeof r.directory_cid !== "string")
+    return "directory.json has no directory_cid";
+  if (p.manifest_cid !== manifestCid)
+    return `manifest_cid ${p.manifest_cid} is not directory.json's artifact_manifest.cid ${manifestCid}`;
+  if (p.folder_cid !== r.directory_cid)
+    return `folder_cid ${p.folder_cid} is not directory.json's directory_cid ${r.directory_cid}`;
+  return null;
+}
+
 /** The line for a publication: fixed key order, one JSON object, a newline. */
 export function publicationLine(p: Publication): string {
   const line = JSON.stringify({

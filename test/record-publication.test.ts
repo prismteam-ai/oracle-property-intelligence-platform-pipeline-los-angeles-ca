@@ -3,7 +3,13 @@
  * (scripts/record-publication.ts), on temporary copies; the tracked file is only read.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,6 +27,8 @@ import {
   isUtcDateOrTime,
   parsePublications,
   publicationLine,
+  publicationRecordPath,
+  publicationRecordProblem,
 } from "../src/publications.ts";
 import {
   recordPublication,
@@ -40,13 +48,32 @@ const RUN_A = "2026-11-14T10-00-00-000Z-bc7f18f2e9cf2";
 const RUN_B = "2026-11-17T00-55-12-521Z-b99e177df66a0";
 
 let dir = "";
-let paths = { publications: "", history: "" };
+let paths = { publications: "", history: "", runs: "" };
+/** runs/<run_id>/publication/directory.json with the fields the record tool checks (as the build writes them). */
+function writeRecord(runId: string, record: unknown) {
+  const p = join(paths.runs, publicationRecordPath(runId));
+  mkdirSync(join(p, ".."), { recursive: true });
+  writeFileSync(
+    p,
+    typeof record === "string" ? record : JSON.stringify(record, null, 2),
+  );
+}
+const record = (run_id: string) => ({
+  run_id,
+  directory_cid: FOLDER,
+  files: [],
+  car: { file: "directory.car", size: 1, sha256: "0".repeat(64) },
+  artifact_manifest: { cid: MANIFEST, name: "artifact-manifest.json" },
+});
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "publications-"));
   paths = {
     publications: join(dir, "publications.jsonl"),
     history: join(dir, "run_history.jsonl"),
+    runs: join(dir, "runs"),
   };
+  writeRecord(RUN_A, record(RUN_A));
+  writeRecord(RUN_B, record(RUN_B));
   writeFileSync(paths.publications, "");
   writeFileSync(
     paths.history,
@@ -201,6 +228,62 @@ describe("scripts/record-publication.ts", () => {
     expect(readFileSync(paths.publications, "utf8")).toBe("{}\n");
     rmSync(paths.publications);
     expect(() => recordPublication(ok, paths)).toThrow("does not exist");
+  });
+
+  test("refuses, writing nothing, identifiers that are not the run's runs/<run_id>/publication/directory.json, or no such file", () => {
+    const ok = { run_id: RUN_A, manifest_cid: MANIFEST, folder_cid: FOLDER };
+    const empty = readFileSync(paths.publications);
+    for (const [input, message] of [
+      [
+        { ...ok, manifest_cid: FOLDER, folder_cid: MANIFEST },
+        `manifest_cid ${FOLDER} is not directory.json's artifact_manifest.cid ${MANIFEST}`,
+      ],
+      [
+        { ...ok, folder_cid: MANIFEST },
+        `folder_cid ${MANIFEST} is not directory.json's directory_cid ${FOLDER}`,
+      ],
+    ] as const) {
+      expect(() => recordPublication(input, paths), message).toThrow(message);
+      expect(readFileSync(paths.publications).equals(empty)).toBe(true);
+    }
+    for (const [content, message] of [
+      [record(RUN_B), `directory.json's run_id is "${RUN_B}", not ${RUN_A}`],
+      [
+        { ...record(RUN_A), artifact_manifest: undefined },
+        "no artifact_manifest.cid",
+      ],
+      [{ ...record(RUN_A), directory_cid: undefined }, "no directory_cid"],
+      ["[]", "not a JSON object"],
+      ["{", "not JSON"],
+    ] as const) {
+      writeRecord(RUN_A, content);
+      expect(() => recordPublication(ok, paths), message).toThrow(message);
+      expect(readFileSync(paths.publications).equals(empty)).toBe(true);
+    }
+    rmSync(join(paths.runs, RUN_A), { recursive: true });
+    expect(() => recordPublication(ok, paths)).toThrow(
+      `${join(paths.runs, RUN_A, "publication", "directory.json")} does not exist`,
+    );
+    expect(readFileSync(paths.publications).equals(empty)).toBe(true);
+    writeRecord(RUN_A, record(RUN_A));
+    expect(recordPublication(ok, paths)).toContain(`"run_id":"${RUN_A}"`);
+  });
+
+  test("publicationRecordProblem names the fields as directory.json has them", () => {
+    const p = { run_id: RUN_A, manifest_cid: MANIFEST, folder_cid: FOLDER };
+    expect(publicationRecordPath(RUN_A)).toBe(
+      `${RUN_A}/publication/directory.json`,
+    );
+    expect(publicationRecordProblem(p, record(RUN_A))).toBeNull();
+    expect(publicationRecordProblem(p, null)).toBe(
+      "directory.json is not a JSON object",
+    );
+    expect(
+      publicationRecordProblem({ ...p, manifest_cid: FOLDER }, record(RUN_A)),
+    ).toContain("artifact_manifest.cid");
+    expect(
+      publicationRecordProblem({ ...p, folder_cid: MANIFEST }, record(RUN_A)),
+    ).toContain("directory_cid");
   });
 
   test("the append-only check fails when earlier bytes changed or more than the line was added", () => {

@@ -1,7 +1,9 @@
 /**
  * Append one published run to runs/publications.jsonl: {"run_id","manifest_cid","folder_cid","published_at"}, in that
  * key order. published_at is the UTC date or time given, or now. Refuses (and writes nothing): a run ID not in
- * runs/run_history.jsonl, a run already recorded, a CID that is not a CIDv1 in base32, a malformed existing file.
+ * runs/run_history.jsonl, a run already recorded, a CID that is not a CIDv1 in base32, a malformed existing file,
+ * and identifiers that are not the run's publication record: runs/<run_id>/publication/directory.json must exist,
+ * name the run, and hold the manifest CID as artifact_manifest.cid and the folder CID as directory_cid.
  * Append only: after writing it checks that the file's earlier bytes are unchanged and that exactly the new line
  * was added. Prints the line; never commits.
  * Usage: node scripts/record-publication.ts <run_id> <manifest_cid> <folder_cid> [published_at]
@@ -17,12 +19,16 @@ import { readHistory } from "../src/run-history.ts";
 import {
   parsePublications,
   publicationLine,
+  publicationRecordPath,
+  publicationRecordProblem,
   type Publication,
 } from "../src/publications.ts";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 export const PUBLICATIONS_PATH = `${REPO}runs/publications.jsonl`;
 export const HISTORY_PATH = `${REPO}runs/run_history.jsonl`;
+/** The folder holding runs/<run_id>/publication/directory.json. */
+export const RUNS_PATH = `${REPO}runs`;
 
 export interface RecordInput {
   run_id: string;
@@ -37,9 +43,10 @@ export interface RecordInput {
 /** Appends the publication's line and returns it; throws, writing nothing, on any refusal. */
 export function recordPublication(
   input: RecordInput,
-  paths: { publications: string; history: string } = {
+  paths: { publications: string; history: string; runs: string } = {
     publications: PUBLICATIONS_PATH,
     history: HISTORY_PATH,
+    runs: RUNS_PATH,
   },
   now: () => Date = () => new Date(),
 ): string {
@@ -67,6 +74,19 @@ export function recordPublication(
     published_at: input.published_at ?? now().toISOString(),
   };
   const line = publicationLine(p); // throws on a CID or date that is not valid
+  const recordPath = `${paths.runs}/${publicationRecordPath(input.run_id)}`;
+  if (!existsSync(recordPath))
+    throw new Error(
+      `${recordPath} does not exist: the run has no publication record; nothing appended`,
+    );
+  let record: unknown;
+  try {
+    record = JSON.parse(readFileSync(recordPath, "utf8"));
+  } catch {
+    throw new Error(`${recordPath}: not JSON; nothing appended`);
+  }
+  const problem = publicationRecordProblem(p, record);
+  if (problem) throw new Error(`${recordPath}: ${problem}; nothing appended`);
   appendFileSync(paths.publications, line);
   verifyAppend(paths.publications, before, line);
   return line;
