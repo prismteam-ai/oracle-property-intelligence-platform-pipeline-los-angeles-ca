@@ -34,17 +34,17 @@ the user confirms the address). Replacement for the kit's PagerDuty rule (`docs/
 which a candidate account cannot reach: CloudWatch alarm → SNS email. Failures are never swallowed: handlers return 5xx
 and log through Powertools.
 
-| #   | Alarm                            | Metric                                                                                 | Condition                                                            | Stack (repo)                |
-| --- | -------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------- |
-| 1   | `oracle-la-api-lambda-errors`    | AWS/Lambda Errors (API function), Sum, 5 min                                           | >= 1                                                                 | OracleLaDataApi (pipeline)  |
-| 2   | `oracle-la-api-lambda-throttles` | AWS/Lambda Throttles (API function), Sum, 5 min                                        | >= 1 (reserved concurrency 5 reached)                                | OracleLaDataApi (pipeline)  |
-| 3   | `oracle-la-authorizer-errors`    | AWS/Lambda Errors (authorizer), Sum, 5 min                                             | >= 1                                                                 | OracleLaDataApi (pipeline)  |
-| 4   | `oracle-la-http-api-5xx`         | AWS/ApiGateway 5xx (ApiId, Stage=$default), Sum, 5 min                                 | >= 1                                                                 | OracleLaDataApi (pipeline)  |
-| 5   | `roofing-crm-map-tiles-per-day`  | AWS/Location CallCount (ApiKeyName=roofing-crm-map, OperationName=GetTile), Sum, 1 day | > 5,000 tiles/day (= $0.20/day at $0.04 per 1,000 tiles, eu-north-1) | RoofingCrmMapKey (crm)      |
-| 6   | `roofing-crm-leads-http-api-5xx` | AWS/ApiGateway 5xx (leads ApiId, Stage=$default), Sum, 5 min                           | >= 1                                                                 | RoofingCrmLeads (crm)       |
-| 7   | `oracle-la-agent-http-api-5xx`   | AWS/ApiGateway 5xx (agent ApiId, Stage=$default), Sum, 5 min                           | >= 1                                                                 | OracleLaAgentApi (pipeline) |
-| 8   | `oracle-la-agent-usd-per-day`    | OracleLa AgentAnswerUsd (service=oracle-la-agent), Sum, 1 day                          | > $2 in a UTC day                                                    | OracleLaAgentApi (pipeline) |
-| 9   | `oracle-la-agent-usd-burst`      | OracleLa AgentAnswerUsd (service=oracle-la-agent), Sum, 5 min                          | >= $1 within 5 minutes                                               | OracleLaAgentApi (pipeline) |
+| #   | Alarm                            | Metric                                                                                 | Condition                                                | Stack (repo)                |
+| --- | -------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------- |
+| 1   | `oracle-la-api-lambda-errors`    | AWS/Lambda Errors (API function), Sum, 5 min                                           | >= 1                                                     | OracleLaDataApi (pipeline)  |
+| 2   | `oracle-la-api-lambda-throttles` | AWS/Lambda Throttles (API function), Sum, 5 min                                        | >= 1 (reserved concurrency 5 reached)                    | OracleLaDataApi (pipeline)  |
+| 3   | `oracle-la-authorizer-errors`    | AWS/Lambda Errors (authorizer), Sum, 5 min                                             | >= 1                                                     | OracleLaDataApi (pipeline)  |
+| 4   | `oracle-la-http-api-5xx`         | AWS/ApiGateway 5xx (ApiId, Stage=$default), Sum, 5 min                                 | >= 1                                                     | OracleLaDataApi (pipeline)  |
+| 5   | `roofing-crm-map-tiles-per-day`  | AWS/Location CallCount (ApiKeyName=roofing-crm-map, OperationName=GetTile), Sum, 1 day | > 5,000 tiles/day (= $0.20/day at $0.04 per 1,000 tiles) | RoofingCrmMapKey (crm)      |
+| 6   | `roofing-crm-leads-http-api-5xx` | AWS/ApiGateway 5xx (leads ApiId, Stage=$default), Sum, 5 min                           | >= 1                                                     | RoofingCrmLeads (crm)       |
+| 7   | `oracle-la-agent-http-api-5xx`   | AWS/ApiGateway 5xx (agent ApiId, Stage=$default), Sum, 5 min                           | >= 1                                                     | OracleLaAgentApi (pipeline) |
+| 8   | `oracle-la-agent-usd-per-day`    | OracleLa AgentAnswerUsd (service=oracle-la-agent), Sum, 1 day                          | > $2 in a UTC day                                        | OracleLaAgentApi (pipeline) |
+| 9   | `oracle-la-agent-usd-burst`      | OracleLa AgentAnswerUsd (service=oracle-la-agent), Sum, 5 min                          | >= $1 within 5 minutes                                   | OracleLaAgentApi (pipeline) |
 
 Missing data is treated as not breaching (idle stacks stay OK).
 
@@ -56,7 +56,7 @@ same reason; its failures surface as the agent HTTP API 5xx alarm. The two spend
 the daily one is evaluated after the UTC day closes, so it fires up to about 24 hours after the spend passes $2;
 the burst one fires within about 10 minutes of $1 spent in one 5-minute period
 (`apps/agent-api/cdk/lib/agent-api-stack.ts` (`AgentApiStack`, alarms `UsdPerDay` and `UsdBurst`)). Both estimate
-the spend from the token counts and list prices; the Anthropic workspace's own monthly limit ($20) is separate
+the spend from the token counts and list prices; the Anthropic workspace's own monthly limit ($50) is separate
 (section "Agent" below).
 
 Verified after deploy (2026-11-11): `aws cloudwatch list-metrics --namespace OracleLa` lists exactly the
@@ -151,15 +151,15 @@ were uploaded after that.
 - The answer's caps (2,000 characters in, 2,048 output tokens per model call, 80,000 tokens, five tool
   rounds, 25 s) are in `docs/access-rules.md` ("The hosted agent").
 - Spend guards: the two alarms above ($2 in a UTC day; $1 within 5 minutes) and the Anthropic workspace's
-  monthly limit of $20. The workspace limit is set in the Anthropic Console and may lag, so the final stop is
+  monthly limit of $50. The workspace limit is set in the Anthropic Console and may lag, so the final stop is
   the credit balance: no payment method is attached.
 
-### Idle cost per month (eu-north-1 list prices, 15 Nov 2026)
+### Idle cost per month (list prices, 15 Nov 2026)
 
 Unit: AWS bills storage per GB-month with 1 GB = 2^30 = 1,073,741,824 bytes; S3, Amplify Hosting and log
 storage below use that unit. Sizes are as listed on 15 Nov.
 
-Prices (AWS price-list files for eu-north-1): CloudWatch (published 2026-11-04) alarm $0.10 per alarm metric
+Prices (AWS price-list files for the stacks' region, kit-deviations.md row 1): CloudWatch (published 2026-11-04) alarm $0.10 per alarm metric
 month (standard resolution), custom metric $0.30 per metric-month (first 10,000), log storage $0.028 per
 GB-month; S3 Standard (2026-11-09) $0.023 per GB-month; Amplify Hosting storage (2026-09-11) $0.023 per GB;
 DynamoDB (2026-11-11) storage first 25 GB-month free then $0.269, point-in-time recovery $0.21 per GB-month.
@@ -207,7 +207,7 @@ and Amplify storage remain:
 
 Not charged while idle: Lambda (no invocations), API Gateway (per request), SSM standard parameters, the
 SecureStrings' AWS-managed key, the Location API key, SNS, the one budget, DynamoDB point-in-time recovery
-at 0 B. The Anthropic workspace limit ($20 a month) is separate and spent only by answers.
+at 0 B. The Anthropic workspace limit ($50 a month) is separate and spent only by answers.
 
 Checked again on 17 Nov 2026: 9 alarms (`describe-alarms`), up to 8 custom metrics, and 9 standard SSM parameters
 (7 String, 2 SecureString; no charge), so the fixed figures above stand. The code defines the same 9 alarms and 8
@@ -222,10 +222,10 @@ the same Parquet bytes again): $0.0037 a month at the S3 Standard list price, wh
 With them the idle cost with the free tier is about $0.013 a month; the CDK assets bucket has not been measured
 again since 15 Nov.
 
-The account's bill for 1-16 Nov 2026, as Cost Explorer estimated it on 17 Nov (the period 2026-11-01 to 2026-11-17,
-whose end date Cost Explorer does not include), is $0.215 of gross usage, all of it
-offset by credits (net $0.00). The gross figure is the one to read: credits run out, and every service showed $0.00
-net, so the net bill gives no unit cost.
+The account's bill for 1-19 Nov 2026 (19 Nov partial), as Cost Explorer estimated it on 19 Nov 2026 at 14:48 UTC
+(the period 2026-11-01 to 2026-11-20, whose end date Cost Explorer does not include; the last day is partial), is
+$0.390 of gross usage, all of it offset by credits (net $0.00). The gross figure is the one to read: credits run out, and every service showed $0.00
+net (read by service at 15:26 UTC), so the net bill gives no unit cost.
 
 ### Per-request prices
 
@@ -242,7 +242,7 @@ The Lambda price list also lists a compute free tier of 400,000 GB-seconds and 1
 
 ### How cost grows
 
-From the measured unit costs of 17 Nov 2026: list prices for eu-north-1 (the same price-list files as above),
+From the measured unit costs of 17 Nov 2026: list prices (the same price-list files as above),
 CloudWatch metrics for 3-17 Nov 2026 (14 days) and the eval rounds' token counts. In US dollars, without the free
 tier unless a line says otherwise.
 
@@ -284,8 +284,8 @@ tier unless a line says otherwise.
   Filebase's pricing page as read on 13 Nov 2026), so pinning costs $0 a month, as Mario Ferraro confirmed on
   18 Nov 2026. The files are pinned at one service; a second copy at another service is a next step. The
   publication adds nothing to the AWS bill.
-- **The bill so far.** 1-16 Nov 2026: $0.215 of gross usage, offset by credits to $0.00 net (Cost Explorer's
-  estimate, 17 Nov).
+- **The bill so far.** 1-19 Nov 2026 (19 Nov partial): $0.390 of gross usage, offset by credits to $0.00 net
+  (Cost Explorer's estimate, 19 Nov 2026 14:48 UTC).
 
 ### Against the guards
 
