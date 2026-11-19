@@ -133,7 +133,7 @@ They are built with DuckDB into Parquet files, with run history and source prove
 
 Published to IPFS on 18 Nov 2026 for runs `2026-11-12T14-00-51-383Z-bc7f18f2e9cf2` and `2026-11-17T00-55-12-521Z-b1f1fbb377948`: the County roll extract, a 5-mile sample of it, and per run a coverage summary and an artifact manifest, pinned at Filebase and fetched with matching size and SHA-256 from ipfs.aleph.cloud and gateway.pinata.cloud. Not published: permit rows (the City building-permit sets state no license) and contractor rows (the contractor view is CC BY 4.0 but is held back: some of its business names may be personal names, and a publication cannot be withdrawn). Both Parquet objects are a cut of 11 columns (parcel number, parcel center, roll year, year built, tax-rate-area city and five provenance columns): no address, no roof year from permits and no ownership field, so `src/query-radius.ts` cannot read them; any DuckDB can (`read_parquet`). The 5-mile sample (151,748 parcels) exists so that the demo's fetch and query run in seconds. The two Parquet objects and their CARs are not in the repository; their identifiers are in each run's artifact manifest and in `src/publish-named-objects.ts`. The files are pinned at one service (Filebase), on its free plan, at $0; a second copy at another service is a next step. How it was built, uploaded, checked and recorded, and the recorded texts written before it that stay unchanged, are in [docs/runbook.md](docs/runbook.md) section 9.
 
-Not done: permits outside the City of Los Angeles (the other 88 jurisdictions are not loaded; the City holds 805,901 of the 2,428,433 parcels, about a third), BBB ratings (no source is loaded), business records, a refresh on a schedule (one command fetches fresh City permits and builds a run, on demand by design), and a second pinning service for the publication. Owner names, mailing addresses and contact details are not collected: the open roll has none, and the secured County service that has them is not used, by choice. So regional or out-of-area owners cannot be found. Idle, the deployed stacks cost about one cent a month: S3 and Amplify storage, which the AWS free tier does not cover, while the 9 alarms and up to 8 custom metrics fall within it; without the free tier, $0.91 idle (9 alarms) and $3.31 in a month when all 8 custom metrics receive data (15 Nov 2026 list prices). Everything but storage and alarms is pay-per-request, watched by a $5 monthly budget with alerts, and the agent's model spend by two alarms and a $50 monthly limit set at the model provider. The bill for 1-19 Nov 2026 (19 Nov partial), as Cost Explorer estimated it on 19 Nov 2026 at 14:48 UTC, was $0.390 of gross usage, offset by credits.
+Not done: permits outside the City of Los Angeles (the other 88 jurisdictions keep their permits in separate systems and are not loaded, coverage traded for time; the City holds 805,901 of the 2,428,433 parcels, about a third), BBB ratings (no source is loaded), business records (no registry is loaded), a refresh on a schedule (one command fetches fresh City permits and builds a run, on demand by design), and a second pinning service for the publication (the services checked pin existing content only on paid plans or short trials). Owner names, mailing addresses and contact details are not collected: the open roll has none, and the secured County service that has them is not used, by choice. So regional or out-of-area owners cannot be found. Idle, the deployed stacks cost about one cent a month: S3 and Amplify storage, which the AWS free tier does not cover, while the 9 alarms and up to 8 custom metrics fall within it; without the free tier, $0.91 idle (9 alarms) and $3.31 in a month when all 8 custom metrics receive data (15 Nov 2026 list prices). Everything but storage and alarms is pay-per-request, watched by a $5 monthly budget with alerts, and the agent's model spend by two alarms and a $50 monthly limit set at the model provider. The bill for 1-19 Nov 2026 (19 Nov partial), as Cost Explorer estimated it on 19 Nov 2026 at 14:48 UTC, was $0.390 of gross usage, offset by credits.
 
 The hosted sites: both sit behind basic auth, and their addresses and credentials are not in the repository: the two site addresses are given in the pull request, and the passwords and the token privately. On 18 Nov 2026 the deployed stacks run as follows: the data API runs the code of commit 5647bde and serves run `2026-11-17T00-55-12-521Z-b1f1fbb377948`; the Explorer is built from 5647bde and its page shows a1ade35, the last commit that changed its sources; the agent API runs ebdcf61. The Roofing CRM's site runs CRM commit b5f7b14 and its leads API 284cfba. That day each hosted suite passed in full on a rerun: Explorer 24 of 24 on its second run (the first stopped at test 11), CRM 51 of 51 on its third, started after the data API was warmed (the first two stopped at tests 37 and 28). The cause of those stops is not proven ([docs/runbook.md](docs/runbook.md) section 6, with their limits).
 
@@ -160,13 +160,13 @@ Status is one of delivered, partial, not done, not used, or not collected by cho
 
 **Geography & coverage**
 
-| Criterion | Status | What is missing, and where to see it |
+| Criterion | Status | Details, and where to see it |
 | --- | --- | --- |
 | Target **Los Angeles County, CA** as the default and primary county for ingestion and demos. | delivered | Explorer "Run summary"; the CRM opens on the county |
 
 **Data loading**
 
-| Criterion | Status | What is missing, and where to see it |
+| Criterion | Status | Details, and where to see it |
 | --- | --- | --- |
 | Run the Oracle pipeline until all available county data is uploaded. | partial | Missing: permits of the 88 jurisdictions outside the City of Los Angeles (not loaded), BBB ratings and business records. Explorer "Run summary" (limitations) and "Sources & pages"; findings section 6b |
 | Load available property records into the database. | delivered | 2,428,433 parcels, roll 2026. Explorer "Sources & pages", "Records" |
@@ -187,7 +187,7 @@ Status is one of delivered, partial, not done, not used, or not collected by cho
 
 **Infrastructure & access**
 
-| Criterion | Status | What is missing, and where to see it |
+| Criterion | Status | Details, and where to see it |
 | --- | --- | --- |
 | Optimize pipeline performance where feasible. | delivered | The roll is downloaded once into a cache; the county build takes about 2 minutes; the data API runs at 2,048 MB for a shorter cold start. [docs/metrics.md](docs/metrics.md); findings section 11 (build times; its cold start is the earlier 1,024 MB one) |
 | Identify slow source sites or constrained data sources. | delivered | Findings section 1 (the roll at one request every 2 s or slower), section 6b (88 jurisdictions not loaded), section 14 |
@@ -201,7 +201,7 @@ Status is one of delivered, partial, not done, not used, or not collected by cho
 
 **IPFS publication**
 
-| Criterion | Status | What is missing, and where to see it |
+| Criterion | Status | Details, and where to see it |
 | --- | --- | --- |
 | Treat IPFS **CIDs** as the durable identity of published artifacts. Do not treat a vendor-specific HTTP URL as the source of truth. | delivered | Each published run is recorded by its manifest CID and folder CID in `runs/publications.jsonl`; the Explorer's gateway links are derived from them. Explorer "Run summary" (Run history, "Published (identifier)") |
 | Prefer **CIDv1** (base32) for every published object. | delivered | Every published object's CID is CIDv1 base32; `runs/<run_id>/publication/artifact-manifest.json` |
@@ -215,7 +215,7 @@ Status is one of delivered, partial, not done, not used, or not collected by cho
 
 **Roofing CRM–supporting queries**
 
-| Criterion | Status | What is missing, and where to see it |
+| Criterion | Status | Details, and where to see it |
 | --- | --- | --- |
 | Support radius-based property identification using coordinates (around a GPS point or map pin). | delivered | Explorer "Radius query"; the CRM; the agent's `search_aged_roofs` |
 | Support questions about properties with roofs older than 15 years (or a configurable age threshold). | delivered | Explorer "Radius query"; agent eval prompts `a1-readme-108-van-nuys`, `c-two-miles-forty-years` |
@@ -227,7 +227,7 @@ Status is one of delivered, partial, not done, not used, or not collected by cho
 
 **Demonstration**
 
-| Criterion | Status | What is missing, and where to see it |
+| Criterion | Status | Details, and where to see it |
 | --- | --- | --- |
 | Demonstrate the uploaded dataset through the UI. | delivered | The Explorer and the CRM |
 | Demonstrate the uploaded dataset through an agent query aligned to roofing lead discovery. | delivered | "Ask the agent" in both sites; the latest eval round: 75 of 75, with nine listed warnings ([docs/runbook.md](docs/runbook.md) section 6) |
