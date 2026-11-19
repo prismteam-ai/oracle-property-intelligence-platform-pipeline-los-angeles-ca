@@ -191,7 +191,7 @@ runs, computed at build time from the agent's own source paths.
   allowed and answered through the ownership filter with its basis and weakness.
 - The signed history and the per-answer caps above; 2 answers at a time.
 - The spend alarms: more than $2 in a UTC day, and $1 or more within 5 minutes ([metrics.md](metrics.md)).
-- The Anthropic workspace's monthly limit of $20, on a key used only by the hosted agent.
+- The Anthropic workspace's monthly limit of $50, on a key used only by the hosted agent.
 - The refusal prompts of the eval: off-topic, a writing task, an instruction to ignore the rules, and three
   owner questions (`apps/agent-mcp/eval/prompts.json`: `g-owner-refused`, `j-off-topic-refused`,
   `k-writing-task-refused`, `l-ignore-the-rules-refused`, `m-who-is-the-owner-refused`, `r-owner-bbb-refused`).
