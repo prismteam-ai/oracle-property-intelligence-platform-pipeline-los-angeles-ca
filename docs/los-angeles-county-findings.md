@@ -413,7 +413,7 @@ Oracle runtime path.
   keyed by AIN with the exact request URL, so the transform reads stored captures and
   does not re-fetch.
 - Other needs: the full roll (2.43M rows, about 2,430 pages at 1000 rows each,
-  roughly 81 min at 1 request per 2 s); S3 for raw data in eu-north-1 (AWS mode); a
+  roughly 81 min at 1 request per 2 s); S3 for raw data (AWS mode); a
   transform validated against the lexicon; local CIDs and CARs of a run's files computed
   with ipfs-car 3.1.0 (UnixFS CIDv1, raw leaves, fixed 1 MiB chunks, balanced width 1024:
   IPIP-0499 unixfs-v1-2025 for files), not elephant-cli; elephant-cli only for the later
