@@ -1,0 +1,63 @@
+{
+  "overall": "BLOCKED",
+  "catalog": {
+    "county": "Los Angeles",
+    "slug": "los-angeles",
+    "state": "CA",
+    "fips": "06037"
+  },
+  "gates": [
+    {
+      "gate": "catalog_metadata",
+      "status": "PASS",
+      "evidence": "Los Angeles CA slug=los-angeles fips=06037",
+      "required_action": null
+    },
+    {
+      "gate": "parcel",
+      "status": "PASS",
+      "evidence": "canonical=tax_roll assessed=2428433.0 gis=2433388.0 discrepancy=0.20%",
+      "required_action": null
+    },
+    {
+      "gate": "permit",
+      "status": "BLOCKED",
+      "evidence": "unclassified: unincorporated, Agoura Hills, Alhambra, Arcadia, Artesia, Avalon, Azusa, Baldwin Park, Bell, Bell Gardens, Bellflower, Beverly Hills, Bradbury, Burbank, Calabasas, Carson, Cerritos, Claremont, Commerce, Compton, Covina, Cudahy, Culver City, Diamond Bar, Downey, Duarte, El Monte, El Segundo, Gardena, Glendale, Glendora, Hawaiian Gardens, Hawthorne, Hermosa Beach, Hidden Hills, Huntington Park, Industry, Inglewood, Irwindale, La Canada Flintridge, La Habra Heights, La Mirada, La Puente, La Verne, Lakewood, Lancaster, Lawndale, Lomita, Long Beach, Lynwood, Malibu, Manhattan Beach, Maywood, Monrovia, Montebello, Monterey Park, Norwalk, Palmdale, Palos Verdes Estates, Paramount, Pasadena, Pico Rivera, Pomona, Rancho Palos Verdes, Redondo Beach, Rolling Hills, Rolling Hills Estates, Rosemead, San Dimas, San Fernando, San Gabriel, San Marino, Santa Clarita, Santa Fe Springs, Santa Monica, Sierra Madre, Signal Hill, South El Monte, South Gate, South Pasadena, Temple City, Torrance, Vernon, Walnut, West Covina, West Hollywood, Westlake Village, Whittier",
+      "required_action": "Enumerate every incorporated, unincorporated, delegated, and predecessor jurisdiction; classify each; catalog records_request for blocked/custodian/manual-only rows; do not treat a county one-stop or application portal as complete municipal history",
+      "blocker_owner": "county-discovery / county-permit-adapter"
+    },
+    {
+      "gate": "destination",
+      "status": "NOT_APPLICABLE",
+      "evidence": "writes_in_scope is false",
+      "required_action": null
+    },
+    {
+      "gate": "enrichment",
+      "status": "PASS",
+      "evidence": "no BBB advertised-count claim",
+      "required_action": null
+    }
+  ],
+  "preparation_allowed": true,
+  "execution_allowed": false,
+  "auto_advance_required": true,
+  "required_blocker_actions": [
+    {
+      "gate": "permit",
+      "owner": "county-discovery / county-permit-adapter",
+      "required_action": "Enumerate every incorporated, unincorporated, delegated, and predecessor jurisdiction; classify each; catalog records_request for blocked/custodian/manual-only rows; do not treat a county one-stop or application portal as complete municipal history"
+    }
+  ],
+  "next_automated_actions": [
+    "Continue bounded source and jurisdiction enumeration",
+    "Continue adapter fingerprinting, scaffolds, fixtures, and bounded tests",
+    "Continue AWS BBB runtime, internal destination, upload-node, and Atlas PR readiness",
+    "Prepare named API or records requests for blocked sources"
+  ],
+  "next_automated_action": "Continue bounded source and jurisdiction enumeration",
+  "next_permissible_automated_action": "Continue bounded source and jurisdiction enumeration",
+  "seed_allowed": false,
+  "ingest_allowed": false,
+  "catalog_path": "docs/los-angeles-sources.yaml"
+}

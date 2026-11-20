@@ -1,0 +1,47 @@
+{
+  "run_name": "los-angeles-county-parcels-city-permits-increment-5",
+  "county": "Los Angeles",
+  "state": "CA",
+  "increment": 5,
+  "data": "parcels-and-permits",
+  "jurisdiction": "all",
+  "zips": [],
+  "roll_year": "2026",
+  "permits_harvested": true,
+  "permit_jurisdictions": ["Los Angeles"],
+  "input": "roll-cache",
+  "source": {
+    "name": "LA County Assessor - Assessor Parcel Data Roll 2026",
+    "hub_item_id": "0d3ac33a76e1495bb7fc522a8085729c",
+    "query_url": "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Assessor%20Parcel%20Data%20Roll%202026/FeatureServer/0/query",
+    "page_size": 1000,
+    "min_request_interval_ms": 2000,
+    "terms_of_use": "https://egis-lacounty.hub.arcgis.com/pages/terms-of-use",
+    "license": "LA County eGIS Hub terms of use, License section: \"you are granted a license to copy, publish, distribute and/or transmit the Data, to adapt the Data and to exploit the Data for commercial and/or personal use\"; it gives no right to use the data \"in any way that suggests County's endorsement of your use\". Not an open license: the item page shows \"Custom License\"",
+    "attribution": "County of Los Angeles; none required: the eGIS Hub terms recommend a citation, and the item page reads \"Acknowledgments: No source acknowledged.\""
+  },
+  "permit_sources": {
+    "permits": {
+      "name": "LADBS building permits (City of Los Angeles, data.lacity.org)",
+      "datasets": [
+        "pi9x-tg5x",
+        "dyxf-7hc4",
+        "e67z-kt2n",
+        "gwh9-jnip",
+        "n3xg-rixm",
+        "b6ii-mhed"
+      ],
+      "terms_of_use": "https://data.lacity.org/terms-of-use",
+      "license": "none stated in the dataset metadata; the portal's terms of use (May 2014) apply",
+      "attribution": "LADBS (City of Los Angeles Department of Building and Safety); the datasets' attribution field reads \"TSB\""
+    },
+    "contractors": {
+      "name": "LADBS roofing permits, contractor view (data.lacity.org 8guu-8f5m)",
+      "datasets": ["8guu-8f5m"],
+      "terms_of_use": "https://data.lacity.org/terms-of-use",
+      "license": "CC BY 4.0",
+      "attribution": "LADBS"
+    }
+  },
+  "sources_catalog": "docs/los-angeles-sources.yaml"
+}

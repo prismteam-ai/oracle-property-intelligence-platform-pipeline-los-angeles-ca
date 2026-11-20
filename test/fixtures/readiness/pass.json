@@ -1,0 +1,47 @@
+{
+  "overall": "PASS",
+  "catalog": {
+    "county": "Fixture County",
+    "slug": "fixture",
+    "state": "CA",
+    "fips": "06999"
+  },
+  "gates": [
+    {
+      "gate": "catalog_metadata",
+      "status": "PASS",
+      "evidence": "synthetic fixture",
+      "required_action": null
+    },
+    {
+      "gate": "parcel",
+      "status": "PASS",
+      "evidence": "synthetic fixture",
+      "required_action": null
+    },
+    {
+      "gate": "permit",
+      "status": "APPROVED_EXCEPTION",
+      "evidence": "synthetic fixture: parcels only, no permits",
+      "required_action": null
+    },
+    {
+      "gate": "destination",
+      "status": "PASS",
+      "evidence": "destination independently proven",
+      "required_action": null
+    },
+    {
+      "gate": "enrichment",
+      "status": "PASS",
+      "evidence": "no BBB advertised-count claim",
+      "required_action": null
+    }
+  ],
+  "preparation_allowed": true,
+  "execution_allowed": true,
+  "required_blocker_actions": [],
+  "seed_allowed": true,
+  "ingest_allowed": true,
+  "catalog_path": "synthetic-fixture-sources.yaml"
+}

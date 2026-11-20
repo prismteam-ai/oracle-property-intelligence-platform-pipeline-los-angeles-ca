@@ -1,0 +1,39 @@
+{
+  "run_id": "2026-11-12T14-00-51-383Z-bc7f18f2e9cf2",
+  "directory_cid": "bafybeidpja5xv4q53refkqopxak33g3aje4rziq2ovd5veyf3gslqeqvya",
+  "files": [
+    {
+      "cid": "bafkreiejvvvertanytej7jfti2d3edzev5j6uetc6p25atem7uo7el2dhi",
+      "name": "coverage.json",
+      "size": 1109,
+      "codec": "file",
+      "ipld_codec": "raw",
+      "sha256": "89ad6a48cc0dc4c89fa4b34687b20f24af53ea1262f3f5d04c8cfd1df22f433a"
+    }
+  ],
+  "car": {
+    "file": "directory.car",
+    "size": 1305,
+    "sha256": "260394a2466cba4cd3756c61f29a2f1600ab9b31a0c9f58d72b7513c439dbbfe"
+  },
+  "artifact_manifest": {
+    "cid": "bafkreihpdya4fiftsrlc2lwizlnaeycg54mssogad7dtlgmwxsntbf3bg4",
+    "name": "artifact-manifest.json",
+    "size": 1177,
+    "codec": "file",
+    "ipld_codec": "raw",
+    "sha256": "ef1e01c2a0b394562d2ec8cada026046ef192938c01fc7359996bc9b30976137",
+    "car": {
+      "file": "artifact-manifest.car",
+      "size": 1274,
+      "sha256": "d614e346b083f3ef7dd79054c5921f3b6a0052e8dfd1b0ee87799f409ca2c2d2"
+    }
+  },
+  "publish_guard": {
+    "passes": true,
+    "refusals": []
+  },
+  "scans": {
+    "hits": []
+  }
+}

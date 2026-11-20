@@ -1,0 +1,4 @@
+{
+  "app": "node cdk/bin/app.ts",
+  "context": { "hostAppIdParameter": "/roofing-crm/web/app-id" }
+}

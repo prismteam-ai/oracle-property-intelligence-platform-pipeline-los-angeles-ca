@@ -1,0 +1,34 @@
+{
+  "run_id": "2026-11-17T00-55-12-521Z-b1f1fbb377948",
+  "generated_at": "2026-11-17T16:33:17.316Z",
+  "run_kind": "rebuild",
+  "rebuild_of": "2026-11-17T00-55-12-521Z-bcb7d21c21fe7",
+  "county": "Los Angeles",
+  "roll_year": "2026",
+  "parcels": {
+    "total": 2428433,
+    "with_coordinates": 2417838,
+    "with_year_built": 2205603
+  },
+  "permits": 297169,
+  "sample": {
+    "center_latitude": 34.20155,
+    "center_longitude": -118.45361,
+    "radius_miles": 5,
+    "rows": 151748
+  },
+  "sources": [
+    {
+      "name": "LA County Assessor - Assessor Parcel Data Roll 2026",
+      "download_finished_at": "2026-11-12T01:44:04.047Z",
+      "pages_sha256": "88938071b24eab23ceb3a7c0bfbad437e613411cbfcd4ac509686d9a2a26f23e",
+      "terms_of_use": "https://egis-lacounty.hub.arcgis.com/pages/terms-of-use"
+    },
+    {
+      "name": "LADBS building permits (City of Los Angeles, data.lacity.org)",
+      "download_finished_at": "2026-11-17T00:54:58.711Z",
+      "pages_sha256": "2119efa0b24ecc3bb4e1b15dd97a11c40fb58c2e2083d2a40516d3e4f2aec829",
+      "terms_of_use": "https://data.lacity.org/terms-of-use"
+    }
+  ]
+}

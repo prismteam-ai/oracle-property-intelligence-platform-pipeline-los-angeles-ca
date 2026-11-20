@@ -1,0 +1,756 @@
+# County source catalog for Los Angeles County, CA (county-discovery output).
+# Validated by the kit's validate-county-readiness.py. Kept in this repo, not in the kit.
+county: Los Angeles
+state: CA
+slug: los-angeles
+fips: "06037"
+snapshot_time: "2026-11-11T15:52:13Z"
+verified_time: "2026-11-11T15:52:13Z"
+scope: county-wide parcels (increment 4) plus City of Los Angeles permits from the LADBS caches (increment 5); no Query DB writes; IPFS publication (2026-11-18) of a roll-only parcel extract, a 5-mile sample of it, and per run a coverage summary and an artifact manifest; no permit or contractor rows
+parcel:
+  canonical_source: tax_roll
+  canonical_source_name: LA County Assessor - Assessor Parcel Data Roll 2026
+  canonical_source_url: "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/Assessor%20Parcel%20Data%20Roll%202026/FeatureServer/0"
+  hub_item_id: 0d3ac33a76e1495bb7fc522a8085729c
+  roll_year: "2026"
+  roll_status: unverified (published 2026-10-14 on data.lacounty.gov; certification status not stated by the service)
+  assessed_parcel_count: 2428433
+  gis_source_url: "https://public.gis.lacounty.gov/public/rest/services/LACounty_Cache/LACounty_Parcel/MapServer/0"
+  gis_feature_count: 2433388
+  discrepancy_threshold_pct: 2.0
+  discrepancy_explanation: GIS polygon layer is 4955 features (0.20%) above the 2026 roll table; roll table is canonical. Each roll row carries its own CENTER_LAT/CENTER_LON, so geometry-less units are measured in the pilot by null-coordinate share.
+  separately_assessed_without_geometry: acknowledged
+  identifier: AIN (10 digits, string, leading zeros kept); AssessorID formatted 9999-999-999
+  identifier_proven: true # proven during the pilot download: all 22313 rows have a unique 10-digit AIN
+  pilot_slice:
+    filter: "SitusZIP5 IN ('91405','91406','91411') AND TaxRateArea_CITY = 'LOS ANGELES'"
+    count_2026: 22313
+appraisal:
+  url: "https://portal.assessor.lacounty.gov/"
+  mode: bulk open-data query API (ArcGIS FeatureServer, maxRecordCount 1000, pagination supported)
+  throughput: "pilot limit 1 request / 2 s, sequential"
+permits:
+  expected_jurisdiction_count: 89 # 88 incorporated cities + unincorporated (TaxRateArea_CITY distinct values, roll 2026)
+  assumes_unified_countywide_history: false
+  jurisdictions:
+    - jurisdiction: Los Angeles
+      status: supported
+      vendor: socrata-open-data (LADBS)
+      portal_kind: open-data
+      url: "https://data.lacity.org/"
+      datasets:
+        [pi9x-tg5x, dyxf-7hc4, e67z-kt2n, gwh9-jnip, n3xg-rixm, b6ii-mhed]
+      historical_records: true
+      notes: City of LA only. Built in increment 5 from local caches of the six permit datasets and the contractor view 8guu-8f5m.
+    - jurisdiction: unincorporated
+      status: needs-review
+      vendor: unknown (EPIC-LA, LA County Public Works)
+      portal_kind: unknown
+      url: "https://epicla.lacounty.gov/"
+      historical_records: false
+      notes: Reachable (HTTP 200). Vendor, history depth and search-by-AIN not probed yet.
+    - {
+        jurisdiction: "Agoura Hills",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Alhambra",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Arcadia",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Artesia",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Avalon",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Azusa",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Baldwin Park",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Bell",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Bell Gardens",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Bellflower",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Beverly Hills",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Bradbury",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Burbank",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Calabasas",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Carson",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Cerritos",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Claremont",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Commerce",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Compton",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Covina",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Cudahy",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Culver City",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Diamond Bar",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Downey",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Duarte",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "El Monte",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "El Segundo",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Gardena",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Glendale",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Glendora",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Hawaiian Gardens",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Hawthorne",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Hermosa Beach",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Hidden Hills",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Huntington Park",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Industry",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Inglewood",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Irwindale",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "La Canada Flintridge",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "La Habra Heights",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "La Mirada",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "La Puente",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "La Verne",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Lakewood",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Lancaster",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Lawndale",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Lomita",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Long Beach",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Lynwood",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Malibu",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Manhattan Beach",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Maywood",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Monrovia",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Montebello",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Monterey Park",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Norwalk",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Palmdale",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Palos Verdes Estates",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Paramount",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Pasadena",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Pico Rivera",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Pomona",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Rancho Palos Verdes",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Redondo Beach",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Rolling Hills",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Rolling Hills Estates",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Rosemead",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "San Dimas",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "San Fernando",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "San Gabriel",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "San Marino",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Santa Clarita",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Santa Fe Springs",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Santa Monica",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Sierra Madre",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Signal Hill",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "South El Monte",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "South Gate",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "South Pasadena",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Temple City",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Torrance",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Vernon",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Walnut",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "West Covina",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "West Hollywood",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Westlake Village",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+    - {
+        jurisdiction: "Whittier",
+        status: needs-review,
+        vendor: unknown,
+        historical_records: false,
+        notes: "separate city permit system; not yet discovered",
+      }
+later_sources:
+  - {
+      name: CSLB contractor license data,
+      url: "https://www.cslb.ca.gov/",
+      role: official contractor license identity (CA equivalent of FL DBPR),
+      status: not-started,
+    }
+  - {
+      name: CA Secretary of State bizfile,
+      url: "https://bizfileonline.sos.ca.gov/",
+      role: official business entity registry (CA equivalent of FL Sunbiz),
+      status: not-started,
+    }
+  - { name: BBB, role: enrichment only, status: not-started }
+destination:
+  # The run files are written to the data API's private bucket. The bucket is resolved from the
+  # OracleLaDataApi stack output at upload time; no bucket name, ARN or ID is kept here.
+  writes_in_scope: true
+  proven: true
+  project: OracleLaDataApi
+  environment: non-production
+  independent_identity_sources: [cloudformation_stack_output, s3_bucket_tags]
+approved_exceptions:
+  # The validator reports the first permit exception, so the current entry comes first.
+  # The scope guard (src/scope-guard.ts) accepts a run only inside one entry's scope.
+  - gate: permit
+    reason: >-
+      Increment 5: all of Los Angeles County's parcels (the 89 jurisdictions: 88
+      incorporated cities and the unincorporated areas), no ZIP filter, LA County
+      Assessor roll 2026, plus City of Los Angeles building permits and their
+      contractor rows from the LADBS open-data caches (data.lacity.org). The 88
+      jurisdictions without a classified permit source are not yet covered: they stay
+      needs-review and are listed by name in docs/los-angeles-county-findings.md
+      (section 6b) and in run_manifest.json limitations. Expires when those
+      jurisdictions are classified; the readiness check is then re-run without it.
+    scope:
+      {
+        increment: 5,
+        data: parcels-and-permits,
+        jurisdiction: all,
+        zips: [],
+        roll_year: "2026",
+        permit_jurisdictions: [Los Angeles],
+      }
+    permits_harvested: true
+    not_yet_covered_count: 88
+    expires: "Expires when the 88 jurisdictions are classified; the readiness check is then re-run without it."
+    approved_by: "Mario Ferraro, 2026-11-13"
+expired_exceptions:
+  # Kept as a record; neither the validator nor the scope guard reads them. Runs under them are refused.
+  - gate: permit
+    reason: >-
+      Increment 4: parcels only, all of Los Angeles County (the 89 jurisdictions: 88
+      incorporated cities and the unincorporated areas), no ZIP filter, LA County
+      Assessor roll 2026. No permits are harvested in this increment. The 88
+      jurisdictions without a classified permit source are not yet covered and are
+      listed by name in docs/los-angeles-county-findings.md (section 6b) and in
+      run_manifest.json limitations. Expires when permits are added; the readiness
+      check is then re-run without it.
+    scope:
+      {
+        increment: 4,
+        data: parcels-only,
+        jurisdiction: all,
+        zips: [],
+        roll_year: "2026",
+      }
+    permits_harvested: false
+    not_yet_covered_count: 88
+    expires: "Expires when permits are added; the readiness check is then re-run without it."
+    approved_by: "Mario Ferraro, 2026-11-12"
+    expired: "2026-11-13"
+    expired_because: "City of Los Angeles permits were added in increment 5, under the increment-5 entry."
+  - gate: permit
+    reason: >-
+      Increment 1 only: parcels only, City of Los Angeles, ZIP codes 91405, 91406 and
+      91411, LA County Assessor roll 2026. No permits are harvested in this increment.
+      The 88 jurisdictions without a classified permit source are not yet covered and
+      are listed by name in docs/los-angeles-county-findings.md (section 6b) and in
+      run_manifest.json limitations. Expires when permits are added; the readiness
+      check is then re-run without it. Full-county parcels are outside this scope and
+      need their own approved exception.
+    scope:
+      {
+        increment: 1,
+        data: parcels-only,
+        jurisdiction: Los Angeles,
+        zips: ["91405", "91406", "91411"],
+        roll_year: "2026",
+      }
+    permits_harvested: false
+    not_yet_covered_count: 88
+    expires: "Expires when permits are added; the readiness check is then re-run without it."
+    approved_by: "Mario Ferraro, 2026-11-11"
+    expired: "2026-11-13"
+    expired_because: "City of Los Angeles permits were added in increment 5, under the increment-5 entry."

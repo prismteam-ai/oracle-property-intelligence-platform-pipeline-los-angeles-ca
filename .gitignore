@@ -1,0 +1,22 @@
+# Pipeline data is never committed. Rebuild steps: docs/los-angeles-county-findings.md
+data/
+*.parquet
+*.duckdb
+*.duckdb.wal
+*.car
+# A published run's two small CARs (its folder and its artifact manifest) are tracked with them (runs/<run_id>/publication/).
+!runs/*/publication/directory.car
+!runs/*/publication/artifact-manifest.car
+*.csv
+node_modules/
+.env
+.env.*
+# Build outputs and secrets (never committed; a test checks this)
+cdk.out/
+cdk-outputs*.json
+dist/
+build/
+.secrets/
+test-results/
+playwright-report/
+.turbo/
